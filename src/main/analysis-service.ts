@@ -182,6 +182,13 @@ export class AnalysisService {
           );
         }
 
+        if (capabilities.nanodetModel !== true || capabilities.petDetection !== true) {
+          throw new Error(
+            "Das NanoDet-Modell für Hunde- und Katzendetektion fehlt oder ist nicht verfügbar. " +
+            "Bitte 'npm.cmd run setup:ai' ausführen."
+          );
+        }
+
         const configured = await this.request<Record<string, unknown>>(
           "configure",
           {
