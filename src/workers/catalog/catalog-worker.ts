@@ -3401,6 +3401,8 @@ function resetCatalog(): { reset: true } {
       DELETE FROM person_candidate_faces;
       DELETE FROM person_candidates;
       DELETE FROM person_cluster_runs;
+      DELETE FROM person_cluster_exclusions;
+      DELETE FROM person_face_exclusions;
       DELETE FROM person_face_assignments;
       DELETE FROM persons;
       DELETE FROM face_embeddings;
@@ -3521,6 +3523,26 @@ async function dispatch(method: CatalogMethod, payload: Record<string, unknown> 
     case "confirmPersonCandidate":
       return confirmPersonCandidate(
         asNumber(payload.candidateId, "candidateId"),
+        payload.name
+      );
+    case "removeFaceFromPersonCandidate":
+      return removeFaceFromPersonCandidate(
+        asNumber(payload.candidateId, "candidateId"),
+        asNumber(payload.faceDetectionId, "faceDetectionId")
+      );
+    case "removeFaceFromPerson":
+      return removeFaceFromPerson(
+        asNumber(payload.personId, "personId"),
+        asNumber(payload.faceDetectionId, "faceDetectionId")
+      );
+    case "mergePersons":
+      return mergePersons(
+        asNumber(payload.targetPersonId, "targetPersonId"),
+        asNumber(payload.sourcePersonId, "sourcePersonId")
+      );
+    case "renamePerson":
+      return renamePerson(
+        asNumber(payload.personId, "personId"),
         payload.name
       );
     case "getFaceCropInfo":
