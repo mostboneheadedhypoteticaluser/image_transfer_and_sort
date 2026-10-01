@@ -474,6 +474,42 @@ function renderPersonOverview(overview: PersonOverview): void {
         });
 
         figure.append(img, fallback);
+
+        if (candidate.faceCount > 1) {
+          const removeButton = document.createElement("button");
+          removeButton.type = "button";
+          removeButton.className = "face-correction-button";
+          removeButton.textContent = "×";
+          removeButton.title = "Dieses Gesicht aus der vorgeschlagenen Gruppe lösen";
+          removeButton.addEventListener("click", (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+
+            void runSafely(async () => {
+              removeButton.disabled = true;
+              progressText.textContent =
+                "Gesicht wird dauerhaft aus dieser Gruppierung getrennt …";
+
+              await window.imageSorter.people.removeCandidateFace(
+                candidate.id,
+                face.faceDetectionId
+              );
+
+              const sourceId = selectedSourceId();
+              if (sourceId !== null) {
+                await loadPersonOverview(sourceId, true);
+                const stats = await window.imageSorter.catalog.getStats(sourceId);
+                peopleTabCount.textContent =
+                  stats.personCandidates.toLocaleString("de-DE");
+              }
+
+              progressText.textContent =
+                "Korrektur gespeichert. Die automatische Gruppierung berücksichtigt diese Trennung künftig.";
+            });
+          });
+          figure.appendChild(removeButton);
+        }
+
         faceStrip.appendChild(figure);
       }
 
@@ -544,7 +580,16 @@ function renderPersonOverview(overview: PersonOverview): void {
       });
 
       confirmRow.append(input, button);
-      body.append(heading, confirmRow);
+      if (candidate.faceCount > candidate.faces.length) {
+        const hiddenNote = document.createElement("small");
+        hiddenNote.className = "person-hidden-note";
+        hiddenNote.textContent =
+          "Es werden " + candidate.faces.length + " von " +
+          candidate.faceCount + " Fundstellen angezeigt.";
+        body.append(heading, hiddenNote, confirmRow);
+      } else {
+        body.append(heading, confirmRow);
+      }
       card.append(faceStrip, body);
       fragment.appendChild(card);
     }
