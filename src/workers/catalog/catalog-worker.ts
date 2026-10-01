@@ -2722,11 +2722,28 @@ function confirmPersonCandidate(candidateId: number, rawName: unknown) {
 
   db.exec("BEGIN IMMEDIATE");
   try {
-    const insertedPerson = db.prepare(`
-      INSERT INTO persons(name)
-      VALUES(?)
-    `).run(name);
-    const personId = Number(insertedPerson.lastInsertRowid);
+    const existingPerson = db.prepare(`
+      SELECT id
+      FROM persons
+      WHERE name = ? COLLATE NOCASE
+      ORDER BY id ASC
+      LIMIT 1
+    `).get(name);
+
+    const personId = existingPerson
+      ? Number(existingPerson.id)
+      : Number(
+          db.prepare(`
+            INSERT INTO persons(name)
+            VALUES(?)
+          `).run(name).lastInsertRowid
+        );
+
+    db.prepare(`
+      UPDATE persons
+      SET name=?, updated_at=CURRENT_TIMESTAMP
+      WHERE id=?
+    `).run(name, personId);
 
     const assign = db.prepare(`
       INSERT INTO person_face_assignments(
