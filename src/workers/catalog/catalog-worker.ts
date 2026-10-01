@@ -2353,10 +2353,10 @@ function completePetDetectionJob(jobId: number, result: unknown) {
       updated_at=CURRENT_TIMESTAMP
   `);
 
+  let written = 0;
+
   db.exec("BEGIN IMMEDIATE");
   try {
-    let written = 0;
-
     for (const rawPet of rawPets) {
       if (!rawPet || typeof rawPet !== "object") continue;
 
