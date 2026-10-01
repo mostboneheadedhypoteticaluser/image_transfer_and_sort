@@ -1,13 +1,18 @@
 import type {
   AnalysisJob,
   AnalysisQueueStats,
+  FaceDetectionForEmbedding,
   PipelineStatus,
   SourceRecord
 } from "../shared/protocol";
 import { AnalysisService } from "./analysis-service";
 import { CatalogService } from "./catalog-service";
 
-type PythonStage = "technical" | "imageMetadata" | "faces";
+type PythonStage =
+  | "technical"
+  | "imageMetadata"
+  | "faces"
+  | "faceEmbeddings";
 
 type ModuleSpec = {
   module: string;
@@ -16,7 +21,8 @@ type ModuleSpec = {
   completeMethod:
     | "completeAnalysisJob"
     | "completeImageMetadataJob"
-    | "completeFaceDetectionJob";
+    | "completeFaceDetectionJob"
+    | "completeFaceEmbeddingJob";
   label: string;
   timeoutMs: number;
 };
@@ -45,12 +51,20 @@ const MODULES: ModuleSpec[] = [
     completeMethod: "completeFaceDetectionJob",
     label: "Gesichtsdetektion",
     timeoutMs: 60000
+  },
+  {
+    module: "face-embed-sface-v1",
+    stage: "faceEmbeddings",
+    workerMethod: "extract_face_embeddings",
+    completeMethod: "completeFaceEmbeddingJob",
+    label: "Gesichtsmerkmale",
+    timeoutMs: 60000
   }
 ];
 
 type PythonPipelineStats = Pick<
   PipelineStatus,
-  "technical" | "imageMetadata" | "faces"
+  "technical" | "imageMetadata" | "faces" | "faceEmbeddings"
 >;
 
 function emptyStats(): AnalysisQueueStats {
@@ -112,7 +126,8 @@ export class AnalysisCoordinator {
     const result: PythonPipelineStats = {
       technical: emptyStats(),
       imageMetadata: emptyStats(),
-      faces: emptyStats()
+      faces: emptyStats(),
+      faceEmbeddings: emptyStats()
     };
 
     for (const spec of MODULES) {
@@ -128,11 +143,13 @@ export class AnalysisCoordinator {
     const queued =
       result.technical.pending +
       result.imageMetadata.pending +
-      result.faces.pending;
+      result.faces.pending +
+      result.faceEmbeddings.pending;
     const active =
       result.technical.running +
       result.imageMetadata.running +
-      result.faces.running;
+      result.faces.running +
+      result.faceEmbeddings.running;
 
     this.analysis.setQueueState(
       queued,
@@ -172,7 +189,8 @@ export class AnalysisCoordinator {
       const totalRunning =
         stats.technical.running +
         stats.imageMetadata.running +
-        stats.faces.running;
+        stats.faces.running +
+        stats.faceEmbeddings.running;
 
       if (totalRunning > 0) return;
 
@@ -192,7 +210,8 @@ export class AnalysisCoordinator {
       const queued =
         stats.technical.pending +
         stats.imageMetadata.pending +
-        stats.faces.pending - 1;
+        stats.faces.pending +
+        stats.faceEmbeddings.pending - 1;
 
       this.analysis.setQueueState(
         Math.max(0, queued),
@@ -201,13 +220,28 @@ export class AnalysisCoordinator {
       );
 
       try {
+        let extraPayload: Record<string, unknown> = {};
+
+        if (spec.module === "face-embed-sface-v1") {
+          const faces = await this.catalog.request<FaceDetectionForEmbedding[]>(
+            "getFaceDetectionsForEmbedding",
+            {
+              mediaId: job.mediaId,
+              inputSha256: job.sha256
+            }
+          );
+
+          extraPayload = { faces };
+        }
+
         const result = await this.analysis.request<Record<string, unknown>>(
           spec.workerMethod,
           {
             path: job.absolutePath,
             expectedSizeBytes: job.sizeBytes,
             expectedSha256: job.sha256,
-            extension: job.extension
+            extension: job.extension,
+            ...extraPayload
           },
           spec.timeoutMs
         );
