@@ -12,7 +12,7 @@ Der erste Schritt macht bewusst nur:
 4. Katalog lokal in SQLite speichern
 5. fehlende Bilder markieren, aber nicht löschen
 
-**Aktiv:** technische Prüfung, Bild-Thumbnails, EXIF-Metadaten, YuNet-Gesichtsdetektion, SFace-Gesichtsmerkmale sowie konservative Personenvorschläge mit manueller Namensbestätigung. **Noch nicht aktiv:** Korrektur/Splitting falsch gruppierter Gesichter, Haustiererkennung und Motiverkennung. Videos werden katalogisiert und technisch geprüft; Video-Thumbnails folgen später.
+**Aktiv:** technische Prüfung, Bild-Thumbnails, EXIF-Metadaten, YuNet-Gesichtsdetektion, SFace-Gesichtsmerkmale, konservative Personenvorschläge, Namensbestätigung sowie dauerhafte Korrekturen: Gesichter aus Gruppen lösen, aus bestätigten Personen entfernen, Personen umbenennen und zusammenführen. **Noch nicht aktiv:** Haustiererkennung und Motiverkennung. Videos werden katalogisiert und technisch geprüft; Video-Thumbnails folgen später.
 
 ## Architektur
 
