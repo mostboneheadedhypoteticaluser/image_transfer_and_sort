@@ -2235,6 +2235,8 @@ function completeFaceEmbeddingJob(jobId: number, result: unknown) {
   const mediaId = Number(job.media_id);
   const inputSha256 = String(job.input_sha256 ?? "");
 
+  let written = 0;
+
   const insert = db.prepare(`
     INSERT INTO face_embeddings(
       face_detection_id,
@@ -2261,8 +2263,6 @@ function completeFaceEmbeddingJob(jobId: number, result: unknown) {
       WHERE media_id=?
         AND model_version=?
     `).run(mediaId, modelVersion);
-
-    let written = 0;
 
     for (const raw of rawEmbeddings) {
       if (!raw || typeof raw !== "object") continue;
