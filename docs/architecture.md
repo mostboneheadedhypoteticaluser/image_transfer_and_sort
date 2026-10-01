@@ -79,3 +79,12 @@ Exakte Dateidubletten werden beim Aufbau der Cluster über `SHA-256 + detection_
 Unbestätigte Gruppen liegen in `person_candidates` und `person_candidate_faces`. Erst eine Nutzerbestätigung erzeugt eine dauerhafte Person in `persons` und feste Zuordnungen in `person_face_assignments`. Bestätigte Gesichter werden bei späteren automatischen Neuberechnungen nicht überschrieben.
 
 Gesichtsausschnitte für die Bestätigungsansicht werden nicht im Renderer berechnet. Der Thumbnail-Utility-Prozess erzeugt gecachte Face-Crops, die über das eingeschränkte interne Protokoll `image-sorter-face://` an die Oberfläche geliefert werden.
+
+
+## Dauerhafte Personenkorrekturen
+
+Korrekturen werden nicht nur an der aktuellen UI-Gruppe vorgenommen. Beim manuellen Trennen zweier Gesichter werden dauerhafte `cannot-link`-Beziehungen in `person_cluster_exclusions` gespeichert. Das Python-Clustering erhält diese Regeln bei jeder späteren Neuberechnung und darf die betroffenen Gesichter nicht wieder in dieselbe automatische Gruppe legen.
+
+Wird ein Gesicht aus einer bestätigten Person entfernt, wird zusätzlich die Negativzuordnung in `person_face_exclusions` gespeichert. Die feste Zuordnung in `person_face_assignments` wird entfernt; die Person selbst und ihre übrigen bestätigten Gesichter bleiben unverändert. Eine spätere explizite Nutzerbestätigung darf eine solche frühere Sperre bewusst wieder aufheben.
+
+Bestätigte Personen können umbenannt oder zusammengeführt werden. Beim Zusammenführen werden bestehende bestätigte Gesichtszuordnungen und Negativregeln konsistent auf die Zielperson übertragen. Exakte Dateidubletten desselben Gesichtes werden bei Korrekturen gemeinsam behandelt.
