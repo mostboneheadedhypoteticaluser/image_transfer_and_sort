@@ -1,6 +1,6 @@
 import { opendir, stat } from "node:fs/promises";
 import path from "node:path";
-import { IGNORED_DIRECTORY_NAMES, IMAGE_EXTENSIONS } from "./constants";
+import { IGNORED_DIRECTORY_NAMES, MEDIA_EXTENSIONS } from "./constants";
 
 export type DiscoveredFile = {
   absolutePath: string;
@@ -15,7 +15,7 @@ export type ScanReadError = {
   message: string;
 };
 
-export async function* walkImages(
+export async function* walkMedia(
   root: string,
   onError?: (error: ScanReadError) => void
 ): AsyncGenerator<DiscoveredFile> {
@@ -51,7 +51,7 @@ export async function* walkImages(
       }
 
       const extension = path.extname(entry.name).toLowerCase();
-      if (!IMAGE_EXTENSIONS.has(extension)) {
+      if (!MEDIA_EXTENSIONS.has(extension)) {
         continue;
       }
 
