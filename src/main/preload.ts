@@ -4,11 +4,13 @@ import type {
   PipelineStatus,
   CatalogStats,
   ConfirmPersonResult,
+  ConfirmPetResult,
   DuplicateGroup,
   MediaRecord,
   MergePersonsResult,
   PersonCorrectionResult,
   PersonOverview,
+  PetOverview,
   RestoreResult,
   ResetCatalogResult,
   ScanProgress,
@@ -64,6 +66,20 @@ const api = {
       const handler = () => listener();
       ipcRenderer.on("people:updated", handler);
       return () => ipcRenderer.removeListener("people:updated", handler);
+    }
+  },
+  pets: {
+    getOverview: (sourceId: number, forceRefresh = false): Promise<PetOverview> =>
+      ipcRenderer.invoke("pets:getOverview", sourceId, forceRefresh),
+    confirmCandidate: (
+      candidateId: number,
+      name: string
+    ): Promise<ConfirmPetResult> =>
+      ipcRenderer.invoke("pets:confirmCandidate", candidateId, name),
+    onUpdated: (listener: () => void) => {
+      const handler = () => listener();
+      ipcRenderer.on("pets:updated", handler);
+      return () => ipcRenderer.removeListener("pets:updated", handler);
     }
   },
   catalog: {
