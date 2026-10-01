@@ -12,7 +12,7 @@ type CropBox = {
 type Request = {
   kind: "request";
   id: string;
-  mode?: "thumbnail" | "face-crop";
+  mode?: "thumbnail" | "face-crop" | "pet-crop";
   inputPath: string;
   outputPath: string;
   maxWidth: number;
@@ -76,11 +76,12 @@ function orientedDimensions(metadata: sharp.Metadata): {
 function cropRegion(
   crop: CropBox,
   imageWidth: number,
-  imageHeight: number
+  imageHeight: number,
+  marginFraction: number
 ): { left: number; top: number; width: number; height: number } {
   const faceWidth = Math.max(1, crop.width);
   const faceHeight = Math.max(1, crop.height);
-  const margin = Math.max(faceWidth, faceHeight) * 0.42;
+  const margin = Math.max(faceWidth, faceHeight) * marginFraction;
 
   const left = Math.max(0, Math.floor(crop.x - margin));
   const top = Math.max(0, Math.floor(crop.y - margin));
@@ -115,8 +116,10 @@ async function createThumbnail(request: Request) {
     };
   }
 
-  if (request.mode === "face-crop") {
-    if (!request.crop) throw new Error("Face-Crop enthält keine Gesichtsbox.");
+  if (request.mode === "face-crop" || request.mode === "pet-crop") {
+    if (!request.crop) {
+      throw new Error("Crop enthält keine gültige Bounding Box.");
+    }
 
     const metadata = await sharp(request.inputPath).metadata();
     const dimensions = orientedDimensions(metadata);
@@ -128,7 +131,8 @@ async function createThumbnail(request: Request) {
     const region = cropRegion(
       request.crop,
       dimensions.width,
-      dimensions.height
+      dimensions.height,
+      request.mode === "pet-crop" ? 0.16 : 0.42
     );
 
     const info = await sharp(request.inputPath, {
