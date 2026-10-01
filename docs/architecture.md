@@ -28,7 +28,8 @@ Electron Main
             ├── technische Prüfung
             ├── EXIF-Metadaten
             ├── YuNet-Gesichtsdetektion
-            ├── später Personen-/Haustier-Embeddings
+            ├── SFace-Gesichtsmerkmale
+            ├── später Personen-Clustering/Bestätigung und Haustier-Embeddings
             └── weitere Analyse-Module
 ```
 
@@ -66,4 +67,4 @@ Die Oberfläche zeigt den Zustand des Analyse-Workers unabhängig vom Katalog-Wo
 
 Die Datenbank verwendet WAL-Modus und liegt im Electron-`userData`-Verzeichnis. Der Catalog Worker ist der einzige Prozess, der direkt auf sie zugreift. Andere Module kommunizieren über definierte Nachrichten.
 
-Die Tabelle `analysis_jobs` steuert inzwischen technische Prüfung, Thumbnails, EXIF-Metadaten und YuNet-Gesichtsdetektion persistent. Ergebnisse landen getrennt in `media_thumbnails`, `media_image_metadata` und `face_detections`. Personenidentität bleibt bewusst noch getrennt; sie wird später über Embeddings und Bestätigung aufgebaut.
+Die Tabelle `analysis_jobs` steuert inzwischen technische Prüfung, Thumbnails, EXIF-Metadaten, YuNet-Gesichtsdetektion und SFace-Gesichtsmerkmale persistent. Ergebnisse landen getrennt in `media_thumbnails`, `media_image_metadata`, `face_detections` und `face_embeddings`. Die SFace-Vektoren werden normalisiert als Float32-BLOB gespeichert. Personenidentität bleibt bewusst noch getrennt; sie wird im nächsten Schritt durch Ähnlichkeits-Clustering und Nutzerbestätigung aufgebaut.
