@@ -1142,3 +1142,14 @@ td .badge + .badge {
   background: #eef6ee;
   color: #35643b;
 }
+
+
+.badge.ensemble {
+  background: #edf7f5;
+  color: #2f665d;
+}
+
+.badge.ensemble.mixed {
+  background: #fff6e8;
+  color: #8a5a16;
+}
