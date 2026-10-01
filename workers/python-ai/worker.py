@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib.util
 import json
 import math
 import mimetypes
@@ -20,12 +21,6 @@ try:
 except Exception:
     cv2 = None
     np = None
-
-try:
-    import onnxruntime as ort
-except Exception:
-    ort = None
-
 
 WORKER_DIR = os.path.dirname(os.path.abspath(__file__))
 YUNET_MODEL = os.path.join(
@@ -55,6 +50,7 @@ DOG_REID_MODEL = os.path.join(
 )
 
 _dog_reid_session = None
+_onnxruntime_module = None
 
 
 @dataclass
@@ -88,7 +84,7 @@ def snapshot() -> dict:
             "nanodetModel": os.path.isfile(NANODET_MODEL),
             "yoloxModel": os.path.isfile(YOLOX_MODEL),
             "dogReIdModel": os.path.isfile(DOG_REID_MODEL),
-            "onnxRuntime": ort is not None,
+            "onnxRuntime": importlib.util.find_spec("onnxruntime") is not None,
             "imageMetadata": Image is not None,
             "faceDetection": cv2 is not None and os.path.isfile(YUNET_MODEL),
             "faceEmbeddings": (
@@ -105,7 +101,7 @@ def snapshot() -> dict:
             "petEmbeddings": (
                 cv2 is not None
                 and np is not None
-                and ort is not None
+                and importlib.util.find_spec("onnxruntime") is not None
                 and os.path.isfile(DOG_REID_MODEL)
             ),
         },
@@ -889,24 +885,32 @@ def fuse_pet_detections(detections: list[dict]) -> dict:
 
 
 def dog_reid_session():
-    global _dog_reid_session
-
-    if ort is None:
-        raise RuntimeError(
-            "ONNX Runtime fehlt. Einmal 'npm.cmd run setup:ai' ausführen."
-        )
+    global _dog_reid_session, _onnxruntime_module
 
     if not os.path.isfile(DOG_REID_MODEL):
         raise RuntimeError(
             "Dog-ReID-Modell fehlt. Einmal 'npm.cmd run setup:ai' ausführen."
         )
 
+    if _onnxruntime_module is None:
+        try:
+            import onnxruntime as runtime
+        except Exception as exc:
+            raise RuntimeError(
+                "ONNX Runtime konnte für Dog-ReID nicht geladen werden: "
+                f"{exc}"
+            ) from exc
+
+        _onnxruntime_module = runtime
+
+    runtime = _onnxruntime_module
+
     if _dog_reid_session is None:
-        options = ort.SessionOptions()
+        options = runtime.SessionOptions()
         options.intra_op_num_threads = 4
         options.inter_op_num_threads = 1
-        options.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
-        _dog_reid_session = ort.InferenceSession(
+        options.execution_mode = runtime.ExecutionMode.ORT_SEQUENTIAL
+        _dog_reid_session = runtime.InferenceSession(
             DOG_REID_MODEL,
             sess_options=options,
             providers=["CPUExecutionProvider"],
