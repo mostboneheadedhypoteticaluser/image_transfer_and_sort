@@ -6,12 +6,16 @@ import { AnalysisService } from "./analysis-service";
 import { AnalysisCoordinator } from "./analysis-coordinator";
 import { ThumbnailService } from "./thumbnail-service";
 import { ThumbnailCoordinator } from "./thumbnail-coordinator";
+import { PersonService } from "./person-service";
 import type {
   AnalysisQueueStats,
   AnalysisWorkerStatus,
   CatalogStats,
+  ConfirmPersonResult,
   DuplicateGroup,
+  FaceCropInfo,
   MediaRecord,
+  PersonOverview,
   RestoreResult,
   ResetCatalogResult,
   ScanResult,
@@ -26,6 +30,7 @@ let analysis: AnalysisService | null = null;
 let analysisCoordinator: AnalysisCoordinator | null = null;
 let thumbnailService: ThumbnailService | null = null;
 let thumbnailCoordinator: ThumbnailCoordinator | null = null;
+let personService: PersonService | null = null;
 let thumbnailCacheRoot = "";
 let isQuitting = false;
 
@@ -47,6 +52,14 @@ let pipelineStatus: PipelineStatus = {
 protocol.registerSchemesAsPrivileged([
   {
     scheme: "image-sorter-thumb",
+    privileges: {
+      standard: true,
+      secure: true,
+      supportFetchAPI: true
+    }
+  },
+  {
+    scheme: "image-sorter-face",
     privileges: {
       standard: true,
       secure: true,
@@ -172,6 +185,22 @@ function registerIpc(): void {
     faces: { ...pipelineStatus.faces },
     faceEmbeddings: { ...pipelineStatus.faceEmbeddings }
   }));
+
+  ipcMain.handle(
+    "people:getOverview",
+    (_event, sourceId: number, forceRefresh = false): Promise<PersonOverview> =>
+      personService!.getOverview(sourceId, Boolean(forceRefresh))
+  );
+
+  ipcMain.handle(
+    "people:confirmCandidate",
+    (
+      _event,
+      candidateId: number,
+      name: string
+    ): Promise<ConfirmPersonResult> =>
+      personService!.confirmCandidate(candidateId, name)
+  );
 }
 
 app.whenReady().then(() => {
@@ -217,6 +246,8 @@ app.whenReady().then(() => {
     (stats) => updatePipelineStage("thumbnails", stats)
   );
 
+  personService = new PersonService(catalog, analysis);
+
   catalog.start();
   thumbnailService.start();
   registerIpc();
@@ -254,6 +285,58 @@ app.whenReady().then(() => {
       });
     } catch {
       return new Response("Thumbnail konnte nicht geladen werden.", { status: 404 });
+    }
+  });
+
+  protocol.handle("image-sorter-face", async (request) => {
+    try {
+      const url = new URL(request.url);
+      if (url.hostname !== "face") {
+        return new Response("Ungültige Gesichtsadresse.", { status: 400 });
+      }
+
+      const faceDetectionId = Number(url.pathname.replace(/^\//, ""));
+      if (!Number.isFinite(faceDetectionId)) {
+        return new Response("Ungültige Gesichts-ID.", { status: 400 });
+      }
+
+      const info = await catalog!.request<FaceCropInfo | null>(
+        "getFaceCropInfo",
+        { faceDetectionId }
+      );
+
+      if (!info) {
+        return new Response("Gesichtsausschnitt nicht gefunden.", { status: 404 });
+      }
+
+      const crop = await thumbnailService!.generateFaceCrop(
+        info.absolutePath,
+        info.inputSha256,
+        info.faceDetectionId,
+        {
+          x: info.x,
+          y: info.y,
+          width: info.width,
+          height: info.height
+        }
+      );
+
+      if (!isInsideDirectory(crop.path, thumbnailCacheRoot)) {
+        return new Response("Gesichtsausschnitt-Pfad abgelehnt.", { status: 403 });
+      }
+
+      const bytes = await readFile(crop.path);
+      return new Response(bytes, {
+        status: 200,
+        headers: {
+          "Content-Type": "image/jpeg",
+          "Cache-Control": "public, max-age=31536000, immutable"
+        }
+      });
+    } catch {
+      return new Response("Gesichtsausschnitt konnte nicht geladen werden.", {
+        status: 404
+      });
     }
   });
 
