@@ -38,7 +38,9 @@ const EMPTY_QUEUE: AnalysisQueueStats = {
 
 let pipelineStatus: PipelineStatus = {
   technical: { ...EMPTY_QUEUE },
-  thumbnails: { ...EMPTY_QUEUE }
+  thumbnails: { ...EMPTY_QUEUE },
+  imageMetadata: { ...EMPTY_QUEUE },
+  faces: { ...EMPTY_QUEUE }
 };
 
 protocol.registerSchemesAsPrivileged([
@@ -67,7 +69,7 @@ function sendToRenderer(channel: string, payload: unknown): void {
 }
 
 function updatePipelineStage(
-  stage: "technical" | "thumbnails",
+  stage: keyof PipelineStatus,
   stats: AnalysisQueueStats
 ): void {
   pipelineStatus = {
@@ -164,7 +166,9 @@ function registerIpc(): void {
 
   ipcMain.handle("analysis:getPipelineStatus", (): PipelineStatus => ({
     technical: { ...pipelineStatus.technical },
-    thumbnails: { ...pipelineStatus.thumbnails }
+    thumbnails: { ...pipelineStatus.thumbnails },
+    imageMetadata: { ...pipelineStatus.imageMetadata },
+    faces: { ...pipelineStatus.faces }
   }));
 }
 
@@ -202,7 +206,7 @@ app.whenReady().then(() => {
   analysisCoordinator = new AnalysisCoordinator(
     catalog,
     analysis,
-    (stats) => updatePipelineStage("technical", stats)
+    (stage, stats) => updatePipelineStage(stage, stats)
   );
 
   thumbnailCoordinator = new ThumbnailCoordinator(
