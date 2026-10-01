@@ -10,7 +10,15 @@ export type DiscoveredFile = {
   mtimeMs: number;
 };
 
-export async function* walkImages(root: string): AsyncGenerator<DiscoveredFile> {
+export type ScanReadError = {
+  path: string;
+  message: string;
+};
+
+export async function* walkImages(
+  root: string,
+  onError?: (error: ScanReadError) => void
+): AsyncGenerator<DiscoveredFile> {
   const stack = [root];
 
   while (stack.length > 0) {
@@ -19,7 +27,11 @@ export async function* walkImages(root: string): AsyncGenerator<DiscoveredFile> 
 
     try {
       directory = await opendir(current);
-    } catch {
+    } catch (error) {
+      onError?.({
+        path: current,
+        message: error instanceof Error ? error.message : String(error)
+      });
       continue;
     }
 
@@ -49,8 +61,11 @@ export async function* walkImages(root: string): AsyncGenerator<DiscoveredFile> 
           sizeBytes: info.size,
           mtimeMs: Math.trunc(info.mtimeMs)
         };
-      } catch {
-        // Datei kann während eines Scans verschwinden oder gesperrt sein.
+      } catch (error) {
+        onError?.({
+          path: absolutePath,
+          message: error instanceof Error ? error.message : String(error)
+        });
       }
     }
   }
