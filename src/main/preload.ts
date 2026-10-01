@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from "electron";
 import type {
   CatalogStats,
+  DuplicateGroup,
   MediaRecord,
   RestoreResult,
   ResetCatalogResult,
@@ -17,6 +18,10 @@ const api = {
     getStats: (sourceId: number): Promise<CatalogStats> => ipcRenderer.invoke("catalog:getStats", sourceId),
     listMedia: (sourceId: number, limit = 500): Promise<MediaRecord[]> =>
       ipcRenderer.invoke("catalog:listMedia", sourceId, limit),
+    listDuplicateGroups: (sourceId: number, limit = 100): Promise<DuplicateGroup[]> =>
+      ipcRenderer.invoke("catalog:listDuplicateGroups", sourceId, limit),
+    listRecycleMedia: (sourceId: number, limit = 500): Promise<MediaRecord[]> =>
+      ipcRenderer.invoke("catalog:listRecycleMedia", sourceId, limit),
     scanSource: (sourceId: number): Promise<ScanResult> => ipcRenderer.invoke("catalog:scanSource", sourceId),
     restoreMedia: (mediaId: number): Promise<RestoreResult> => ipcRenderer.invoke("catalog:restoreMedia", mediaId),
     resetCatalog: (): Promise<ResetCatalogResult> => ipcRenderer.invoke("catalog:resetCatalog"),
