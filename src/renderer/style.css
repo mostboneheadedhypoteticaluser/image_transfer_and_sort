@@ -453,3 +453,122 @@ td .badge + .badge {
   text-align: center;
   color: #7a8490;
 }
+
+
+.analysis-panel {
+  padding: 0;
+  overflow: hidden;
+}
+
+.analysis-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 16px 18px;
+  border-bottom: 1px solid #e8ecef;
+}
+
+.analysis-heading h2 {
+  margin: 0 0 4px;
+  font-size: 17px;
+}
+
+.analysis-heading p {
+  margin: 0;
+  color: #68717d;
+  font-size: 13px;
+}
+
+.analysis-state {
+  display: inline-flex;
+  align-items: center;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 750;
+  white-space: nowrap;
+  background: #eceff2;
+  color: #59636f;
+}
+
+.analysis-state.ready {
+  background: #eef7f1;
+  color: #25653c;
+}
+
+.analysis-state.starting {
+  background: #eef3f8;
+  color: #3e5f7d;
+}
+
+.analysis-state.error {
+  background: #fff1f0;
+  color: #8d302d;
+}
+
+.analysis-state.stopped {
+  background: #f2f3f4;
+  color: #737b84;
+}
+
+.analysis-grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+}
+
+.analysis-metric {
+  min-width: 0;
+  padding: 14px 18px;
+  border-right: 1px solid #eef1f3;
+}
+
+.analysis-metric:last-child {
+  border-right: 0;
+}
+
+.analysis-metric small {
+  display: block;
+  margin-bottom: 4px;
+  color: #7a8490;
+  font-size: 11px;
+}
+
+.analysis-metric strong {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+
+.analysis-footer {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 11px 18px;
+  border-top: 1px solid #eef1f3;
+  background: #fafbfc;
+  color: #68717d;
+  font-size: 12px;
+}
+
+.analysis-note {
+  white-space: nowrap;
+  color: #8b939c;
+}
+
+@media (max-width: 1120px) {
+  .analysis-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .analysis-metric:nth-child(3n) {
+    border-right: 0;
+  }
+
+  .analysis-metric:nth-child(n+4) {
+    border-top: 1px solid #eef1f3;
+  }
+}
