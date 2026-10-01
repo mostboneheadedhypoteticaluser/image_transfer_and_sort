@@ -12,7 +12,7 @@ Der erste Schritt macht bewusst nur:
 4. Katalog lokal in SQLite speichern
 5. fehlende Bilder markieren, aber nicht löschen
 
-**Aktiv:** technische Prüfung, Bild-Thumbnails, EXIF-Metadaten, YuNet-Gesichtsdetektion, SFace-Gesichtsmerkmale, konservative Personenvorschläge, Namensbestätigung sowie dauerhafte Korrekturen: Gesichter aus Gruppen lösen, aus bestätigten Personen entfernen, Personen umbenennen und zusammenführen. **Aktiv ist jetzt auch ein Haustier-Ensemble:** NanoDet und YOLOX-S erkennen Hunde/Katzen getrennt; anschließend werden überlappende Fundstellen zu einem gemeinsamen Ergebnis fusioniert. Die Medienliste zeigt zusätzlich, ob eine Fundstelle von beiden Modellen oder nur einem Modell getragen wird. **Noch nicht aktiv:** individuelle Haustier-Embeddings/Namenszuordnung und Motiverkennung. Videos werden katalogisiert und technisch geprüft; Video-Thumbnails folgen später.
+**Aktiv:** technische Prüfung, Bild-Thumbnails, EXIF-Metadaten, YuNet-Gesichtsdetektion, SFace-Gesichtsmerkmale, konservative Personenvorschläge, Namensbestätigung sowie dauerhafte Korrekturen: Gesichter aus Gruppen lösen, aus bestätigten Personen entfernen, Personen umbenennen und zusammenführen. **Aktiv ist jetzt auch ein Haustier-Ensemble:** NanoDet und YOLOX-S erkennen Hunde/Katzen getrennt; anschließend werden überlappende Fundstellen zu einem gemeinsamen Ergebnis fusioniert. Die Medienliste zeigt zusätzlich, ob eine Fundstelle von beiden Modellen oder nur einem Modell getragen wird. **Neu aktiv:** fusionierte Hundefundstellen erhalten ein spezialisiertes Dog-ReID-Embedding und werden konservativ zu individuellen Hundegruppen zusammengefasst. Im Reiter „Haustiere bestätigen“ können diese Gruppen benannt werden. Katzen bleiben derzeit bei der Art-/Positionsdetektion. **Noch nicht aktiv:** individuelle Katzen-ID und Motiverkennung. Videos werden katalogisiert und technisch geprüft; Video-Thumbnails folgen später.
 
 ## Architektur
 
@@ -80,3 +80,10 @@ Die Datenbank liegt im Electron-`userData`-Verzeichnis als `catalog.sqlite3`.
 Aktueller Architektur-Neustart:
 
 `2026-10-01-videos-datenbank-reset`
+
+
+### Individuelle Hundeerkennung
+
+Für die Wiedererkennung desselben Hundes verwendet die App optional das veröffentlichte **Dog-ReID DINOv2-B/14 0.2.0**-ONNX-Modell aus dem Projekt `rtp4jc/immich-animals`. Das Modell ist von der allgemeinen Hund-/Katzendetektion getrennt und wird erst auf fusionierte Hundefundstellen angewendet.
+
+Die externe Modellquelle ist für den aktuellen persönlichen/lokalen Einsatz vorgesehen. Das Quellprojekt ist AGPL-3.0; die dort dokumentierten Trainingsdaten enthalten außerdem Nutzungsbedingungen für persönliche/nichtkommerzielle Verwendung. Deshalb bleibt das Modell als austauschbarer externer Analysebaustein gekapselt und wird nicht in das Repository eingecheckt.
