@@ -2983,6 +2983,11 @@ function resetCatalog(): { reset: true } {
   try {
     db.exec(`
       DELETE FROM analysis_jobs;
+      DELETE FROM person_candidate_faces;
+      DELETE FROM person_candidates;
+      DELETE FROM person_cluster_runs;
+      DELETE FROM person_face_assignments;
+      DELETE FROM persons;
       DELETE FROM face_embeddings;
       DELETE FROM face_detections;
       DELETE FROM media_image_metadata;
@@ -2992,7 +2997,7 @@ function resetCatalog(): { reset: true } {
       DELETE FROM scans;
       DELETE FROM media_sources;
       DELETE FROM sqlite_sequence
-      WHERE name IN ('analysis_jobs', 'face_embeddings', 'face_detections', 'media_image_metadata', 'media_thumbnails', 'media_items', 'media_directories', 'scans', 'media_sources');
+      WHERE name IN ('analysis_jobs', 'person_candidate_faces', 'person_candidates', 'person_cluster_runs', 'person_face_assignments', 'persons', 'face_embeddings', 'face_detections', 'media_image_metadata', 'media_thumbnails', 'media_items', 'media_directories', 'scans', 'media_sources');
     `);
     db.exec("COMMIT");
   } catch (error) {
@@ -3075,6 +3080,36 @@ async function dispatch(method: CatalogMethod, payload: Record<string, unknown> 
         asNumber(payload.jobId, "jobId"),
         payload.result
       );
+    case "getFaceEmbeddingsForClustering":
+      return getFaceEmbeddingsForClustering(
+        asNumber(payload.sourceId, "sourceId"),
+        typeof payload.algorithmVersion === "string"
+          ? payload.algorithmVersion
+          : "person-centroid-v1"
+      );
+    case "replacePersonCandidates":
+      return replacePersonCandidates(
+        asNumber(payload.sourceId, "sourceId"),
+        typeof payload.revision === "string" ? payload.revision : "",
+        typeof payload.algorithmVersion === "string"
+          ? payload.algorithmVersion
+          : "person-centroid-v1",
+        payload.clusters
+      );
+    case "listPersonCandidates":
+      return listPersonCandidates(
+        asNumber(payload.sourceId, "sourceId"),
+        payload.limit === undefined ? 100 : asNumber(payload.limit, "limit")
+      );
+    case "listPersons":
+      return listPersons(asNumber(payload.sourceId, "sourceId"));
+    case "confirmPersonCandidate":
+      return confirmPersonCandidate(
+        asNumber(payload.candidateId, "candidateId"),
+        payload.name
+      );
+    case "getFaceCropInfo":
+      return getFaceCropInfo(asNumber(payload.faceDetectionId, "faceDetectionId"));
     case "getThumbnailInfo":
       return getThumbnailInfo(asNumber(payload.mediaId, "mediaId"));
     case "scanSource":
