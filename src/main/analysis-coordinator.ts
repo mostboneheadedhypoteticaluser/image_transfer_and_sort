@@ -1,22 +1,75 @@
 import type {
   AnalysisJob,
   AnalysisQueueStats,
+  PipelineStatus,
   SourceRecord
 } from "../shared/protocol";
 import { AnalysisService } from "./analysis-service";
 import { CatalogService } from "./catalog-service";
 
-const MODULE = "file-probe-v1";
+type PythonStage = "technical" | "imageMetadata" | "faces";
+
+type ModuleSpec = {
+  module: string;
+  stage: PythonStage;
+  workerMethod: string;
+  completeMethod:
+    | "completeAnalysisJob"
+    | "completeImageMetadataJob"
+    | "completeFaceDetectionJob";
+  label: string;
+  timeoutMs: number;
+};
+
+const MODULES: ModuleSpec[] = [
+  {
+    module: "file-probe-v1",
+    stage: "technical",
+    workerMethod: "probe_media",
+    completeMethod: "completeAnalysisJob",
+    label: "Technische Prüfung",
+    timeoutMs: 15000
+  },
+  {
+    module: "image-metadata-v1",
+    stage: "imageMetadata",
+    workerMethod: "extract_image_metadata",
+    completeMethod: "completeImageMetadataJob",
+    label: "Bildmetadaten",
+    timeoutMs: 30000
+  },
+  {
+    module: "face-detect-yunet-v1",
+    stage: "faces",
+    workerMethod: "detect_faces",
+    completeMethod: "completeFaceDetectionJob",
+    label: "Gesichtsdetektion",
+    timeoutMs: 60000
+  }
+];
+
+type PythonPipelineStats = Pick<
+  PipelineStatus,
+  "technical" | "imageMetadata" | "faces"
+>;
+
+function emptyStats(): AnalysisQueueStats {
+  return { pending: 0, running: 0, done: 0, failed: 0 };
+}
 
 export class AnalysisCoordinator {
   private timer: NodeJS.Timeout | null = null;
   private pumping = false;
   private stopped = true;
+  private cursor = 0;
 
   constructor(
     private readonly catalog: CatalogService,
     private readonly analysis: AnalysisService,
-    private readonly onStats: (stats: AnalysisQueueStats) => void
+    private readonly onStats: (
+      stage: PythonStage,
+      stats: AnalysisQueueStats
+    ) => void
   ) {}
 
   async start(): Promise<void> {
@@ -24,11 +77,11 @@ export class AnalysisCoordinator {
     this.stopped = false;
 
     await this.enqueueExistingSources();
-    await this.refreshQueueState();
+    await this.refreshAllStats();
 
     this.timer = setInterval(() => {
       void this.pump();
-    }, 750);
+    }, 600);
     this.timer.unref();
 
     void this.pump();
@@ -45,31 +98,67 @@ export class AnalysisCoordinator {
 
     for (const source of sources) {
       if (!source.enabled) continue;
-      await this.catalog.request("enqueueAnalysisJobs", {
-        sourceId: source.id,
-        module: MODULE
-      });
+
+      for (const spec of MODULES) {
+        await this.catalog.request("enqueueAnalysisJobs", {
+          sourceId: source.id,
+          module: spec.module
+        });
+      }
     }
   }
 
-  private async refreshQueueState(message?: string): Promise<AnalysisQueueStats> {
-    const stats = await this.catalog.request<AnalysisQueueStats>(
-      "getAnalysisQueueStats",
-      { module: MODULE }
-    );
+  private async refreshAllStats(): Promise<PythonPipelineStats> {
+    const result: PythonPipelineStats = {
+      technical: emptyStats(),
+      imageMetadata: emptyStats(),
+      faces: emptyStats()
+    };
 
-    this.onStats(stats);
+    for (const spec of MODULES) {
+      const stats = await this.catalog.request<AnalysisQueueStats>(
+        "getAnalysisQueueStats",
+        { module: spec.module }
+      );
+
+      result[spec.stage] = stats;
+      this.onStats(spec.stage, stats);
+    }
+
+    const queued =
+      result.technical.pending +
+      result.imageMetadata.pending +
+      result.faces.pending;
+    const active =
+      result.technical.running +
+      result.imageMetadata.running +
+      result.faces.running;
 
     this.analysis.setQueueState(
-      stats.pending,
-      stats.running,
-      message ??
-        (stats.pending > 0 || stats.running > 0
-          ? "Analyse-Pipeline verarbeitet Medien im Hintergrund."
-          : "Analyse-Pipeline ist aktuell abgearbeitet.")
+      queued,
+      active,
+      queued > 0 || active > 0
+        ? "Bildanalyse verarbeitet Medien im Hintergrund."
+        : "Python-Analyse ist aktuell abgearbeitet."
     );
 
-    return stats;
+    return result;
+  }
+
+  private nextPendingSpec(
+    stats: PythonPipelineStats
+  ): ModuleSpec | null {
+    for (let offset = 0; offset < MODULES.length; offset += 1) {
+      const index = (this.cursor + offset) % MODULES.length;
+      const spec = MODULES[index];
+
+      if (stats[spec.stage].pending > 0) {
+        this.cursor = (index + 1) % MODULES.length;
+        return spec;
+      }
+    }
+
+    return null;
   }
 
   private async pump(): Promise<void> {
@@ -79,38 +168,51 @@ export class AnalysisCoordinator {
     this.pumping = true;
 
     try {
-      const stats = await this.refreshQueueState();
-      if (stats.running > 0) return;
+      const stats = await this.refreshAllStats();
+      const totalRunning =
+        stats.technical.running +
+        stats.imageMetadata.running +
+        stats.faces.running;
+
+      if (totalRunning > 0) return;
+
+      const spec = this.nextPendingSpec(stats);
+      if (!spec) return;
 
       const job = await this.catalog.request<AnalysisJob | null>(
         "claimAnalysisJob",
-        { module: MODULE }
+        { module: spec.module }
       );
 
       if (!job) {
-        await this.refreshQueueState();
+        await this.refreshAllStats();
         return;
       }
 
+      const queued =
+        stats.technical.pending +
+        stats.imageMetadata.pending +
+        stats.faces.pending - 1;
+
       this.analysis.setQueueState(
-        Math.max(0, stats.pending - 1),
+        Math.max(0, queued),
         1,
-        `Technische Analyse: ${job.absolutePath}`
+        `${spec.label}: ${job.absolutePath}`
       );
 
       try {
         const result = await this.analysis.request<Record<string, unknown>>(
-          "probe_media",
+          spec.workerMethod,
           {
             path: job.absolutePath,
             expectedSizeBytes: job.sizeBytes,
             expectedSha256: job.sha256,
             extension: job.extension
           },
-          15000
+          spec.timeoutMs
         );
 
-        await this.catalog.request("completeAnalysisJob", {
+        await this.catalog.request(spec.completeMethod, {
           jobId: job.id,
           result
         });
@@ -121,12 +223,13 @@ export class AnalysisCoordinator {
         });
       }
 
-      await this.refreshQueueState();
+      await this.refreshAllStats();
     } catch (error) {
       this.analysis.setQueueState(
         0,
         0,
-        "Analyse-Queue: " + (error instanceof Error ? error.message : String(error))
+        "Analyse-Queue: " +
+          (error instanceof Error ? error.message : String(error))
       );
     } finally {
       this.pumping = false;
