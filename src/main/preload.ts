@@ -6,6 +6,8 @@ import type {
   ConfirmPersonResult,
   DuplicateGroup,
   MediaRecord,
+  MergePersonsResult,
+  PersonCorrectionResult,
   PersonOverview,
   RestoreResult,
   ResetCatalogResult,
@@ -38,6 +40,26 @@ const api = {
       name: string
     ): Promise<ConfirmPersonResult> =>
       ipcRenderer.invoke("people:confirmCandidate", candidateId, name),
+    removeCandidateFace: (
+      candidateId: number,
+      faceDetectionId: number
+    ): Promise<PersonCorrectionResult> =>
+      ipcRenderer.invoke("people:removeCandidateFace", candidateId, faceDetectionId),
+    removePersonFace: (
+      personId: number,
+      faceDetectionId: number
+    ): Promise<PersonCorrectionResult> =>
+      ipcRenderer.invoke("people:removePersonFace", personId, faceDetectionId),
+    mergePersons: (
+      targetPersonId: number,
+      sourcePersonId: number
+    ): Promise<MergePersonsResult> =>
+      ipcRenderer.invoke("people:mergePersons", targetPersonId, sourcePersonId),
+    renamePerson: (
+      personId: number,
+      name: string
+    ): Promise<PersonCorrectionResult> =>
+      ipcRenderer.invoke("people:renamePerson", personId, name),
     onUpdated: (listener: () => void) => {
       const handler = () => listener();
       ipcRenderer.on("people:updated", handler);
