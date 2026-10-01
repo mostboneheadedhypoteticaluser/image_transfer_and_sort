@@ -60,6 +60,10 @@ export type PetEmbeddingSet = {
   revision: string;
   needsRebuild: boolean;
   pets: PetEmbeddingForClustering[];
+  cannotLinks: Array<{
+    petAId: number;
+    petBId: number;
+  }>;
 };
 
 export type PetClusterInput = {
@@ -86,6 +90,9 @@ export type PetCandidate = {
   representativePetId: number | null;
   averageSimilarity: number;
   minSimilarity: number;
+  suggestedPetId: number | null;
+  suggestedPetName: string | null;
+  suggestedPetSimilarity: number | null;
   pets: PetCandidateItem[];
 };
 
@@ -95,6 +102,12 @@ export type PetRecord = {
   petClass: "dog" | "cat";
   detectionCount: number;
   representativePetId: number | null;
+  pets: Array<{
+    petDetectionId: number;
+    mediaId: number;
+    relativePath: string;
+    confidence: number | null;
+  }>;
 };
 
 export type PetOverview = {
@@ -104,6 +117,17 @@ export type PetOverview = {
 };
 
 export type ConfirmPetResult = {
+  petId: number;
+  name: string;
+  detectionCount: number;
+};
+
+export type PetCorrectionResult = {
+  changed: true;
+  affectedPets: number;
+};
+
+export type MergePetsResult = {
   petId: number;
   name: string;
   detectionCount: number;
@@ -340,6 +364,10 @@ export type CatalogMethod =
   | "listPetCandidates"
   | "listPets"
   | "confirmPetCandidate"
+  | "removePetFromCandidate"
+  | "removePetFromPet"
+  | "mergePets"
+  | "renamePet"
   | "getPetCropInfo"
   | "getFaceEmbeddingsForClustering"
   | "replacePersonCandidates"
