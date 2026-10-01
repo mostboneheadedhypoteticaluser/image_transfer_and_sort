@@ -1,4 +1,11 @@
-import type { CatalogStats, MediaRecord, ScanProgress, ScanResult, SourceRecord } from "../shared/protocol";
+import type {
+  CatalogStats,
+  MediaRecord,
+  RestoreResult,
+  ScanProgress,
+  ScanResult,
+  SourceRecord
+} from "../shared/protocol";
 
 declare global {
   interface Window {
@@ -10,6 +17,7 @@ declare global {
         getStats(sourceId: number): Promise<CatalogStats>;
         listMedia(sourceId: number, limit?: number): Promise<MediaRecord[]>;
         scanSource(sourceId: number): Promise<ScanResult>;
+        restoreMedia(mediaId: number): Promise<RestoreResult>;
         onProgress(listener: (progress: ScanProgress) => void): () => void;
       };
     };
