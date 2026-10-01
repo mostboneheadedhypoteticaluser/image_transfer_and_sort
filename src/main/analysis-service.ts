@@ -175,6 +175,13 @@ export class AnalysisService {
           );
         }
 
+        if (capabilities.sfaceModel !== true || capabilities.faceEmbeddings !== true) {
+          throw new Error(
+            "Das SFace-Modell für Gesichtsmerkmale fehlt oder ist nicht verfügbar. " +
+            "Bitte 'npm.cmd run setup:ai' ausführen."
+          );
+        }
+
         const configured = await this.request<Record<string, unknown>>(
           "configure",
           {
