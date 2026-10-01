@@ -215,8 +215,6 @@ app.whenReady().then(() => {
   thumbnailService.start();
   registerIpc();
 
-  windowRef = createWindow();
-
   protocol.handle("image-sorter-thumb", async (request) => {
     try {
       const url = new URL(request.url);
@@ -252,6 +250,8 @@ app.whenReady().then(() => {
       return new Response("Thumbnail konnte nicht geladen werden.", { status: 404 });
     }
   });
+
+  windowRef = createWindow();
 
   void thumbnailCoordinator.start();
 
