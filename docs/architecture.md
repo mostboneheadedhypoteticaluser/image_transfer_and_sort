@@ -68,3 +68,14 @@ Die Oberfläche zeigt den Zustand des Analyse-Workers unabhängig vom Katalog-Wo
 Die Datenbank verwendet WAL-Modus und liegt im Electron-`userData`-Verzeichnis. Der Catalog Worker ist der einzige Prozess, der direkt auf sie zugreift. Andere Module kommunizieren über definierte Nachrichten.
 
 Die Tabelle `analysis_jobs` steuert inzwischen technische Prüfung, Thumbnails, EXIF-Metadaten, YuNet-Gesichtsdetektion und SFace-Gesichtsmerkmale persistent. Ergebnisse landen getrennt in `media_thumbnails`, `media_image_metadata`, `face_detections` und `face_embeddings`. Die SFace-Vektoren werden normalisiert als Float32-BLOB gespeichert. Personenidentität bleibt bewusst noch getrennt; sie wird im nächsten Schritt durch Ähnlichkeits-Clustering und Nutzerbestätigung aufgebaut.
+
+
+## Personenvorschläge und Bestätigung
+
+Nach abgeschlossener SFace-Analyse werden unbestätigte Gesichter automatisch mit `person-centroid-v1` gruppiert. Das Clustering läuft im Python-AI-Worker und verwendet eine konservative Cosine-Schwelle, damit falsches Zusammenführen seltener ist als eine zu starke Aufteilung.
+
+Exakte Dateidubletten werden beim Aufbau der Cluster über `SHA-256 + detection_index` als gleiche Evidenz behandelt, damit identische Kopien den Cluster-Schwerpunkt nicht mehrfach gewichten. Die tatsächlichen Fundstellen bleiben trotzdem einzeln erhalten.
+
+Unbestätigte Gruppen liegen in `person_candidates` und `person_candidate_faces`. Erst eine Nutzerbestätigung erzeugt eine dauerhafte Person in `persons` und feste Zuordnungen in `person_face_assignments`. Bestätigte Gesichter werden bei späteren automatischen Neuberechnungen nicht überschrieben.
+
+Gesichtsausschnitte für die Bestätigungsansicht werden nicht im Renderer berechnet. Der Thumbnail-Utility-Prozess erzeugt gecachte Face-Crops, die über das eingeschränkte interne Protokoll `image-sorter-face://` an die Oberfläche geliefert werden.
