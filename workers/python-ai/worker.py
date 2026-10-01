@@ -330,8 +330,6 @@ def extract_face_embeddings(file_path: str, faces: list[dict]) -> dict:
         if not valid_landmarks:
             continue
 
-        values.append(float(face.get("score", 0.0)))
-
         detection = np.asarray(values, dtype=np.float32)
 
         try:
