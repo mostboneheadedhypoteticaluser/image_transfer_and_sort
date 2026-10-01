@@ -2798,6 +2798,553 @@ function completePetFusionJob(jobId: number, result: unknown) {
   return { completed: true, petCount: written };
 }
 
+function getPetDetectionsForEmbedding(
+  mediaId: number,
+  inputSha256: string
+) {
+  return db.prepare(`
+    SELECT
+      id,
+      pet_class,
+      x,
+      y,
+      width,
+      height,
+      score
+    FROM pet_fused_detections
+    WHERE media_id=?
+      AND input_sha256=?
+      AND pet_class='dog'
+    ORDER BY detection_index ASC
+  `).all(mediaId, inputSha256).map((row) => ({
+    id: Number(row.id),
+    petClass: String(row.pet_class),
+    x: Number(row.x),
+    y: Number(row.y),
+    width: Number(row.width),
+    height: Number(row.height),
+    score: Number(row.score)
+  }));
+}
+
+function completePetEmbeddingJob(jobId: number, result: unknown) {
+  if (!result || typeof result !== "object") {
+    throw new Error("Haustiermerkmal-Ergebnis ist ungültig.");
+  }
+
+  const value = result as Record<string, unknown>;
+  const rawEmbeddings = Array.isArray(value.embeddings) ? value.embeddings : [];
+  const modelVersion =
+    typeof value.model === "string" && value.model.trim()
+      ? value.model.trim()
+      : "DogReID DINOv2-B14 0.2.0";
+
+  const job = jobForModule(jobId, "pet-embed-dogreid-v1");
+  const mediaId = Number(job.media_id);
+  const inputSha256 = String(job.input_sha256 ?? "");
+
+  const insert = db.prepare(`
+    INSERT INTO pet_embeddings(
+      pet_detection_id,
+      media_id,
+      model_version,
+      input_sha256,
+      dimension,
+      vector_blob,
+      updated_at
+    )
+    VALUES(?,?,?,?,?,?,CURRENT_TIMESTAMP)
+    ON CONFLICT(pet_detection_id, model_version) DO UPDATE SET
+      media_id=excluded.media_id,
+      input_sha256=excluded.input_sha256,
+      dimension=excluded.dimension,
+      vector_blob=excluded.vector_blob,
+      updated_at=CURRENT_TIMESTAMP
+  `);
+
+  let written = 0;
+
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    db.prepare(`
+      DELETE FROM pet_embeddings
+      WHERE media_id=?
+        AND model_version=?
+    `).run(mediaId, modelVersion);
+
+    for (const raw of rawEmbeddings) {
+      if (!raw || typeof raw !== "object") continue;
+
+      const item = raw as Record<string, unknown>;
+      const petDetectionId = Number(item.petDetectionId);
+      if (!Number.isInteger(petDetectionId) || petDetectionId <= 0) continue;
+
+      const belongsToMedia = db.prepare(`
+        SELECT 1
+        FROM pet_fused_detections
+        WHERE id=?
+          AND media_id=?
+          AND input_sha256=?
+          AND pet_class='dog'
+      `).get(petDetectionId, mediaId, inputSha256);
+
+      if (!belongsToMedia) continue;
+
+      const vector = Array.isArray(item.vector) ? item.vector : [];
+      const blob = embeddingToBlob(vector);
+
+      insert.run(
+        petDetectionId,
+        mediaId,
+        modelVersion,
+        inputSha256,
+        vector.length,
+        blob
+      );
+      written += 1;
+    }
+
+    db.prepare(`
+      UPDATE analysis_jobs
+      SET
+        status='DONE',
+        result_json=?,
+        error_message=NULL,
+        finished_at=CURRENT_TIMESTAMP,
+        updated_at=CURRENT_TIMESTAMP
+      WHERE id=?
+    `).run(
+      JSON.stringify({ model: modelVersion, embeddingCount: written }),
+      jobId
+    );
+
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+
+  return { completed: true, embeddingCount: written };
+}
+
+function getPetEmbeddingsForClustering(
+  sourceId: number,
+  algorithmVersion: string
+) {
+  const rows = db.prepare(`
+    SELECT
+      pd.id AS pet_detection_id,
+      pd.detection_index,
+      pd.pet_class,
+      pe.media_id,
+      pe.dimension,
+      pe.vector_blob,
+      pe.updated_at,
+      m.sha256
+    FROM pet_embeddings pe
+    JOIN pet_fused_detections pd ON pd.id=pe.pet_detection_id
+    JOIN media_items m ON m.id=pe.media_id
+    LEFT JOIN pet_assignments pa ON pa.pet_detection_id=pd.id
+    WHERE m.source_id=?
+      AND m.availability='AVAILABLE'
+      AND pe.model_version='DogReID DINOv2-B14 0.2.0'
+      AND pe.input_sha256=m.sha256
+      AND pd.input_sha256=m.sha256
+      AND pd.pet_class='dog'
+      AND pa.pet_detection_id IS NULL
+    ORDER BY pd.id ASC
+  `).all(sourceId);
+
+  const ids = rows.map((row) => Number(row.pet_detection_id));
+  const maxUpdatedAt = rows.reduce(
+    (current, row) =>
+      String(row.updated_at ?? "") > current ? String(row.updated_at ?? "") : current,
+    ""
+  );
+  const idSum = ids.reduce((sum, id) => sum + id, 0);
+
+  const assignmentCount = db.prepare(`
+    SELECT COUNT(*) AS count
+    FROM pet_assignments pa
+    JOIN pet_fused_detections pd ON pd.id=pa.pet_detection_id
+    JOIN media_items m ON m.id=pd.media_id
+    WHERE m.source_id=?
+  `).get(sourceId);
+
+  const revision = [
+    rows.length,
+    ids.length > 0 ? Math.max(...ids) : 0,
+    idSum,
+    maxUpdatedAt,
+    Number(assignmentCount?.count ?? 0)
+  ].join(":");
+
+  const previousRun = db.prepare(`
+    SELECT embedding_revision, algorithm_version
+    FROM pet_cluster_runs
+    WHERE source_id=?
+  `).get(sourceId);
+
+  return {
+    revision,
+    needsRebuild:
+      !previousRun ||
+      String(previousRun.embedding_revision) !== revision ||
+      String(previousRun.algorithm_version) !== algorithmVersion,
+    pets: rows.map((row) => ({
+      petDetectionId: Number(row.pet_detection_id),
+      mediaId: Number(row.media_id),
+      contentKey: `${String(row.sha256)}:${Number(row.detection_index)}`,
+      petClass: String(row.pet_class),
+      vector: vectorFromBlob(row.vector_blob, Number(row.dimension))
+    }))
+  };
+}
+
+function replacePetCandidates(
+  sourceId: number,
+  revision: string,
+  algorithmVersion: string,
+  rawClusters: unknown
+) {
+  const clusters = Array.isArray(rawClusters) ? rawClusters : [];
+
+  const eligibleRows = db.prepare(`
+    SELECT pd.id
+    FROM pet_fused_detections pd
+    JOIN pet_embeddings pe ON pe.pet_detection_id=pd.id
+    JOIN media_items m ON m.id=pd.media_id
+    LEFT JOIN pet_assignments pa ON pa.pet_detection_id=pd.id
+    WHERE m.source_id=?
+      AND m.availability='AVAILABLE'
+      AND pd.pet_class='dog'
+      AND pe.model_version='DogReID DINOv2-B14 0.2.0'
+      AND pe.input_sha256=m.sha256
+      AND pd.input_sha256=m.sha256
+      AND pa.pet_detection_id IS NULL
+  `).all(sourceId);
+
+  const eligibleIds = new Set(
+    eligibleRows.map((row) => Number(row.id))
+  );
+
+  const insertCandidate = db.prepare(`
+    INSERT INTO pet_candidates(
+      source_id,
+      pet_class,
+      algorithm_version,
+      representative_pet_id,
+      average_similarity,
+      min_similarity
+    )
+    VALUES(?,'dog',?,?,?,?)
+  `);
+
+  const insertMember = db.prepare(`
+    INSERT INTO pet_candidate_items(
+      candidate_id,
+      pet_detection_id,
+      similarity
+    )
+    VALUES(?,?,?)
+  `);
+
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    db.prepare("DELETE FROM pet_candidates WHERE source_id=?").run(sourceId);
+
+    let writtenClusters = 0;
+    let writtenPets = 0;
+    const usedPets = new Set<number>();
+
+    for (const rawCluster of clusters) {
+      if (!rawCluster || typeof rawCluster !== "object") continue;
+
+      const cluster = rawCluster as Record<string, unknown>;
+      const rawMembers = Array.isArray(cluster.members) ? cluster.members : [];
+
+      const members = rawMembers
+        .filter((value) => value && typeof value === "object")
+        .map((value) => {
+          const item = value as Record<string, unknown>;
+          return {
+            petDetectionId: Number(item.petDetectionId),
+            similarity: Number(item.similarity)
+          };
+        })
+        .filter(
+          (member) =>
+            Number.isInteger(member.petDetectionId) &&
+            eligibleIds.has(member.petDetectionId) &&
+            Number.isFinite(member.similarity) &&
+            !usedPets.has(member.petDetectionId)
+        );
+
+      if (members.length < 2) continue;
+
+      const requestedRepresentative = Number(cluster.representativePetId);
+      const representativePetId = members.some(
+        (member) => member.petDetectionId === requestedRepresentative
+      )
+        ? requestedRepresentative
+        : members[0].petDetectionId;
+
+      const averageSimilarity = Number(cluster.averageSimilarity);
+      const minSimilarity = Number(cluster.minSimilarity);
+
+      const inserted = insertCandidate.run(
+        sourceId,
+        algorithmVersion,
+        representativePetId,
+        Number.isFinite(averageSimilarity) ? averageSimilarity : 1,
+        Number.isFinite(minSimilarity) ? minSimilarity : 1
+      );
+      const candidateId = Number(inserted.lastInsertRowid);
+
+      for (const member of members) {
+        insertMember.run(
+          candidateId,
+          member.petDetectionId,
+          member.similarity
+        );
+        usedPets.add(member.petDetectionId);
+        writtenPets += 1;
+      }
+
+      writtenClusters += 1;
+    }
+
+    db.prepare(`
+      INSERT INTO pet_cluster_runs(
+        source_id,
+        embedding_revision,
+        algorithm_version,
+        updated_at
+      )
+      VALUES(?,?,?,CURRENT_TIMESTAMP)
+      ON CONFLICT(source_id) DO UPDATE SET
+        embedding_revision=excluded.embedding_revision,
+        algorithm_version=excluded.algorithm_version,
+        updated_at=CURRENT_TIMESTAMP
+    `).run(sourceId, revision, algorithmVersion);
+
+    db.exec("COMMIT");
+    return { writtenClusters, writtenPets };
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+}
+
+function listPetCandidates(sourceId: number, requestedLimit: number) {
+  const limit = Math.max(1, Math.min(500, Math.trunc(requestedLimit || 100)));
+
+  const candidates = db.prepare(`
+    SELECT
+      pc.id,
+      pc.pet_class,
+      pc.representative_pet_id,
+      pc.average_similarity,
+      pc.min_similarity,
+      COUNT(pci.pet_detection_id) AS detection_count
+    FROM pet_candidates pc
+    JOIN pet_candidate_items pci ON pci.candidate_id=pc.id
+    WHERE pc.source_id=?
+    GROUP BY pc.id
+    ORDER BY detection_count DESC, pc.average_similarity DESC, pc.id ASC
+    LIMIT ?
+  `).all(sourceId, limit);
+
+  const itemQuery = db.prepare(`
+    SELECT
+      pci.pet_detection_id,
+      pd.media_id,
+      m.relative_path,
+      pci.similarity
+    FROM pet_candidate_items pci
+    JOIN pet_fused_detections pd ON pd.id=pci.pet_detection_id
+    JOIN media_items m ON m.id=pd.media_id
+    WHERE pci.candidate_id=?
+    ORDER BY
+      CASE WHEN pci.pet_detection_id=? THEN 0 ELSE 1 END,
+      pci.similarity DESC,
+      pci.pet_detection_id ASC
+    LIMIT 24
+  `);
+
+  return candidates.map((candidate) => {
+    const representativePetId = candidate.representative_pet_id === null
+      ? null
+      : Number(candidate.representative_pet_id);
+
+    return {
+      id: Number(candidate.id),
+      petClass: String(candidate.pet_class),
+      detectionCount: Number(candidate.detection_count),
+      representativePetId,
+      averageSimilarity: Number(candidate.average_similarity),
+      minSimilarity: Number(candidate.min_similarity),
+      pets: itemQuery.all(
+        Number(candidate.id),
+        representativePetId ?? -1
+      ).map((row) => ({
+        petDetectionId: Number(row.pet_detection_id),
+        mediaId: Number(row.media_id),
+        relativePath: String(row.relative_path),
+        similarity: Number(row.similarity)
+      }))
+    };
+  });
+}
+
+function listPets(sourceId: number) {
+  return db.prepare(`
+    SELECT
+      p.id,
+      p.name,
+      p.pet_class,
+      COUNT(*) AS detection_count,
+      MIN(pd.id) AS representative_pet_id
+    FROM pets p
+    JOIN pet_assignments pa ON pa.pet_id=p.id
+    JOIN pet_fused_detections pd ON pd.id=pa.pet_detection_id
+    JOIN media_items m ON m.id=pd.media_id
+    WHERE m.source_id=?
+    GROUP BY p.id, p.name, p.pet_class
+    ORDER BY p.name COLLATE NOCASE, p.id
+  `).all(sourceId).map((row) => ({
+    id: Number(row.id),
+    name: String(row.name),
+    petClass: String(row.pet_class),
+    detectionCount: Number(row.detection_count),
+    representativePetId:
+      row.representative_pet_id === null ? null : Number(row.representative_pet_id)
+  }));
+}
+
+function confirmPetCandidate(candidateId: number, rawName: unknown) {
+  const name = typeof rawName === "string" ? rawName.trim() : "";
+  if (!name) throw new Error("Bitte einen Namen für das Haustier eingeben.");
+  if (name.length > 120) throw new Error("Der Haustiername ist zu lang.");
+
+  const candidate = db.prepare(`
+    SELECT id, source_id, pet_class
+    FROM pet_candidates
+    WHERE id=?
+  `).get(candidateId);
+
+  if (!candidate) {
+    throw new Error("Der Haustiervorschlag wurde nicht mehr gefunden.");
+  }
+
+  const members = db.prepare(`
+    SELECT pci.pet_detection_id, pci.similarity
+    FROM pet_candidate_items pci
+    LEFT JOIN pet_assignments pa ON pa.pet_detection_id=pci.pet_detection_id
+    WHERE pci.candidate_id=?
+      AND pa.pet_detection_id IS NULL
+    ORDER BY pci.pet_detection_id
+  `).all(candidateId);
+
+  if (members.length === 0) {
+    throw new Error("Der Haustiervorschlag enthält keine unbestätigten Fundstellen mehr.");
+  }
+
+  const petClass = String(candidate.pet_class);
+
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const existing = db.prepare(`
+      SELECT id
+      FROM pets
+      WHERE name=? COLLATE NOCASE
+        AND pet_class=?
+      ORDER BY id ASC
+      LIMIT 1
+    `).get(name, petClass);
+
+    const petId = existing
+      ? Number(existing.id)
+      : Number(
+          db.prepare(`
+            INSERT INTO pets(name, pet_class)
+            VALUES(?,?)
+          `).run(name, petClass).lastInsertRowid
+        );
+
+    db.prepare(`
+      UPDATE pets
+      SET name=?, updated_at=CURRENT_TIMESTAMP
+      WHERE id=?
+    `).run(name, petId);
+
+    const assign = db.prepare(`
+      INSERT INTO pet_assignments(
+        pet_detection_id,
+        pet_id,
+        assignment_source,
+        confidence,
+        updated_at
+      )
+      VALUES(?,?,'CONFIRMED',?,CURRENT_TIMESTAMP)
+    `);
+
+    let detectionCount = 0;
+    for (const member of members) {
+      assign.run(
+        Number(member.pet_detection_id),
+        petId,
+        Number(member.similarity)
+      );
+      detectionCount += 1;
+    }
+
+    db.prepare("DELETE FROM pet_candidates WHERE id=?").run(candidateId);
+    db.prepare("DELETE FROM pet_cluster_runs WHERE source_id=?")
+      .run(Number(candidate.source_id));
+
+    db.exec("COMMIT");
+
+    return { petId, name, detectionCount };
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+}
+
+function getPetCropInfo(petDetectionId: number) {
+  const row = db.prepare(`
+    SELECT
+      pd.id,
+      pd.input_sha256,
+      pd.pet_class,
+      pd.x,
+      pd.y,
+      pd.width,
+      pd.height,
+      m.absolute_path,
+      m.sha256
+    FROM pet_fused_detections pd
+    JOIN media_items m ON m.id=pd.media_id
+    WHERE pd.id=?
+      AND m.availability='AVAILABLE'
+      AND pd.input_sha256=m.sha256
+  `).get(petDetectionId);
+
+  if (!row) return null;
+
+  return {
+    petDetectionId: Number(row.id),
+    absolutePath: String(row.absolute_path),
+    inputSha256: String(row.input_sha256),
+    x: Number(row.x),
+    y: Number(row.y),
+    width: Number(row.width),
+    height: Number(row.height),
+    petClass: String(row.pet_class)
+  };
+}
+
 function getFaceDetectionsForEmbedding(
   mediaId: number,
   inputSha256: string
