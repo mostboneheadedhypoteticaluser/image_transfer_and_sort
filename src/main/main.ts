@@ -18,7 +18,9 @@ import type {
   FaceCropInfo,
   MediaRecord,
   MergePersonsResult,
+  MergePetsResult,
   PersonCorrectionResult,
+  PetCorrectionResult,
   PersonOverview,
   PetCropInfo,
   PetOverview,
@@ -338,6 +340,46 @@ function registerIpc(): void {
       name: string
     ): Promise<ConfirmPetResult> =>
       petService!.confirmCandidate(candidateId, name)
+  );
+
+  ipcMain.handle(
+    "pets:removeCandidatePet",
+    (
+      _event,
+      candidateId: number,
+      petDetectionId: number
+    ): Promise<PetCorrectionResult> =>
+      petService!.removeCandidatePet(candidateId, petDetectionId)
+  );
+
+  ipcMain.handle(
+    "pets:removePetDetection",
+    (
+      _event,
+      petId: number,
+      petDetectionId: number
+    ): Promise<PetCorrectionResult> =>
+      petService!.removePetDetection(petId, petDetectionId)
+  );
+
+  ipcMain.handle(
+    "pets:mergePets",
+    (
+      _event,
+      targetPetId: number,
+      sourcePetId: number
+    ): Promise<MergePetsResult> =>
+      petService!.mergePets(targetPetId, sourcePetId)
+  );
+
+  ipcMain.handle(
+    "pets:renamePet",
+    (
+      _event,
+      petId: number,
+      name: string
+    ): Promise<PetCorrectionResult> =>
+      petService!.renamePet(petId, name)
   );
 }
 
