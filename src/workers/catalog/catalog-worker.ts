@@ -5248,6 +5248,26 @@ async function dispatch(method: CatalogMethod, payload: Record<string, unknown> 
         asNumber(payload.candidateId, "candidateId"),
         payload.name
       );
+    case "removePetFromCandidate":
+      return removePetFromCandidate(
+        asNumber(payload.candidateId, "candidateId"),
+        asNumber(payload.petDetectionId, "petDetectionId")
+      );
+    case "removePetFromPet":
+      return removePetFromPet(
+        asNumber(payload.petId, "petId"),
+        asNumber(payload.petDetectionId, "petDetectionId")
+      );
+    case "mergePets":
+      return mergePets(
+        asNumber(payload.targetPetId, "targetPetId"),
+        asNumber(payload.sourcePetId, "sourcePetId")
+      );
+    case "renamePet":
+      return renamePet(
+        asNumber(payload.petId, "petId"),
+        payload.name
+      );
     case "getPetCropInfo":
       return getPetCropInfo(asNumber(payload.petDetectionId, "petDetectionId"));
     case "getFaceDetectionsForEmbedding":
