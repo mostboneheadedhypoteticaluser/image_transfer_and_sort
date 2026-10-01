@@ -3,11 +3,12 @@ import type {
   AnalysisWorkerStatus,
   DuplicateGroup,
   MediaRecord,
+  PersonOverview,
   PipelineStatus,
   SourceRecord
 } from "../shared/protocol";
 
-type CatalogView = "media" | "duplicates" | "recycle";
+type CatalogView = "media" | "duplicates" | "people" | "recycle";
 
 const sourceSelect = document.querySelector<HTMLSelectElement>("#sourceSelect")!;
 const addSourceButton = document.querySelector<HTMLButtonElement>("#addSource")!;
@@ -18,11 +19,18 @@ const mediaRows = document.querySelector<HTMLTableSectionElement>("#mediaRows")!
 const duplicateGroups = document.querySelector<HTMLDivElement>("#duplicateGroups")!;
 const mediaView = document.querySelector<HTMLDivElement>("#mediaView")!;
 const duplicateView = document.querySelector<HTMLDivElement>("#duplicateView")!;
+const personView = document.querySelector<HTMLDivElement>("#personView")!;
+const personCandidates = document.querySelector<HTMLDivElement>("#personCandidates")!;
+const confirmedPersons = document.querySelector<HTMLDivElement>("#confirmedPersons")!;
+const personStatus = document.querySelector<HTMLParagraphElement>("#personStatus")!;
+const refreshPeopleButton = document.querySelector<HTMLButtonElement>("#refreshPeople")!;
 const mediaTab = document.querySelector<HTMLButtonElement>("#mediaTab")!;
 const duplicateTab = document.querySelector<HTMLButtonElement>("#duplicateTab")!;
+const peopleTab = document.querySelector<HTMLButtonElement>("#peopleTab")!;
 const recycleTab = document.querySelector<HTMLButtonElement>("#recycleTab")!;
 const mediaTabCount = document.querySelector<HTMLSpanElement>("#mediaTabCount")!;
 const duplicateTabCount = document.querySelector<HTMLSpanElement>("#duplicateTabCount")!;
+const peopleTabCount = document.querySelector<HTMLSpanElement>("#peopleTabCount")!;
 const recycleTabCount = document.querySelector<HTMLSpanElement>("#recycleTabCount")!;
 const progressText = document.querySelector<HTMLSpanElement>("#progressText")!;
 const progressBar = document.querySelector<HTMLDivElement>("#progressBar")!;
@@ -150,7 +158,10 @@ function renderPipelineStatus(status: PipelineStatus): void {
 
   analysisRefreshTimer = window.setTimeout(() => {
     analysisRefreshTimer = null;
-    if (currentView === "media" && selectedSourceId() !== null) {
+    if (
+      (currentView === "media" || currentView === "people") &&
+      selectedSourceId() !== null
+    ) {
       void runSafely(refreshCatalog);
     }
   }, 500);
@@ -159,6 +170,10 @@ function renderPipelineStatus(status: PipelineStatus): void {
 function thumbnailUrl(row: MediaRecord): string | null {
   if (!row.thumbnailReady || !row.thumbnailVersion) return null;
   return `image-sorter-thumb://media/${row.id}?v=${encodeURIComponent(row.thumbnailVersion)}`;
+}
+
+function faceCropUrl(faceDetectionId: number): string {
+  return `image-sorter-face://face/${faceDetectionId}`;
 }
 
 function selectedSourceId(): number | null {
@@ -195,10 +210,12 @@ function setView(view: CatalogView): void {
 
   mediaTab.classList.toggle("active", view === "media");
   duplicateTab.classList.toggle("active", view === "duplicates");
+  peopleTab.classList.toggle("active", view === "people");
   recycleTab.classList.toggle("active", view === "recycle");
 
   duplicateView.hidden = view !== "duplicates";
-  mediaView.hidden = view === "duplicates";
+  personView.hidden = view !== "people";
+  mediaView.hidden = view === "duplicates" || view === "people";
 
   void runSafely(refreshCatalog);
 }
@@ -395,6 +412,198 @@ function renderDuplicateGroups(groups: DuplicateGroup[]): void {
   duplicateGroups.appendChild(fragment);
 }
 
+function renderPersonOverview(overview: PersonOverview): void {
+  personCandidates.replaceChildren();
+  confirmedPersons.replaceChildren();
+
+  if (overview.clusteringPending) {
+    personStatus.textContent =
+      "Gesichtsmerkmale werden noch im Hintergrund berechnet. " +
+      "Die Personenvorschläge werden danach neu gruppiert.";
+  } else if (overview.candidates.length > 0) {
+    personStatus.textContent =
+      `${overview.candidates.length.toLocaleString("de-DE")} unbestätigte ` +
+      `${overview.candidates.length === 1 ? "Gruppe" : "Gruppen"} gefunden. ` +
+      "Erst deine Bestätigung erzeugt eine dauerhafte Person.";
+  } else {
+    personStatus.textContent =
+      "Aktuell gibt es keine unbestätigten Personenvorschläge.";
+  }
+
+  peopleTabCount.textContent = overview.candidates.length.toLocaleString("de-DE");
+
+  if (overview.candidates.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "person-empty";
+    empty.textContent = overview.clusteringPending
+      ? "Warte auf die laufende Gesichtsmerkmals-Analyse …"
+      : "Keine Personengruppen zu bestätigen.";
+    personCandidates.appendChild(empty);
+  } else {
+    const fragment = document.createDocumentFragment();
+
+    for (const candidate of overview.candidates) {
+      const card = document.createElement("article");
+      card.className = "person-candidate-card";
+
+      const faceStrip = document.createElement("div");
+      faceStrip.className = "person-face-strip";
+
+      for (const face of candidate.faces) {
+        const figure = document.createElement("figure");
+        figure.className = "person-face";
+        if (face.faceDetectionId === candidate.representativeFaceId) {
+          figure.classList.add("representative");
+        }
+
+        const img = document.createElement("img");
+        img.src = faceCropUrl(face.faceDetectionId);
+        img.alt = "";
+        img.loading = "lazy";
+        img.title =
+          `${face.relativePath}\nÄhnlichkeit zur Gruppe: ${face.similarity.toFixed(3)}`;
+
+        const fallback = document.createElement("span");
+        fallback.className = "face-fallback";
+        fallback.textContent = "Gesicht";
+        fallback.hidden = true;
+
+        img.addEventListener("error", () => {
+          img.hidden = true;
+          fallback.hidden = false;
+        });
+
+        figure.append(img, fallback);
+        faceStrip.appendChild(figure);
+      }
+
+      const body = document.createElement("div");
+      body.className = "person-candidate-body";
+
+      const heading = document.createElement("div");
+      heading.className = "person-candidate-heading";
+
+      const titleBlock = document.createElement("div");
+      const title = document.createElement("h4");
+      title.textContent =
+        `${candidate.faceCount.toLocaleString("de-DE")} ` +
+        `${candidate.faceCount === 1 ? "Fundstelle" : "Fundstellen"}`;
+
+      const similarity = document.createElement("p");
+      similarity.textContent =
+        `Gruppenähnlichkeit Ø ${candidate.averageSimilarity.toFixed(3)} · ` +
+        `Minimum ${candidate.minSimilarity.toFixed(3)}`;
+
+      titleBlock.append(title, similarity);
+      heading.appendChild(titleBlock);
+
+      const confirmRow = document.createElement("div");
+      confirmRow.className = "person-confirm-row";
+
+      const input = document.createElement("input");
+      input.type = "text";
+      input.maxLength = 120;
+      input.placeholder = "Name der Person";
+      input.autocomplete = "off";
+
+      const button = document.createElement("button");
+      button.className = "primary person-confirm";
+      button.type = "button";
+      button.textContent = "Bestätigen";
+
+      const confirm = async () => {
+        const name = input.value.trim();
+        if (!name) {
+          input.focus();
+          return;
+        }
+
+        input.disabled = true;
+        button.disabled = true;
+
+        try {
+          const result = await window.imageSorter.people.confirmCandidate(
+            candidate.id,
+            name
+          );
+          progressText.textContent =
+            `${result.name}: ${result.faceCount.toLocaleString("de-DE")} ` +
+            `${result.faceCount === 1 ? "Gesicht bestätigt" : "Gesichter bestätigt"}.`;
+          await refreshCatalog();
+        } catch (error) {
+          progressText.textContent =
+            error instanceof Error ? error.message : String(error);
+          input.disabled = false;
+          button.disabled = false;
+        }
+      };
+
+      button.addEventListener("click", () => void confirm());
+      input.addEventListener("keydown", (event) => {
+        if (event.key === "Enter") void confirm();
+      });
+
+      confirmRow.append(input, button);
+      body.append(heading, confirmRow);
+      card.append(faceStrip, body);
+      fragment.appendChild(card);
+    }
+
+    personCandidates.appendChild(fragment);
+  }
+
+  if (overview.persons.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "person-empty compact";
+    empty.textContent = "Noch keine Personen bestätigt.";
+    confirmedPersons.appendChild(empty);
+  } else {
+    const fragment = document.createDocumentFragment();
+
+    for (const person of overview.persons) {
+      const card = document.createElement("article");
+      card.className = "confirmed-person-card";
+
+      if (person.representativeFaceId !== null) {
+        const img = document.createElement("img");
+        img.src = faceCropUrl(person.representativeFaceId);
+        img.alt = "";
+        img.loading = "lazy";
+        card.appendChild(img);
+      }
+
+      const text = document.createElement("div");
+      const name = document.createElement("strong");
+      name.textContent = person.name;
+      const count = document.createElement("small");
+      count.textContent =
+        `${person.faceCount.toLocaleString("de-DE")} ` +
+        `${person.faceCount === 1 ? "bestätigtes Gesicht" : "bestätigte Gesichter"}`;
+      text.append(name, count);
+      card.appendChild(text);
+      fragment.appendChild(card);
+    }
+
+    confirmedPersons.appendChild(fragment);
+  }
+}
+
+async function loadPersonOverview(
+  sourceId: number,
+  forceRefresh = false
+): Promise<void> {
+  refreshPeopleButton.disabled = true;
+  try {
+    const overview = await window.imageSorter.people.getOverview(
+      sourceId,
+      forceRefresh
+    );
+    renderPersonOverview(overview);
+  } finally {
+    refreshPeopleButton.disabled = false;
+  }
+}
+
 async function refreshCatalog(): Promise<void> {
   const sourceId = selectedSourceId();
   scanButton.disabled = sourceId === null || scanning || restoring || resetting;
@@ -408,9 +617,15 @@ async function refreshCatalog(): Promise<void> {
     lastScan.textContent = "—";
     mediaTabCount.textContent = "0";
     duplicateTabCount.textContent = "0";
+    peopleTabCount.textContent = "0";
     recycleTabCount.textContent = "0";
     renderRows([]);
     renderDuplicateGroups([]);
+    renderPersonOverview({
+      candidates: [],
+      persons: [],
+      clusteringPending: false
+    });
     return;
   }
 
@@ -423,11 +638,17 @@ async function refreshCatalog(): Promise<void> {
   lastScan.textContent = stats.lastScan ?? "—";
   mediaTabCount.textContent = stats.total.toLocaleString("de-DE");
   duplicateTabCount.textContent = stats.duplicateGroups.toLocaleString("de-DE");
+  peopleTabCount.textContent = stats.personCandidates.toLocaleString("de-DE");
   recycleTabCount.textContent = stats.recycleBin.toLocaleString("de-DE");
 
   if (currentView === "duplicates") {
     const groups = await window.imageSorter.catalog.listDuplicateGroups(sourceId, 100);
     renderDuplicateGroups(groups);
+    return;
+  }
+
+  if (currentView === "people") {
+    await loadPersonOverview(sourceId);
     return;
   }
 
@@ -566,9 +787,11 @@ resetButton.addEventListener("click", () => {
       currentView = "media";
       mediaTab.classList.add("active");
       duplicateTab.classList.remove("active");
+      peopleTab.classList.remove("active");
       recycleTab.classList.remove("active");
       mediaView.hidden = false;
       duplicateView.hidden = true;
+      personView.hidden = true;
       await loadSources();
       progressText.textContent = "Katalog zurückgesetzt. Du kannst jetzt eine Medienquelle neu hinzufügen und sauber neu scannen.";
     } finally {
@@ -583,7 +806,20 @@ resetButton.addEventListener("click", () => {
 
 mediaTab.addEventListener("click", () => setView("media"));
 duplicateTab.addEventListener("click", () => setView("duplicates"));
+peopleTab.addEventListener("click", () => setView("people"));
 recycleTab.addEventListener("click", () => setView("recycle"));
+
+refreshPeopleButton.addEventListener("click", () => {
+  const sourceId = selectedSourceId();
+  if (sourceId === null) return;
+
+  void runSafely(async () => {
+    personStatus.textContent = "Personenvorschläge werden neu berechnet …";
+    await loadPersonOverview(sourceId, true);
+    const stats = await window.imageSorter.catalog.getStats(sourceId);
+    peopleTabCount.textContent = stats.personCandidates.toLocaleString("de-DE");
+  });
+});
 sourceSelect.addEventListener("change", () => void runSafely(refreshCatalog));
 refreshButton.addEventListener("click", () => void runSafely(refreshCatalog));
 
