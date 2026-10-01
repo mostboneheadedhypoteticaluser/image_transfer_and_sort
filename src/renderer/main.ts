@@ -4,6 +4,7 @@ import type { MediaRecord, SourceRecord } from "../shared/protocol";
 const sourceSelect = document.querySelector<HTMLSelectElement>("#sourceSelect")!;
 const addSourceButton = document.querySelector<HTMLButtonElement>("#addSource")!;
 const scanButton = document.querySelector<HTMLButtonElement>("#scanSource")!;
+const resetButton = document.querySelector<HTMLButtonElement>("#resetCatalog")!;
 const refreshButton = document.querySelector<HTMLButtonElement>("#refresh")!;
 const mediaRows = document.querySelector<HTMLTableSectionElement>("#mediaRows")!;
 const progressText = document.querySelector<HTMLSpanElement>("#progressText")!;
@@ -18,6 +19,7 @@ const lastScan = document.querySelector<HTMLSpanElement>("#lastScan")!;
 let sources: SourceRecord[] = [];
 let scanning = false;
 let restoring = false;
+let resetting = false;
 
 function selectedSourceId(): number | null {
   const value = sourceSelect.value;
@@ -53,7 +55,7 @@ function renderRows(rows: MediaRecord[]): void {
     const td = document.createElement("td");
     td.colSpan = 5;
     td.className = "empty";
-    td.textContent = "Noch keine Bilder katalogisiert.";
+    td.textContent = "Noch keine Medien katalogisiert.";
     tr.appendChild(td);
     mediaRows.appendChild(tr);
     return;
@@ -106,7 +108,8 @@ function renderRows(rows: MediaRecord[]): void {
 
 async function refreshCatalog(): Promise<void> {
   const sourceId = selectedSourceId();
-  scanButton.disabled = sourceId === null || scanning || restoring;
+  scanButton.disabled = sourceId === null || scanning || restoring || resetting;
+  resetButton.disabled = scanning || restoring || resetting;
 
   if (sourceId === null) {
     totalCount.textContent = "0";
@@ -166,12 +169,13 @@ async function runSafely(action: () => Promise<void>): Promise<void> {
 }
 
 async function restoreRow(row: MediaRecord, button: HTMLButtonElement): Promise<void> {
-  if (restoring || scanning) return;
+  if (restoring || scanning || resetting) return;
 
   await runSafely(async () => {
     restoring = true;
     button.disabled = true;
     scanButton.disabled = true;
+    resetButton.disabled = true;
     addSourceButton.disabled = true;
     progressText.textContent = `Wiederherstellung läuft: ${row.relativePath}`;
 
@@ -182,6 +186,7 @@ async function restoreRow(row: MediaRecord, button: HTMLButtonElement): Promise<
     } finally {
       restoring = false;
       addSourceButton.disabled = false;
+      resetButton.disabled = false;
       scanButton.disabled = selectedSourceId() === null;
     }
   });
@@ -199,11 +204,12 @@ addSourceButton.addEventListener("click", () => {
 
 scanButton.addEventListener("click", () => {
   const sourceId = selectedSourceId();
-  if (sourceId === null || scanning || restoring) return;
+  if (sourceId === null || scanning || restoring || resetting) return;
 
   void runSafely(async () => {
     scanning = true;
     scanButton.disabled = true;
+    resetButton.disabled = true;
     addSourceButton.disabled = true;
     progressBar.classList.add("active");
     progressText.textContent = "Scan wird gestartet …";
@@ -211,7 +217,7 @@ scanButton.addEventListener("click", () => {
     try {
       const result = await window.imageSorter.catalog.scanSource(sourceId);
       progressText.textContent =
-        `Fertig · ${result.discovered.toLocaleString("de-DE")} gefunden · ` +
+        `Fertig · ${result.discovered.toLocaleString("de-DE")} Medien gefunden · ` +
         `${result.added.toLocaleString("de-DE")} neu · ` +
         `${result.moved.toLocaleString("de-DE")} verschoben/umbenannt · ` +
         `${result.changed.toLocaleString("de-DE")} geändert · ` +
@@ -223,8 +229,41 @@ scanButton.addEventListener("click", () => {
     } finally {
       scanning = false;
       addSourceButton.disabled = false;
+      resetButton.disabled = false;
       scanButton.disabled = selectedSourceId() === null;
       progressBar.classList.remove("active");
+    }
+  });
+});
+
+resetButton.addEventListener("click", () => {
+  if (scanning || restoring || resetting) return;
+
+  const confirmed = window.confirm(
+    "Wirklich die komplette Entwicklungsdatenbank zurücksetzen? " +
+    "Alle Medienquellen, Katalogeinträge, Scan-Historien und Analysejobs werden gelöscht. " +
+    "Die Originaldateien auf der Festplatte bleiben unverändert."
+  );
+  if (!confirmed) return;
+
+  void runSafely(async () => {
+    resetting = true;
+    resetButton.disabled = true;
+    scanButton.disabled = true;
+    addSourceButton.disabled = true;
+    sourceSelect.disabled = true;
+    progressText.textContent = "Katalog wird vollständig zurückgesetzt …";
+
+    try {
+      await window.imageSorter.catalog.resetCatalog();
+      await loadSources();
+      progressText.textContent = "Katalog zurückgesetzt. Du kannst jetzt eine Medienquelle neu hinzufügen und sauber neu scannen.";
+    } finally {
+      resetting = false;
+      resetButton.disabled = false;
+      addSourceButton.disabled = false;
+      sourceSelect.disabled = false;
+      scanButton.disabled = selectedSourceId() === null;
     }
   });
 });
