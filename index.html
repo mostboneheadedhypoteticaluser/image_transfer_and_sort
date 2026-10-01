@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="de">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Image Sortierer</title>
+  </head>
+  <body>
+    <div id="app">
+      <header class="topbar">
+        <div>
+          <h1>Bildkatalog</h1>
+          <p>Lokale Bilder katalogisieren – Analyse läuft getrennt von der Oberfläche.</p>
+        </div>
+        <span class="status-pill" id="workerState">Katalog-Worker wird gestartet …</span>
+      </header>
+
+      <main>
+        <section class="panel source-panel">
+          <label for="sourceSelect">Medienquelle</label>
+          <div class="source-row">
+            <select id="sourceSelect"></select>
+            <button id="addSource" class="secondary">Quelle hinzufügen</button>
+            <button id="scanSource" class="primary">Jetzt scannen</button>
+          </div>
+          <div class="progress-row">
+            <div class="progress-track"><div id="progressBar" class="progress-bar"></div></div>
+            <span id="progressText">Bereit</span>
+          </div>
+        </section>
+
+        <section class="stats-grid">
+          <article class="stat"><span id="totalCount">0</span><small>Katalogisiert</small></article>
+          <article class="stat"><span id="availableCount">0</span><small>Verfügbar</small></article>
+          <article class="stat"><span id="missingCount">0</span><small>Fehlend</small></article>
+          <article class="stat"><span id="lastScan">—</span><small>Letzter Scan</small></article>
+        </section>
+
+        <section class="panel media-panel">
+          <div class="panel-heading">
+            <div>
+              <h2>Bilder</h2>
+              <p id="tableHint">Es werden maximal 500 Einträge gleichzeitig geladen, damit die Oberfläche schnell bleibt.</p>
+            </div>
+            <button id="refresh" class="ghost">Aktualisieren</button>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Pfad</th>
+                  <th>Typ</th>
+                  <th>Größe</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody id="mediaRows"></tbody>
+            </table>
+          </div>
+        </section>
+      </main>
+    </div>
+    <script type="module" src="/src/renderer/main.ts"></script>
+  </body>
+</html>
