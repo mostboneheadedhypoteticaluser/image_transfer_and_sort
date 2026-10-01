@@ -943,6 +943,19 @@ def extract_dog_embeddings(file_path: str, pets: list[dict]) -> dict:
             "OpenCV/Numpy fehlt. Einmal 'npm.cmd run setup:ai' ausführen."
         )
 
+    dog_pets = [
+        pet
+        for pet in pets
+        if isinstance(pet, dict) and pet.get("petClass") == "dog"
+    ]
+
+    if not dog_pets:
+        return {
+            "module": "pet-embed-dogreid-v1",
+            "model": "DogReID DINOv2-B14 0.2.0",
+            "embeddings": [],
+        }
+
     image = cv2.imread(file_path, cv2.IMREAD_COLOR)
     if image is None:
         raise RuntimeError("Bild konnte von OpenCV nicht gelesen werden.")
@@ -957,9 +970,7 @@ def extract_dog_embeddings(file_path: str, pets: list[dict]) -> dict:
 
     embeddings: list[dict] = []
 
-    for pet in pets:
-        if not isinstance(pet, dict) or pet.get("petClass") != "dog":
-            continue
+    for pet in dog_pets:
 
         pet_detection_id = int(pet.get("id", 0))
         if pet_detection_id <= 0:
