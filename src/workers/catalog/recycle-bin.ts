@@ -115,62 +115,7 @@ if ($null -eq $match) {
 $restoreVerb = $null
 foreach ($verb in @($match.Verbs())) {
   $verbName = ([string]$verb.Name).Replace('&', '').Trim()
-  if ($verbName -match '^(Restore|Wiederherstellen)
-
-function normalizeWindowsPath(value: string): string {
-  return value.replaceAll("/", "\\").toLocaleLowerCase("de-DE");
-}
-
-export async function listRecycleBinItems(): Promise<RecycleBinItem[]> {
-  if (process.platform !== "win32") return [];
-
-  const output = await runPowerShell(LIST_SCRIPT);
-  if (!output) return [];
-
-  const parsed: unknown = JSON.parse(output);
-  const values = Array.isArray(parsed) ? parsed : [parsed];
-
-  return values
-    .filter((value): value is Record<string, unknown> => Boolean(value) && typeof value === "object")
-    .map((value) => ({
-      originalPath: String(value.originalPath ?? ""),
-      recyclePath: value.recyclePath ? String(value.recyclePath) : null,
-      sizeBytes: value.sizeBytes === null || value.sizeBytes === undefined
-        ? null
-        : Number(value.sizeBytes)
-    }))
-    .filter((item) => item.originalPath.length > 0);
-}
-
-export async function recycleBinIndex(): Promise<Map<string, RecycleBinItem>> {
-  const items = await listRecycleBinItems();
-  const result = new Map<string, RecycleBinItem>();
-
-  for (const item of items) {
-    result.set(normalizeWindowsPath(item.originalPath), item);
-  }
-
-  return result;
-}
-
-export async function restoreRecycleBinItem(
-  originalPath: string,
-  recyclePath: string | null = null
-): Promise<void> {
-  if (process.platform !== "win32") {
-    throw new Error("Wiederherstellen aus dem Papierkorb wird derzeit nur unter Windows unterstützt.");
-  }
-
-  await runPowerShell(RESTORE_SCRIPT, {
-    IMAGE_SORTER_RESTORE_TARGET: originalPath,
-    IMAGE_SORTER_RECYCLE_PATH: recyclePath ?? ""
-  });
-}
-
-export function recycleLookupKey(originalPath: string): string {
-  return normalizeWindowsPath(originalPath);
-}
-) {
+  if ($verbName -match '^(Restore|Wiederherstellen)$') {
     $restoreVerb = $verb
     break
   }
@@ -218,27 +163,16 @@ export async function listRecycleBinItems(): Promise<RecycleBinItem[]> {
     .filter((item) => item.originalPath.length > 0);
 }
 
-export async function recycleBinIndex(): Promise<Map<string, RecycleBinItem>> {
-  const items = await listRecycleBinItems();
-  const result = new Map<string, RecycleBinItem>();
-
-  for (const item of items) {
-    result.set(normalizeWindowsPath(item.originalPath), item);
-  }
-
-  return result;
-}
-
-export async function restoreRecycleBinItem(originalPath: string): Promise<void> {
+export async function restoreRecycleBinItem(
+  originalPath: string,
+  recyclePath: string | null = null
+): Promise<void> {
   if (process.platform !== "win32") {
     throw new Error("Wiederherstellen aus dem Papierkorb wird derzeit nur unter Windows unterstützt.");
   }
 
   await runPowerShell(RESTORE_SCRIPT, {
-    IMAGE_SORTER_RESTORE_TARGET: originalPath
+    IMAGE_SORTER_RESTORE_TARGET: originalPath,
+    IMAGE_SORTER_RECYCLE_PATH: recyclePath ?? ""
   });
-}
-
-export function recycleLookupKey(originalPath: string): string {
-  return normalizeWindowsPath(originalPath);
 }
