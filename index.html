@@ -33,6 +33,7 @@
           <article class="stat"><span id="totalCount">0</span><small>Katalogisiert</small></article>
           <article class="stat"><span id="availableCount">0</span><small>Verfügbar</small></article>
           <article class="stat"><span id="missingCount">0</span><small>Fehlend</small></article>
+          <article class="stat"><span id="recycleCount">0</span><small>Im Papierkorb</small></article>
           <article class="stat"><span id="lastScan">—</span><small>Letzter Scan</small></article>
         </section>
 
@@ -40,7 +41,7 @@
           <div class="panel-heading">
             <div>
               <h2>Bilder</h2>
-              <p id="tableHint">Es werden maximal 500 Einträge gleichzeitig geladen, damit die Oberfläche schnell bleibt.</p>
+              <p id="tableHint">Papierkorb-Dateien werden nicht als normale Medien katalogisiert. Wiederherstellbare Löschungen erscheinen separat.</p>
             </div>
             <button id="refresh" class="ghost">Aktualisieren</button>
           </div>
@@ -52,6 +53,7 @@
                   <th>Typ</th>
                   <th>Größe</th>
                   <th>Status</th>
+                  <th>Aktion</th>
                 </tr>
               </thead>
               <tbody id="mediaRows"></tbody>
