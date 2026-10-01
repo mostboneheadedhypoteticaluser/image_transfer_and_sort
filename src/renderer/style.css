@@ -1129,3 +1129,10 @@ td .badge + .badge {
     opacity: .88;
   }
 }
+
+
+.confirmed-face img,
+.confirmed-face .face-fallback {
+  width: 100%;
+  height: 100%;
+}
