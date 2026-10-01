@@ -27,6 +27,15 @@ export type AnalysisJob = {
   sha256: string;
 };
 
+export type ThumbnailInfo = {
+  mediaId: number;
+  path: string;
+  inputSha256: string;
+  width: number;
+  height: number;
+  format: string;
+};
+
 export type SourceRecord = {
   id: number;
   path: string;
@@ -52,6 +61,8 @@ export type MediaRecord = {
   inRecycleBin: boolean;
   recycleState: "NONE" | "RESTORABLE" | "AMBIGUOUS";
   duplicateCount: number;
+  thumbnailReady: boolean;
+  thumbnailVersion: string | null;
   lastSeenAt: string;
 };
 
@@ -108,6 +119,8 @@ export type CatalogMethod =
   | "claimAnalysisJob"
   | "completeAnalysisJob"
   | "failAnalysisJob"
+  | "completeThumbnailJob"
+  | "getThumbnailInfo"
   | "scanSource"
   | "restoreMedia"
   | "resetCatalog";
