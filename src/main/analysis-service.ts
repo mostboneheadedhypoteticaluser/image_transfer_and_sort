@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { existsSync, readdirSync } from "node:fs";
+import path from "node:path";
 import os from "node:os";
 import readline from "node:readline";
 import type { AnalysisWorkerStatus } from "../shared/protocol";
@@ -22,6 +24,40 @@ type PythonCandidate = {
   args: string[];
   label: string;
 };
+
+function installedWindowsPythonExecutables(): string[] {
+  const roots = [
+    process.env.LOCALAPPDATA
+      ? path.join(process.env.LOCALAPPDATA, "Programs", "Python")
+      : null,
+    process.env.ProgramFiles
+      ? path.join(process.env.ProgramFiles, "Python")
+      : null
+  ].filter((value): value is string => Boolean(value));
+
+  const executables: string[] = [];
+
+  for (const root of roots) {
+    if (!existsSync(root)) continue;
+
+    try {
+      const candidates = readdirSync(root, { withFileTypes: true })
+        .filter((entry) => entry.isDirectory() && /^Python\d+$/i.test(entry.name))
+        .map((entry) => path.join(root, entry.name, "python.exe"))
+        .filter((candidate) => existsSync(candidate))
+        .sort((left, right) =>
+          right.localeCompare(left, undefined, { numeric: true })
+        );
+
+      executables.push(...candidates);
+    } catch {
+      // Falls ein Installationsordner nicht gelesen werden kann,
+      // werden die weiteren Python-Kandidaten trotzdem probiert.
+    }
+  }
+
+  return [...new Set(executables)];
+}
 
 const DEFAULT_STATUS: AnalysisWorkerStatus = {
   state: "STOPPED",
@@ -57,10 +93,18 @@ export class AnalysisService {
 
   private candidates(): PythonCandidate[] {
     if (process.platform === "win32") {
+      const installed = installedWindowsPythonExecutables().map((command) => ({
+        command,
+        args: ["-u", this.workerPath],
+        label: command
+      }));
+
       return [
+        ...installed,
         { command: "py", args: ["-3.12", "-u", this.workerPath], label: "Python 3.12 (py)" },
         { command: "py", args: ["-3", "-u", this.workerPath], label: "Python 3 (py)" },
-        { command: "python", args: ["-u", this.workerPath], label: "Python" }
+        { command: "python.exe", args: ["-u", this.workerPath], label: "Python (PATH)" },
+        { command: "python", args: ["-u", this.workerPath], label: "Python (PATH)" }
       ];
     }
 
