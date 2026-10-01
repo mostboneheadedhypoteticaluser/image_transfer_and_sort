@@ -774,15 +774,36 @@ async function uniqueIdentityMoveCandidate(
 async function uniqueMoveCandidate(
   hash: string,
   sizeBytes: number,
+  deviceId: string,
+  inode: string,
   byHash: Map<string, IndexedMedia[]>,
   seenIds: Set<number>
 ): Promise<IndexedMedia | null> {
-  const candidates = (byHash.get(hash) ?? []).filter(
-    (candidate) =>
-      candidate.sizeBytes === sizeBytes &&
-      !candidate.inRecycleBin &&
-      !seenIds.has(candidate.id)
-  );
+  const candidates = (byHash.get(hash) ?? []).filter((candidate) => {
+    if (
+      candidate.sizeBytes !== sizeBytes ||
+      candidate.inRecycleBin ||
+      seenIds.has(candidate.id)
+    ) {
+      return false;
+    }
+
+    const candidateIdentity = identityKey(candidate.deviceId, candidate.inode);
+    const discoveredIdentity = identityKey(deviceId, inode);
+
+    // Auf demselben Dateisystem beweist eine andere File-ID, dass es eine
+    // andere Datei ist (z. B. eine echte Kopie/Dublette) und keine Verschiebung.
+    if (
+      candidateIdentity &&
+      discoveredIdentity &&
+      candidate.deviceId === deviceId &&
+      candidate.inode !== inode
+    ) {
+      return false;
+    }
+
+    return true;
+  });
 
   const missingAtOldLocation: IndexedMedia[] = [];
 
@@ -1248,6 +1269,8 @@ async function scanSource(sourceId: number): Promise<ScanResult> {
             const moveCandidate = await uniqueMoveCandidate(
               hash,
               file.sizeBytes,
+              file.deviceId,
+              file.inode,
               byHash,
               seenIds
             );
