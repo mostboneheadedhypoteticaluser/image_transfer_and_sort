@@ -30,6 +30,13 @@ const models = [
     url:
       "https://huggingface.co/opencv/opencv_zoo/resolve/main/models/object_detection_nanodet/object_detection_nanodet_2022nov.onnx",
     sha256: "4b82da9944b88577175ee23a459dce2e26e6e4be573def65b1055dc2d9720186"
+  },
+  {
+    name: "YOLOX-S",
+    path: path.join(modelDir, "object_detection_yolox_2022nov.onnx"),
+    url:
+      "https://huggingface.co/opencv/opencv_zoo/resolve/main/models/object_detection_yolox/object_detection_yolox_2022nov.onnx",
+    sha256: "c5c2d13e59ae883e6af3b45daea64af4833a4951c92d116ec270d9ddbe998063"
   }
 ];
 
