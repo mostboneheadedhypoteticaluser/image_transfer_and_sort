@@ -54,6 +54,7 @@ export class PersonService {
           "cluster_face_embeddings",
           {
             faces: set.faces,
+            cannotLinks: set.cannotLinks,
             clusterThreshold: 0.50,
             verificationThreshold: 0.363
           },
