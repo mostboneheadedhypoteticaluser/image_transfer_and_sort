@@ -74,9 +74,43 @@
             </div>
           </div>
 
+          <div class="pipeline-stages">
+            <article class="pipeline-stage">
+              <div>
+                <small>Stufe 1</small>
+                <strong>Technische Prüfung</strong>
+              </div>
+              <div class="pipeline-stage-status">
+                <span id="technicalStageState" class="stage-state waiting">Wartet</span>
+                <small id="technicalStageCounts">0 fertig · 0 offen</small>
+              </div>
+            </article>
+
+            <article class="pipeline-stage">
+              <div>
+                <small>Stufe 2</small>
+                <strong>Thumbnails</strong>
+              </div>
+              <div class="pipeline-stage-status">
+                <span id="thumbnailStageState" class="stage-state waiting">Wartet</span>
+                <small id="thumbnailStageCounts">0 fertig · 0 offen</small>
+              </div>
+            </article>
+
+            <article class="pipeline-stage future">
+              <div>
+                <small>Danach</small>
+                <strong>Personen · Haustiere · Motive</strong>
+              </div>
+              <div class="pipeline-stage-status">
+                <span class="stage-state future">Noch nicht aktiv</span>
+              </div>
+            </article>
+          </div>
+
           <div class="analysis-footer">
             <span id="analysisMessage">Analyse-Worker wird gestartet …</span>
-            <span class="analysis-note">Noch keine KI-Module aktiv.</span>
+            <span class="analysis-note">Technik und Vorschaubilder laufen bereits getrennt im Hintergrund.</span>
           </div>
         </section>
 
@@ -106,6 +140,7 @@
               <table>
                 <thead>
                   <tr>
+                    <th>Vorschau</th>
                     <th>Pfad</th>
                     <th>Typ</th>
                     <th>Größe</th>
