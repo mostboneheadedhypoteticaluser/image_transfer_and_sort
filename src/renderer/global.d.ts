@@ -1,5 +1,6 @@
 import type {
   AnalysisWorkerStatus,
+  PipelineStatus,
   CatalogStats,
   DuplicateGroup,
   MediaRecord,
@@ -16,7 +17,9 @@ declare global {
       pickSource(): Promise<string | null>;
       analysis: {
         getStatus(): Promise<AnalysisWorkerStatus>;
+        getPipelineStatus(): Promise<PipelineStatus>;
         onStatus(listener: (status: AnalysisWorkerStatus) => void): () => void;
+        onPipelineStatus(listener: (status: PipelineStatus) => void): () => void;
       };
       catalog: {
         listSources(): Promise<SourceRecord[]>;
