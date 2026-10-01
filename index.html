@@ -155,6 +155,17 @@
             <article class="pipeline-stage">
               <div>
                 <small>Stufe 8</small>
+                <strong>Individuelle Hundemerkmale</strong>
+              </div>
+              <div class="pipeline-stage-status">
+                <span id="petEmbeddingStageState" class="stage-state waiting">Wartet</span>
+                <small id="petEmbeddingStageCounts">0 fertig · 0 offen</small>
+              </div>
+            </article>
+
+            <article class="pipeline-stage">
+              <div>
+                <small>Stufe 9</small>
                 <strong>Personen bestätigen</strong>
               </div>
               <div class="pipeline-stage-status">
@@ -163,10 +174,21 @@
               </div>
             </article>
 
+            <article class="pipeline-stage">
+              <div>
+                <small>Stufe 10</small>
+                <strong>Haustiere bestätigen</strong>
+              </div>
+              <div class="pipeline-stage-status">
+                <span class="stage-state done">Über Reiter</span>
+                <small>Dog-ReID gruppiert denselben Hund</small>
+              </div>
+            </article>
+
             <article class="pipeline-stage future">
               <div>
                 <small>Danach</small>
-                <strong>Haustiermerkmale · Haustiere bestätigen · Motive</strong>
+                <strong>Katzen-ID · Motive · Suche</strong>
               </div>
               <div class="pipeline-stage-status">
                 <span class="stage-state future">Noch nicht aktiv</span>
@@ -176,7 +198,7 @@
 
           <div class="analysis-footer">
             <span id="analysisMessage">Analyse-Worker wird gestartet …</span>
-            <span class="analysis-note">Technik, Vorschaubilder, EXIF, Gesichter und beide Haustierdetektoren laufen getrennt; NanoDet und YOLOX-S werden anschließend fusioniert.</span>
+            <span class="analysis-note">NanoDet + YOLOX-S finden Tiere; fusionierte Hundefundstellen erhalten anschließend ein spezialisiertes Dog-ReID-Merkmal für die individuelle Gruppierung.</span>
           </div>
         </section>
 
@@ -198,6 +220,9 @@
             </button>
             <button id="peopleTab" class="view-tab" type="button">
               Personen bestätigen <span id="peopleTabCount" class="tab-count">0</span>
+            </button>
+            <button id="petsTab" class="view-tab" type="button">
+              Haustiere bestätigen <span id="petsTabCount" class="tab-count">0</span>
             </button>
             <button id="recycleTab" class="view-tab" type="button">
               Papierkorb <span id="recycleTabCount" class="tab-count">0</span>
@@ -251,6 +276,34 @@
                 <p>Diese Zuordnungen bleiben erhalten und werden bei späteren Neuberechnungen nicht überschrieben.</p>
               </div>
               <div id="confirmedPersons" class="confirmed-persons"></div>
+            </section>
+          </div>
+
+          <div id="petView" class="catalog-view person-view" hidden>
+            <div class="person-view-header">
+              <div>
+                <h3>Haustiere bestätigen</h3>
+                <p id="petStatus">
+                  Fusionierte Hundefundstellen werden mit einem spezialisierten Dog-ReID-Modell gruppiert. Namen werden erst nach deiner Bestätigung gespeichert.
+                </p>
+              </div>
+              <button id="refreshPets" class="ghost" type="button">Vorschläge neu berechnen</button>
+            </div>
+
+            <section class="person-section">
+              <div class="person-section-heading">
+                <h3>Hunde zu bestätigen</h3>
+                <p>Die Gruppierung ist bewusst konservativ. Zwei getrennte Gruppen kannst du später mit demselben Namen bestätigen.</p>
+              </div>
+              <div id="petCandidates" class="person-candidates"></div>
+            </section>
+
+            <section class="person-section confirmed-section">
+              <div class="person-section-heading">
+                <h3>Bestätigte Haustiere</h3>
+                <p>Aktuell unterstützt die individuelle Wiedererkennung Hunde. Katzen werden erkannt, aber noch nicht individuell gruppiert.</p>
+              </div>
+              <div id="confirmedPets" class="confirmed-persons"></div>
             </section>
           </div>
         </section>
