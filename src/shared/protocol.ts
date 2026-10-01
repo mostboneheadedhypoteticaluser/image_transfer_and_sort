@@ -23,6 +23,7 @@ export type PipelineStatus = {
   imageMetadata: AnalysisQueueStats;
   faces: AnalysisQueueStats;
   faceEmbeddings: AnalysisQueueStats;
+  petDetection: AnalysisQueueStats;
 };
 
 export type AnalysisJob = {
@@ -177,6 +178,9 @@ export type MediaRecord = {
   capturedAt: string | null;
   faceCount: number;
   faceEmbeddingCount: number;
+  petCount: number;
+  dogCount: number;
+  catCount: number;
   lastSeenAt: string;
 };
 
@@ -238,6 +242,7 @@ export type CatalogMethod =
   | "completeFaceDetectionJob"
   | "getFaceDetectionsForEmbedding"
   | "completeFaceEmbeddingJob"
+  | "completePetDetectionJob"
   | "getFaceEmbeddingsForClustering"
   | "replacePersonCandidates"
   | "listPersonCandidates"
