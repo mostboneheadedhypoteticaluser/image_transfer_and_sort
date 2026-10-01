@@ -9,8 +9,8 @@
     <div id="app">
       <header class="topbar">
         <div>
-          <h1>Bildkatalog</h1>
-          <p>Lokale Bilder katalogisieren – Analyse läuft getrennt von der Oberfläche.</p>
+          <h1>Medienkatalog</h1>
+          <p>Lokale Bilder und Videos katalogisieren – Analyse läuft getrennt von der Oberfläche.</p>
         </div>
         <span class="status-pill" id="workerState">Katalog-Worker wird gestartet …</span>
       </header>
@@ -22,6 +22,7 @@
             <select id="sourceSelect"></select>
             <button id="addSource" class="secondary">Quelle hinzufügen</button>
             <button id="scanSource" class="primary">Jetzt scannen</button>
+            <button id="resetCatalog" class="danger">Datenbank zurücksetzen</button>
           </div>
           <div class="progress-row">
             <div class="progress-track"><div id="progressBar" class="progress-bar"></div></div>
@@ -40,8 +41,8 @@
         <section class="panel media-panel">
           <div class="panel-heading">
             <div>
-              <h2>Bilder</h2>
-              <p id="tableHint">Papierkorb-Dateien werden nicht als normale Medien katalogisiert. Wiederherstellbare Löschungen erscheinen separat.</p>
+              <h2>Medien</h2>
+              <p id="tableHint">Bilder und Videos werden katalogisiert. Papierkorb-Dateien werden nicht als normale Medien aufgenommen; wiederherstellbare Löschungen erscheinen separat.</p>
             </div>
             <button id="refresh" class="ghost">Aktualisieren</button>
           </div>
