@@ -8,7 +8,9 @@ import type {
   DuplicateGroup,
   MediaRecord,
   MergePersonsResult,
+  MergePetsResult,
   PersonCorrectionResult,
+  PetCorrectionResult,
   PersonOverview,
   PetOverview,
   RestoreResult,
@@ -76,6 +78,26 @@ const api = {
       name: string
     ): Promise<ConfirmPetResult> =>
       ipcRenderer.invoke("pets:confirmCandidate", candidateId, name),
+    removeCandidatePet: (
+      candidateId: number,
+      petDetectionId: number
+    ): Promise<PetCorrectionResult> =>
+      ipcRenderer.invoke("pets:removeCandidatePet", candidateId, petDetectionId),
+    removePetDetection: (
+      petId: number,
+      petDetectionId: number
+    ): Promise<PetCorrectionResult> =>
+      ipcRenderer.invoke("pets:removePetDetection", petId, petDetectionId),
+    mergePets: (
+      targetPetId: number,
+      sourcePetId: number
+    ): Promise<MergePetsResult> =>
+      ipcRenderer.invoke("pets:mergePets", targetPetId, sourcePetId),
+    renamePet: (
+      petId: number,
+      name: string
+    ): Promise<PetCorrectionResult> =>
+      ipcRenderer.invoke("pets:renamePet", petId, name),
     onUpdated: (listener: () => void) => {
       const handler = () => listener();
       ipcRenderer.on("pets:updated", handler);
