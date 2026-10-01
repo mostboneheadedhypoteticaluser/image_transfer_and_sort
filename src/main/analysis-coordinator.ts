@@ -13,7 +13,8 @@ type PythonStage =
   | "imageMetadata"
   | "faces"
   | "faceEmbeddings"
-  | "petDetection";
+  | "petDetection"
+  | "petFusion";
 
 type ModuleSpec = {
   module: string;
@@ -24,7 +25,8 @@ type ModuleSpec = {
     | "completeImageMetadataJob"
     | "completeFaceDetectionJob"
     | "completeFaceEmbeddingJob"
-    | "completePetDetectionJob";
+    | "completePetDetectionJob"
+    | "completePetFusionJob";
   label: string;
   timeoutMs: number;
 };
@@ -67,18 +69,51 @@ const MODULES: ModuleSpec[] = [
     stage: "petDetection",
     workerMethod: "detect_pets",
     completeMethod: "completePetDetectionJob",
-    label: "Haustiere erkennen",
+    label: "Haustiere · NanoDet",
     timeoutMs: 60000
+  },
+  {
+    module: "pet-detect-yolox-v1",
+    stage: "petDetection",
+    workerMethod: "detect_pets_yolox",
+    completeMethod: "completePetDetectionJob",
+    label: "Haustiere · YOLOX-S",
+    timeoutMs: 90000
+  },
+  {
+    module: "pet-fuse-ensemble-v1",
+    stage: "petFusion",
+    workerMethod: "fuse_pet_detections",
+    completeMethod: "completePetFusionJob",
+    label: "Haustier-Ergebnisse fusionieren",
+    timeoutMs: 30000
   }
 ];
 
 type PythonPipelineStats = Pick<
   PipelineStatus,
-  "technical" | "imageMetadata" | "faces" | "faceEmbeddings" | "petDetection"
+  | "technical"
+  | "imageMetadata"
+  | "faces"
+  | "faceEmbeddings"
+  | "petDetection"
+  | "petFusion"
 >;
 
 function emptyStats(): AnalysisQueueStats {
   return { pending: 0, running: 0, done: 0, failed: 0 };
+}
+
+function addStats(
+  left: AnalysisQueueStats,
+  right: AnalysisQueueStats
+): AnalysisQueueStats {
+  return {
+    pending: left.pending + right.pending,
+    running: left.running + right.running,
+    done: left.done + right.done,
+    failed: left.failed + right.failed
+  };
 }
 
 export class AnalysisCoordinator {
@@ -138,7 +173,8 @@ export class AnalysisCoordinator {
       imageMetadata: emptyStats(),
       faces: emptyStats(),
       faceEmbeddings: emptyStats(),
-      petDetection: emptyStats()
+      petDetection: emptyStats(),
+      petFusion: emptyStats()
     };
 
     for (const spec of MODULES) {
@@ -147,8 +183,11 @@ export class AnalysisCoordinator {
         { module: spec.module }
       );
 
-      result[spec.stage] = stats;
-      this.onStats(spec.stage, stats);
+      result[spec.stage] = addStats(result[spec.stage], stats);
+    }
+
+    for (const stage of Object.keys(result) as PythonStage[]) {
+      this.onStats(stage, result[stage]);
     }
 
     const queued =
@@ -156,13 +195,15 @@ export class AnalysisCoordinator {
       result.imageMetadata.pending +
       result.faces.pending +
       result.faceEmbeddings.pending +
-      result.petDetection.pending;
+      result.petDetection.pending +
+      result.petFusion.pending;
     const active =
       result.technical.running +
       result.imageMetadata.running +
       result.faces.running +
       result.faceEmbeddings.running +
-      result.petDetection.running;
+      result.petDetection.running +
+      result.petFusion.running;
 
     this.analysis.setQueueState(
       queued,
@@ -175,14 +216,16 @@ export class AnalysisCoordinator {
     return result;
   }
 
-  private nextPendingSpec(
-    stats: PythonPipelineStats
-  ): ModuleSpec | null {
+  private async nextPendingSpec(): Promise<ModuleSpec | null> {
     for (let offset = 0; offset < MODULES.length; offset += 1) {
       const index = (this.cursor + offset) % MODULES.length;
       const spec = MODULES[index];
+      const stats = await this.catalog.request<AnalysisQueueStats>(
+        "getAnalysisQueueStats",
+        { module: spec.module }
+      );
 
-      if (stats[spec.stage].pending > 0) {
+      if (stats.pending > 0) {
         this.cursor = (index + 1) % MODULES.length;
         return spec;
       }
@@ -204,11 +247,12 @@ export class AnalysisCoordinator {
         stats.imageMetadata.running +
         stats.faces.running +
         stats.faceEmbeddings.running +
-        stats.petDetection.running;
+        stats.petDetection.running +
+        stats.petFusion.running;
 
       if (totalRunning > 0) return;
 
-      const spec = this.nextPendingSpec(stats);
+      const spec = await this.nextPendingSpec();
       if (!spec) return;
 
       const job = await this.catalog.request<AnalysisJob | null>(
@@ -216,6 +260,8 @@ export class AnalysisCoordinator {
         { module: spec.module }
       );
 
+      // Ein abhängiger Job kann PENDING sein, obwohl seine Vorstufe noch läuft.
+      // Dann probieren wir beim nächsten Takt weiter, ohne ihn fälschlich zu starten.
       if (!job) {
         await this.refreshAllStats();
         return;
@@ -226,7 +272,8 @@ export class AnalysisCoordinator {
         stats.imageMetadata.pending +
         stats.faces.pending +
         stats.faceEmbeddings.pending +
-        stats.petDetection.pending - 1;
+        stats.petDetection.pending +
+        stats.petFusion.pending - 1;
 
       this.analysis.setQueueState(
         Math.max(0, queued),
@@ -247,6 +294,17 @@ export class AnalysisCoordinator {
           );
 
           extraPayload = { faces };
+        }
+
+        if (spec.module === "pet-fuse-ensemble-v1") {
+          const detections = await this.catalog.request<
+            Array<Record<string, unknown>>
+          >("getPetDetectionsForFusion", {
+            mediaId: job.mediaId,
+            inputSha256: job.sha256
+          });
+
+          extraPayload = { detections };
         }
 
         const result = await this.analysis.request<Record<string, unknown>>(
