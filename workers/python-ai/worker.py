@@ -357,6 +357,159 @@ def extract_face_embeddings(file_path: str, faces: list[dict]) -> dict:
     }
 
 
+def cluster_face_embeddings(
+    faces: list[dict],
+    cluster_threshold: float = 0.50,
+    verification_threshold: float = 0.363,
+) -> dict:
+    if np is None:
+        raise RuntimeError(
+            "Numpy fehlt. Einmal 'npm.cmd run setup:ai' ausführen."
+        )
+
+    cluster_threshold = max(verification_threshold, min(0.95, float(cluster_threshold)))
+    verification_threshold = max(0.0, min(cluster_threshold, float(verification_threshold)))
+
+    canonical_by_content: dict[str, dict] = {}
+    duplicates_by_content: dict[str, list[dict]] = {}
+
+    for raw in faces:
+        if not isinstance(raw, dict):
+            continue
+
+        face_id = int(raw.get("faceDetectionId", 0))
+        content_key = str(raw.get("contentKey", "")).strip()
+        vector_values = raw.get("vector")
+
+        if face_id <= 0 or not content_key or not isinstance(vector_values, list):
+            continue
+
+        vector = np.asarray(vector_values, dtype=np.float32).reshape(-1)
+        if vector.size == 0:
+            continue
+
+        norm = float(np.linalg.norm(vector))
+        if not math.isfinite(norm) or norm <= 0.0:
+            continue
+
+        vector = vector / norm
+        item = {
+            "faceDetectionId": face_id,
+            "contentKey": content_key,
+            "vector": vector,
+        }
+
+        duplicates_by_content.setdefault(content_key, []).append(item)
+        canonical_by_content.setdefault(content_key, item)
+
+    canonical = sorted(
+        canonical_by_content.values(),
+        key=lambda item: int(item["faceDetectionId"]),
+    )
+
+    clusters: list[dict] = []
+
+    for item in canonical:
+        vector = item["vector"]
+        best_index = None
+        best_similarity = -1.0
+
+        for index, cluster in enumerate(clusters):
+            centroid_similarity = float(np.dot(vector, cluster["centroid"]))
+            representative_similarity = float(
+                np.dot(vector, cluster["representativeVector"])
+            )
+
+            if (
+                centroid_similarity >= cluster_threshold
+                and representative_similarity >= verification_threshold
+                and centroid_similarity > best_similarity
+            ):
+                best_index = index
+                best_similarity = centroid_similarity
+
+        if best_index is None:
+            clusters.append({
+                "centroid": vector.copy(),
+                "representativeVector": vector.copy(),
+                "canonicalMembers": [item],
+            })
+            continue
+
+        cluster = clusters[best_index]
+        cluster["canonicalMembers"].append(item)
+
+        stacked = np.vstack([
+            member["vector"]
+            for member in cluster["canonicalMembers"]
+        ])
+        centroid = np.mean(stacked, axis=0)
+        centroid_norm = float(np.linalg.norm(centroid))
+        if centroid_norm > 0.0:
+            centroid = centroid / centroid_norm
+        cluster["centroid"] = centroid
+
+        representative = max(
+            cluster["canonicalMembers"],
+            key=lambda member: float(np.dot(member["vector"], centroid)),
+        )
+        cluster["representativeVector"] = representative["vector"]
+
+    result_clusters: list[dict] = []
+
+    for cluster in clusters:
+        centroid = cluster["centroid"]
+        canonical_members = cluster["canonicalMembers"]
+
+        representative = max(
+            canonical_members,
+            key=lambda member: float(np.dot(member["vector"], centroid)),
+        )
+
+        members: list[dict] = []
+        similarities: list[float] = []
+
+        for canonical_member in canonical_members:
+            content_key = canonical_member["contentKey"]
+            similarity = float(np.dot(canonical_member["vector"], centroid))
+            similarity = max(-1.0, min(1.0, similarity))
+
+            for duplicate in duplicates_by_content.get(content_key, []):
+                members.append({
+                    "faceDetectionId": int(duplicate["faceDetectionId"]),
+                    "similarity": similarity,
+                })
+                similarities.append(similarity)
+
+        members.sort(key=lambda member: int(member["faceDetectionId"]))
+
+        if not members:
+            continue
+
+        result_clusters.append({
+            "representativeFaceId": int(representative["faceDetectionId"]),
+            "averageSimilarity": float(sum(similarities) / len(similarities)),
+            "minSimilarity": float(min(similarities)),
+            "members": members,
+        })
+
+    result_clusters.sort(
+        key=lambda cluster: (
+            -len(cluster["members"]),
+            -float(cluster["averageSimilarity"]),
+            int(cluster["representativeFaceId"]),
+        )
+    )
+
+    return {
+        "algorithm": "person-centroid-v1",
+        "clusterThreshold": cluster_threshold,
+        "verificationThreshold": verification_threshold,
+        "clusterCount": len(result_clusters),
+        "clusters": result_clusters,
+    }
+
+
 def handle(message: dict) -> bool:
     request_id = message.get("id")
     method = message.get("method")
@@ -435,6 +588,20 @@ def handle(message: dict) -> bool:
         respond(
             request_id,
             result=extract_face_embeddings(file_path, faces),
+        )
+        return True
+
+    if method == "cluster_face_embeddings":
+        faces = payload.get("faces") or []
+        if not isinstance(faces, list):
+            raise RuntimeError("Gesichtsmerkmale sind ungültig.")
+        respond(
+            request_id,
+            result=cluster_face_embeddings(
+                faces,
+                float(payload.get("clusterThreshold", 0.50)),
+                float(payload.get("verificationThreshold", 0.363)),
+            ),
         )
         return True
 
