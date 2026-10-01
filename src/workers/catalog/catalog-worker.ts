@@ -2378,6 +2378,421 @@ function completeFaceEmbeddingJob(jobId: number, result: unknown) {
   return { completed: true, embeddingCount: written };
 }
 
+function vectorFromBlob(value: unknown, dimension: number): number[] {
+  let buffer: Buffer;
+
+  if (Buffer.isBuffer(value)) {
+    buffer = value;
+  } else if (value instanceof Uint8Array) {
+    buffer = Buffer.from(value);
+  } else {
+    throw new Error("Gesichtsmerkmal konnte nicht aus SQLite gelesen werden.");
+  }
+
+  if (
+    !Number.isInteger(dimension) ||
+    dimension <= 0 ||
+    dimension > 4096 ||
+    buffer.length !== dimension * 4
+  ) {
+    throw new Error("Gesichtsmerkmal hat eine ungültige Dimension.");
+  }
+
+  const vector = new Array<number>(dimension);
+  for (let index = 0; index < dimension; index += 1) {
+    vector[index] = buffer.readFloatLE(index * 4);
+  }
+  return vector;
+}
+
+function getFaceEmbeddingsForClustering(
+  sourceId: number,
+  algorithmVersion: string
+) {
+  const rows = db.prepare(`
+    SELECT
+      fd.id AS face_detection_id,
+      fd.detection_index,
+      fe.media_id,
+      fe.dimension,
+      fe.vector_blob,
+      fe.updated_at,
+      m.sha256
+    FROM face_embeddings fe
+    JOIN face_detections fd ON fd.id=fe.face_detection_id
+    JOIN media_items m ON m.id=fe.media_id
+    LEFT JOIN person_face_assignments pfa
+      ON pfa.face_detection_id=fd.id
+    WHERE m.source_id=?
+      AND m.availability='AVAILABLE'
+      AND fe.model_version='SFace 2021dec'
+      AND fe.input_sha256=m.sha256
+      AND fd.input_sha256=m.sha256
+      AND pfa.face_detection_id IS NULL
+    ORDER BY fd.id ASC
+  `).all(sourceId);
+
+  const faceIds = rows.map((row) => Number(row.face_detection_id));
+  const maxUpdatedAt = rows.reduce(
+    (current, row) =>
+      String(row.updated_at ?? "") > current ? String(row.updated_at ?? "") : current,
+    ""
+  );
+  const idSum = faceIds.reduce((sum, id) => sum + id, 0);
+
+  const assignmentCount = db.prepare(`
+    SELECT COUNT(*) AS count
+    FROM person_face_assignments pfa
+    JOIN face_detections fd ON fd.id=pfa.face_detection_id
+    JOIN media_items m ON m.id=fd.media_id
+    WHERE m.source_id=?
+  `).get(sourceId);
+
+  const revision = [
+    rows.length,
+    faceIds.length > 0 ? Math.max(...faceIds) : 0,
+    idSum,
+    maxUpdatedAt,
+    Number(assignmentCount?.count ?? 0)
+  ].join(":");
+
+  const previousRun = db.prepare(`
+    SELECT embedding_revision, algorithm_version
+    FROM person_cluster_runs
+    WHERE source_id=?
+  `).get(sourceId);
+
+  return {
+    revision,
+    needsRebuild:
+      !previousRun ||
+      String(previousRun.embedding_revision) !== revision ||
+      String(previousRun.algorithm_version) !== algorithmVersion,
+    faces: rows.map((row) => ({
+      faceDetectionId: Number(row.face_detection_id),
+      mediaId: Number(row.media_id),
+      contentKey: `${String(row.sha256)}:${Number(row.detection_index)}`,
+      vector: vectorFromBlob(row.vector_blob, Number(row.dimension))
+    }))
+  };
+}
+
+function replacePersonCandidates(
+  sourceId: number,
+  revision: string,
+  algorithmVersion: string,
+  rawClusters: unknown
+) {
+  const clusters = Array.isArray(rawClusters) ? rawClusters : [];
+
+  const eligibleRows = db.prepare(`
+    SELECT fd.id
+    FROM face_detections fd
+    JOIN face_embeddings fe ON fe.face_detection_id=fd.id
+    JOIN media_items m ON m.id=fd.media_id
+    LEFT JOIN person_face_assignments pfa ON pfa.face_detection_id=fd.id
+    WHERE m.source_id=?
+      AND m.availability='AVAILABLE'
+      AND fe.model_version='SFace 2021dec'
+      AND fe.input_sha256=m.sha256
+      AND fd.input_sha256=m.sha256
+      AND pfa.face_detection_id IS NULL
+  `).all(sourceId);
+
+  const eligibleIds = new Set(
+    eligibleRows.map((row) => Number(row.id))
+  );
+
+  const insertCandidate = db.prepare(`
+    INSERT INTO person_candidates(
+      source_id,
+      algorithm_version,
+      representative_face_id,
+      average_similarity,
+      min_similarity
+    )
+    VALUES(?,?,?,?,?)
+  `);
+
+  const insertMember = db.prepare(`
+    INSERT INTO person_candidate_faces(
+      candidate_id,
+      face_detection_id,
+      similarity
+    )
+    VALUES(?,?,?)
+  `);
+
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    db.prepare("DELETE FROM person_candidates WHERE source_id=?").run(sourceId);
+
+    let writtenClusters = 0;
+    let writtenFaces = 0;
+    const usedFaces = new Set<number>();
+
+    for (const rawCluster of clusters) {
+      if (!rawCluster || typeof rawCluster !== "object") continue;
+      const cluster = rawCluster as Record<string, unknown>;
+      const rawMembers = Array.isArray(cluster.members) ? cluster.members : [];
+
+      const members = rawMembers
+        .filter((value) => value && typeof value === "object")
+        .map((value) => {
+          const item = value as Record<string, unknown>;
+          return {
+            faceDetectionId: Number(item.faceDetectionId),
+            similarity: Number(item.similarity)
+          };
+        })
+        .filter(
+          (member) =>
+            Number.isInteger(member.faceDetectionId) &&
+            eligibleIds.has(member.faceDetectionId) &&
+            Number.isFinite(member.similarity) &&
+            !usedFaces.has(member.faceDetectionId)
+        );
+
+      if (members.length === 0) continue;
+
+      const requestedRepresentative = Number(cluster.representativeFaceId);
+      const representativeFaceId = members.some(
+        (member) => member.faceDetectionId === requestedRepresentative
+      )
+        ? requestedRepresentative
+        : members[0].faceDetectionId;
+
+      const averageSimilarity = Number(cluster.averageSimilarity);
+      const minSimilarity = Number(cluster.minSimilarity);
+
+      const inserted = insertCandidate.run(
+        sourceId,
+        algorithmVersion,
+        representativeFaceId,
+        Number.isFinite(averageSimilarity) ? averageSimilarity : 1,
+        Number.isFinite(minSimilarity) ? minSimilarity : 1
+      );
+      const candidateId = Number(inserted.lastInsertRowid);
+
+      for (const member of members) {
+        insertMember.run(
+          candidateId,
+          member.faceDetectionId,
+          member.similarity
+        );
+        usedFaces.add(member.faceDetectionId);
+        writtenFaces += 1;
+      }
+
+      writtenClusters += 1;
+    }
+
+    db.prepare(`
+      INSERT INTO person_cluster_runs(
+        source_id,
+        embedding_revision,
+        algorithm_version,
+        updated_at
+      )
+      VALUES(?,?,?,CURRENT_TIMESTAMP)
+      ON CONFLICT(source_id) DO UPDATE SET
+        embedding_revision=excluded.embedding_revision,
+        algorithm_version=excluded.algorithm_version,
+        updated_at=CURRENT_TIMESTAMP
+    `).run(sourceId, revision, algorithmVersion);
+
+    db.exec("COMMIT");
+    return { writtenClusters, writtenFaces };
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+}
+
+function listPersonCandidates(sourceId: number, requestedLimit: number) {
+  const limit = Math.max(1, Math.min(500, Math.trunc(requestedLimit || 100)));
+
+  const candidates = db.prepare(`
+    SELECT
+      pc.id,
+      pc.representative_face_id,
+      pc.average_similarity,
+      pc.min_similarity,
+      COUNT(pcf.face_detection_id) AS face_count
+    FROM person_candidates pc
+    JOIN person_candidate_faces pcf ON pcf.candidate_id=pc.id
+    WHERE pc.source_id=?
+    GROUP BY pc.id
+    ORDER BY face_count DESC, pc.average_similarity DESC, pc.id ASC
+    LIMIT ?
+  `).all(sourceId, limit);
+
+  const faceQuery = db.prepare(`
+    SELECT
+      pcf.face_detection_id,
+      fd.media_id,
+      m.relative_path,
+      pcf.similarity
+    FROM person_candidate_faces pcf
+    JOIN face_detections fd ON fd.id=pcf.face_detection_id
+    JOIN media_items m ON m.id=fd.media_id
+    WHERE pcf.candidate_id=?
+    ORDER BY
+      CASE WHEN pcf.face_detection_id=? THEN 0 ELSE 1 END,
+      pcf.similarity DESC,
+      pcf.face_detection_id ASC
+    LIMIT 12
+  `);
+
+  return candidates.map((candidate) => {
+    const representativeFaceId = candidate.representative_face_id === null
+      ? null
+      : Number(candidate.representative_face_id);
+
+    return {
+      id: Number(candidate.id),
+      faceCount: Number(candidate.face_count),
+      representativeFaceId,
+      averageSimilarity: Number(candidate.average_similarity),
+      minSimilarity: Number(candidate.min_similarity),
+      faces: faceQuery.all(
+        Number(candidate.id),
+        representativeFaceId ?? -1
+      ).map((row) => ({
+        faceDetectionId: Number(row.face_detection_id),
+        mediaId: Number(row.media_id),
+        relativePath: String(row.relative_path),
+        similarity: Number(row.similarity)
+      }))
+    };
+  });
+}
+
+function listPersons(sourceId: number) {
+  return db.prepare(`
+    SELECT
+      p.id,
+      p.name,
+      COUNT(*) AS face_count,
+      MIN(fd.id) AS representative_face_id
+    FROM persons p
+    JOIN person_face_assignments pfa ON pfa.person_id=p.id
+    JOIN face_detections fd ON fd.id=pfa.face_detection_id
+    JOIN media_items m ON m.id=fd.media_id
+    WHERE m.source_id=?
+    GROUP BY p.id, p.name
+    ORDER BY p.name COLLATE NOCASE, p.id
+  `).all(sourceId).map((row) => ({
+    id: Number(row.id),
+    name: String(row.name),
+    faceCount: Number(row.face_count),
+    representativeFaceId:
+      row.representative_face_id === null ? null : Number(row.representative_face_id)
+  }));
+}
+
+function confirmPersonCandidate(candidateId: number, rawName: unknown) {
+  const name = typeof rawName === "string" ? rawName.trim() : "";
+  if (!name) throw new Error("Bitte einen Namen für die Person eingeben.");
+  if (name.length > 120) throw new Error("Der Personenname ist zu lang.");
+
+  const candidate = db.prepare(`
+    SELECT id, source_id
+    FROM person_candidates
+    WHERE id=?
+  `).get(candidateId);
+
+  if (!candidate) {
+    throw new Error("Der Personenvorschlag wurde nicht mehr gefunden.");
+  }
+
+  const members = db.prepare(`
+    SELECT pcf.face_detection_id, pcf.similarity
+    FROM person_candidate_faces pcf
+    LEFT JOIN person_face_assignments pfa
+      ON pfa.face_detection_id=pcf.face_detection_id
+    WHERE pcf.candidate_id=?
+      AND pfa.face_detection_id IS NULL
+    ORDER BY pcf.face_detection_id
+  `).all(candidateId);
+
+  if (members.length === 0) {
+    throw new Error("Der Personenvorschlag enthält keine unbestätigten Gesichter mehr.");
+  }
+
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const insertedPerson = db.prepare(`
+      INSERT INTO persons(name)
+      VALUES(?)
+    `).run(name);
+    const personId = Number(insertedPerson.lastInsertRowid);
+
+    const assign = db.prepare(`
+      INSERT INTO person_face_assignments(
+        face_detection_id,
+        person_id,
+        assignment_source,
+        confidence,
+        updated_at
+      )
+      VALUES(?,?,'CONFIRMED',?,CURRENT_TIMESTAMP)
+    `);
+
+    let faceCount = 0;
+    for (const member of members) {
+      assign.run(
+        Number(member.face_detection_id),
+        personId,
+        Number(member.similarity)
+      );
+      faceCount += 1;
+    }
+
+    db.prepare("DELETE FROM person_candidates WHERE id=?").run(candidateId);
+    db.prepare("DELETE FROM person_cluster_runs WHERE source_id=?")
+      .run(Number(candidate.source_id));
+
+    db.exec("COMMIT");
+
+    return { personId, name, faceCount };
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+}
+
+function getFaceCropInfo(faceDetectionId: number) {
+  const row = db.prepare(`
+    SELECT
+      fd.id,
+      fd.input_sha256,
+      fd.x,
+      fd.y,
+      fd.width,
+      fd.height,
+      m.absolute_path,
+      m.sha256
+    FROM face_detections fd
+    JOIN media_items m ON m.id=fd.media_id
+    WHERE fd.id=?
+      AND m.availability='AVAILABLE'
+      AND fd.input_sha256=m.sha256
+  `).get(faceDetectionId);
+
+  if (!row) return null;
+
+  return {
+    faceDetectionId: Number(row.id),
+    absolutePath: String(row.absolute_path),
+    inputSha256: String(row.input_sha256),
+    x: Number(row.x),
+    y: Number(row.y),
+    width: Number(row.width),
+    height: Number(row.height)
+  };
+}
+
 function completeThumbnailJob(jobId: number, result: unknown) {
   if (!result || typeof result !== "object") {
     throw new Error("Thumbnail-Ergebnis ist ungültig.");
