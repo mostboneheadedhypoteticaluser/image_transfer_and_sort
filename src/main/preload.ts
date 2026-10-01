@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from "electron";
 import type {
   AnalysisWorkerStatus,
+  PipelineStatus,
   CatalogStats,
   DuplicateGroup,
   MediaRecord,
@@ -15,10 +16,16 @@ const api = {
   pickSource: (): Promise<string | null> => ipcRenderer.invoke("dialog:pickSource"),
   analysis: {
     getStatus: (): Promise<AnalysisWorkerStatus> => ipcRenderer.invoke("analysis:getStatus"),
+    getPipelineStatus: (): Promise<PipelineStatus> => ipcRenderer.invoke("analysis:getPipelineStatus"),
     onStatus: (listener: (status: AnalysisWorkerStatus) => void) => {
       const handler = (_event: Electron.IpcRendererEvent, status: AnalysisWorkerStatus) => listener(status);
       ipcRenderer.on("analysis:status", handler);
       return () => ipcRenderer.removeListener("analysis:status", handler);
+    },
+    onPipelineStatus: (listener: (status: PipelineStatus) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, status: PipelineStatus) => listener(status);
+      ipcRenderer.on("analysis:pipelineStatus", handler);
+      return () => ipcRenderer.removeListener("analysis:pipelineStatus", handler);
     }
   },
   catalog: {
