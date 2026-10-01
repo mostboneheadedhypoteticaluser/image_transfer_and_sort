@@ -926,6 +926,230 @@ async function loadPersonOverview(
   }
 }
 
+
+function renderPetOverview(overview: PetOverview): void {
+  petCandidates.replaceChildren();
+  confirmedPets.replaceChildren();
+
+  if (overview.clusteringPending) {
+    petStatus.textContent =
+      "Individuelle Hundemerkmale werden noch im Hintergrund berechnet. " +
+      "Die Hundegruppen entstehen automatisch, sobald diese Stufe fertig ist.";
+  } else if (overview.candidates.length > 0) {
+    petStatus.textContent =
+      overview.candidates.length.toLocaleString("de-DE") + " " +
+      (overview.candidates.length === 1 ? "Hundegruppe" : "Hundegruppen") +
+      " zur Bestätigung gefunden.";
+  } else {
+    petStatus.textContent =
+      "Aktuell gibt es keine unbestätigten Hundegruppen. " +
+      "Gruppen benötigen mindestens zwei ausreichend ähnliche Fundstellen.";
+  }
+
+  petsTabCount.textContent = overview.candidates.length.toLocaleString("de-DE");
+
+  if (overview.candidates.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "person-empty";
+    empty.textContent = overview.clusteringPending
+      ? "Warte auf die laufende Dog-ReID-Analyse …"
+      : "Keine Hundegruppen zu bestätigen.";
+    petCandidates.appendChild(empty);
+  } else {
+    const fragment = document.createDocumentFragment();
+
+    for (const candidate of overview.candidates) {
+      const card = document.createElement("article");
+      card.className = "person-candidate-card";
+
+      const cropStrip = document.createElement("div");
+      cropStrip.className = "person-face-strip";
+
+      for (const pet of candidate.pets) {
+        const figure = document.createElement("figure");
+        figure.className = "person-face pet-crop";
+        if (pet.petDetectionId === candidate.representativePetId) {
+          figure.classList.add("representative");
+        }
+
+        const img = document.createElement("img");
+        img.src = petCropUrl(pet.petDetectionId);
+        img.alt = "";
+        img.loading = "lazy";
+        img.title =
+          pet.relativePath + "\nÄhnlichkeit zur Gruppe: " +
+          pet.similarity.toFixed(3);
+
+        const fallback = document.createElement("span");
+        fallback.className = "face-fallback";
+        fallback.textContent = "Hund";
+        fallback.hidden = true;
+
+        img.addEventListener("error", () => {
+          img.hidden = true;
+          fallback.hidden = false;
+        });
+
+        figure.append(img, fallback);
+        cropStrip.appendChild(figure);
+      }
+
+      const body = document.createElement("div");
+      body.className = "person-candidate-body";
+
+      const heading = document.createElement("div");
+      heading.className = "person-candidate-heading";
+
+      const titleBlock = document.createElement("div");
+      const title = document.createElement("h4");
+      title.textContent =
+        candidate.detectionCount.toLocaleString("de-DE") + " " +
+        (candidate.detectionCount === 1 ? "Hundefundstelle" : "Hundefundstellen");
+
+      const similarity = document.createElement("p");
+      similarity.textContent =
+        "Dog-ReID Ähnlichkeit Ø " + candidate.averageSimilarity.toFixed(3) +
+        " · Minimum " + candidate.minSimilarity.toFixed(3);
+
+      titleBlock.append(title, similarity);
+      heading.appendChild(titleBlock);
+
+      const confirmRow = document.createElement("div");
+      confirmRow.className = "person-confirm-row";
+
+      const input = document.createElement("input");
+      input.type = "text";
+      input.maxLength = 120;
+      input.placeholder = "Name des Hundes";
+      input.autocomplete = "off";
+
+      const button = document.createElement("button");
+      button.className = "primary person-confirm";
+      button.type = "button";
+      button.textContent = "Bestätigen";
+
+      const confirm = async () => {
+        const name = input.value.trim();
+        if (!name) {
+          input.focus();
+          return;
+        }
+
+        input.disabled = true;
+        button.disabled = true;
+
+        try {
+          const result = await window.imageSorter.pets.confirmCandidate(
+            candidate.id,
+            name
+          );
+
+          progressText.textContent =
+            result.name + ": " +
+            result.detectionCount.toLocaleString("de-DE") + " " +
+            (result.detectionCount === 1
+              ? "Fundstelle bestätigt."
+              : "Fundstellen bestätigt.");
+
+          const sourceId = selectedSourceId();
+          if (sourceId !== null) {
+            await loadPetOverview(sourceId, true);
+            const stats = await window.imageSorter.catalog.getStats(sourceId);
+            petsTabCount.textContent =
+              stats.petCandidates.toLocaleString("de-DE");
+          }
+        } catch (error) {
+          progressText.textContent =
+            error instanceof Error ? error.message : String(error);
+          input.disabled = false;
+          button.disabled = false;
+        }
+      };
+
+      button.addEventListener("click", () => void confirm());
+      input.addEventListener("keydown", (event) => {
+        if (event.key === "Enter") void confirm();
+      });
+
+      confirmRow.append(input, button);
+
+      if (candidate.detectionCount > candidate.pets.length) {
+        const hiddenNote = document.createElement("small");
+        hiddenNote.className = "person-hidden-note";
+        hiddenNote.textContent =
+          "Es werden " + candidate.pets.length + " von " +
+          candidate.detectionCount + " Fundstellen angezeigt.";
+        body.append(heading, hiddenNote, confirmRow);
+      } else {
+        body.append(heading, confirmRow);
+      }
+
+      card.append(cropStrip, body);
+      fragment.appendChild(card);
+    }
+
+    petCandidates.appendChild(fragment);
+  }
+
+  if (overview.pets.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "person-empty compact";
+    empty.textContent = "Noch keine Haustiere bestätigt.";
+    confirmedPets.appendChild(empty);
+  } else {
+    const fragment = document.createDocumentFragment();
+
+    for (const pet of overview.pets) {
+      const card = document.createElement("article");
+      card.className = "pet-confirmed-card";
+
+      if (pet.representativePetId !== null) {
+        const img = document.createElement("img");
+        img.src = petCropUrl(pet.representativePetId);
+        img.alt = "";
+        img.loading = "lazy";
+        card.appendChild(img);
+      }
+
+      const text = document.createElement("div");
+      const name = document.createElement("strong");
+      name.textContent = pet.name;
+
+      const count = document.createElement("small");
+      count.textContent =
+        pet.detectionCount.toLocaleString("de-DE") + " " +
+        (pet.detectionCount === 1
+          ? "bestätigte Fundstelle"
+          : "bestätigte Fundstellen");
+
+      const type = document.createElement("small");
+      type.textContent = pet.petClass === "dog" ? "Hund" : "Katze";
+
+      text.append(name, count, type);
+      card.appendChild(text);
+      fragment.appendChild(card);
+    }
+
+    confirmedPets.appendChild(fragment);
+  }
+}
+
+async function loadPetOverview(
+  sourceId: number,
+  forceRefresh = false
+): Promise<void> {
+  refreshPetsButton.disabled = true;
+  try {
+    const overview = await window.imageSorter.pets.getOverview(
+      sourceId,
+      forceRefresh
+    );
+    renderPetOverview(overview);
+  } finally {
+    refreshPetsButton.disabled = false;
+  }
+}
+
 async function refreshCatalog(): Promise<void> {
   const sourceId = selectedSourceId();
   scanButton.disabled = sourceId === null || scanning || restoring || resetting;
