@@ -1521,7 +1521,8 @@ function enqueueAnalysisJobs(sourceId: number, module = "file-probe-v1") {
     "face-embed-sface-v1",
     "pet-detect-nanodet-v1",
     "pet-detect-yolox-v1",
-    "pet-fuse-ensemble-v1"
+    "pet-fuse-ensemble-v1",
+    "pet-embed-dogreid-v1"
   ]);
   const imageFilter =
     imageOnlyModules.has(module)
@@ -1667,6 +1668,17 @@ function claimAnalysisJob(module = "file-probe-v1") {
                 AND dependency.status='DONE'
                 AND dependency.input_sha256=j.input_sha256
             )
+          )
+        )
+        AND (
+          j.module<>'pet-embed-dogreid-v1'
+          OR EXISTS (
+            SELECT 1
+            FROM analysis_jobs dependency
+            WHERE dependency.media_id=j.media_id
+              AND dependency.module='pet-fuse-ensemble-v1'
+              AND dependency.status='DONE'
+              AND dependency.input_sha256=j.input_sha256
           )
         )
       ORDER BY j.priority ASC, j.id ASC
@@ -2177,6 +2189,7 @@ async function scanSource(sourceId: number): Promise<ScanResult> {
     enqueueAnalysisJobs(sourceId, "pet-detect-nanodet-v1");
     enqueueAnalysisJobs(sourceId, "pet-detect-yolox-v1");
     enqueueAnalysisJobs(sourceId, "pet-fuse-ensemble-v1");
+    enqueueAnalysisJobs(sourceId, "pet-embed-dogreid-v1");
 
     const result: ScanResult = {
       discovered,
