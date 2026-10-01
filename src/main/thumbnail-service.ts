@@ -121,6 +121,61 @@ export class ThumbnailService {
     return result;
   }
 
+  async generatePetCrop(
+    inputPath: string,
+    sha256: string,
+    petDetectionId: number,
+    box: { x: number; y: number; width: number; height: number },
+    size = 200
+  ): Promise<ThumbnailResult> {
+    if (!this.child) this.start();
+
+    const child = this.child;
+    if (!child) throw new Error("Thumbnail-Worker konnte nicht gestartet werden.");
+
+    const safeHash = sha256.toLowerCase().replace(/[^a-f0-9]/g, "");
+    if (safeHash.length < 16) {
+      throw new Error("Ungültiger SHA-256 für Haustier-Crop-Cache.");
+    }
+
+    const cropKey = [
+      petDetectionId,
+      Math.round(box.x),
+      Math.round(box.y),
+      Math.round(box.width),
+      Math.round(box.height)
+    ].join("-");
+
+    const outputPath = path.join(
+      this.cacheRoot,
+      "pet-crops",
+      safeHash.slice(0, 2),
+      `${safeHash}-${cropKey}.jpg`
+    );
+
+    const id = randomUUID();
+
+    const result = new Promise<ThumbnailResult>((resolve, reject) => {
+      this.pending.set(id, {
+        resolve: (value) => resolve(value as ThumbnailResult),
+        reject
+      });
+    });
+
+    child.postMessage({
+      kind: "request",
+      id,
+      mode: "pet-crop",
+      inputPath,
+      outputPath,
+      maxWidth: size,
+      maxHeight: size,
+      crop: box
+    });
+
+    return result;
+  }
+
   async generateFaceCrop(
     inputPath: string,
     sha256: string,
