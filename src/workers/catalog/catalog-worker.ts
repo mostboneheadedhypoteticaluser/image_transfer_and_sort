@@ -3017,12 +3017,31 @@ function getPetEmbeddingsForClustering(
     WHERE m.source_id=?
   `).get(sourceId);
 
+  const cannotLinkRows = db.prepare(`
+    SELECT pce.pet_a_id, pce.pet_b_id, pce.created_at
+    FROM pet_cluster_exclusions pce
+    JOIN pet_fused_detections pa ON pa.id=pce.pet_a_id
+    JOIN media_items ma ON ma.id=pa.media_id
+    JOIN pet_fused_detections pb ON pb.id=pce.pet_b_id
+    JOIN media_items mb ON mb.id=pb.media_id
+    WHERE ma.source_id=?
+      AND mb.source_id=?
+  `).all(sourceId, sourceId);
+
+  const cannotLinkSignature = cannotLinkRows
+    .map((row) =>
+      `${Number(row.pet_a_id)}-${Number(row.pet_b_id)}-${String(row.created_at ?? "")}`
+    )
+    .sort()
+    .join("|");
+
   const revision = [
     rows.length,
     ids.length > 0 ? Math.max(...ids) : 0,
     idSum,
     maxUpdatedAt,
-    Number(assignmentCount?.count ?? 0)
+    Number(assignmentCount?.count ?? 0),
+    cannotLinkSignature
   ].join(":");
 
   const previousRun = db.prepare(`
@@ -3043,6 +3062,10 @@ function getPetEmbeddingsForClustering(
       contentKey: `${String(row.sha256)}:${Number(row.detection_index)}`,
       petClass: String(row.pet_class),
       vector: vectorFromBlob(row.vector_blob, Number(row.dimension))
+    })),
+    cannotLinks: cannotLinkRows.map((row) => ({
+      petAId: Number(row.pet_a_id),
+      petBId: Number(row.pet_b_id)
     }))
   };
 }
