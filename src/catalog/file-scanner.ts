@@ -1,6 +1,6 @@
 import { opendir, stat } from "node:fs/promises";
 import path from "node:path";
-import { IMAGE_EXTENSIONS } from "./constants";
+import { IGNORED_DIRECTORY_NAMES, IMAGE_EXTENSIONS } from "./constants";
 
 export type DiscoveredFile = {
   absolutePath: string;
@@ -39,6 +39,9 @@ export async function* walkImages(
       const absolutePath = path.join(current, entry.name);
 
       if (entry.isDirectory()) {
+        if (IGNORED_DIRECTORY_NAMES.has(entry.name.toLowerCase())) {
+          continue;
+        }
         stack.push(absolutePath);
         continue;
       }
