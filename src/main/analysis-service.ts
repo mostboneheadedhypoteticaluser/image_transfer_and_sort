@@ -193,6 +193,17 @@ export class AnalysisService {
           );
         }
 
+        if (
+          capabilities.dogReIdModel !== true ||
+          capabilities.onnxRuntime !== true ||
+          capabilities.petEmbeddings !== true
+        ) {
+          throw new Error(
+            "Das Dog-ReID-Modell oder ONNX Runtime fehlt. " +
+            "Bitte 'npm.cmd run setup:ai' ausführen."
+          );
+        }
+
         const configured = await this.request<Record<string, unknown>>(
           "configure",
           {
