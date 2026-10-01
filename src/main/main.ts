@@ -32,6 +32,8 @@ let thumbnailService: ThumbnailService | null = null;
 let thumbnailCoordinator: ThumbnailCoordinator | null = null;
 let personService: PersonService | null = null;
 let thumbnailCacheRoot = "";
+let personRefreshTimer: NodeJS.Timeout | null = null;
+let personRefreshRunning = false;
 let isQuitting = false;
 
 const EMPTY_QUEUE: AnalysisQueueStats = {
@@ -82,6 +84,47 @@ function sendToRenderer(channel: string, payload: unknown): void {
   win.webContents.send(channel, payload);
 }
 
+function pythonAnalysisIdle(): boolean {
+  return [
+    pipelineStatus.technical,
+    pipelineStatus.imageMetadata,
+    pipelineStatus.faces,
+    pipelineStatus.faceEmbeddings
+  ].every((stats) => stats.pending === 0 && stats.running === 0);
+}
+
+function schedulePersonRefresh(): void {
+  if (
+    isQuitting ||
+    !personService ||
+    personRefreshRunning ||
+    !pythonAnalysisIdle()
+  ) {
+    return;
+  }
+
+  if (personRefreshTimer) clearTimeout(personRefreshTimer);
+
+  personRefreshTimer = setTimeout(() => {
+    personRefreshTimer = null;
+    if (!personService || isQuitting || personRefreshRunning) return;
+
+    personRefreshRunning = true;
+    void personService
+      .refreshAllSources()
+      .then(() => {
+        sendToRenderer("people:updated", {});
+      })
+      .catch(() => {
+        // Kandidaten sind Komfortdaten; Analyse- und Medienansicht bleiben unabhängig.
+      })
+      .finally(() => {
+        personRefreshRunning = false;
+      });
+  }, 900);
+  personRefreshTimer.unref();
+}
+
 function updatePipelineStage(
   stage: keyof PipelineStatus,
   stats: AnalysisQueueStats
@@ -92,6 +135,15 @@ function updatePipelineStage(
   };
 
   sendToRenderer("analysis:pipelineStatus", pipelineStatus);
+
+  if (
+    stage === "technical" ||
+    stage === "imageMetadata" ||
+    stage === "faces" ||
+    stage === "faceEmbeddings"
+  ) {
+    schedulePersonRefresh();
+  }
 }
 
 function isInsideDirectory(candidatePath: string, rootPath: string): boolean {
@@ -361,6 +413,10 @@ app.on("window-all-closed", () => {
 
 app.on("before-quit", () => {
   isQuitting = true;
+  if (personRefreshTimer) {
+    clearTimeout(personRefreshTimer);
+    personRefreshTimer = null;
+  }
   analysisCoordinator?.stop();
   thumbnailCoordinator?.stop();
   analysis?.stop();
