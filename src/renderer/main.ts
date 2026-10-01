@@ -164,10 +164,11 @@ function renderPipelineStatus(status: PipelineStatus): void {
 
   analysisRefreshTimer = window.setTimeout(() => {
     analysisRefreshTimer = null;
-    if (
-      (currentView === "media" || currentView === "people") &&
-      selectedSourceId() !== null
-    ) {
+
+    // Die Medienliste darf während laufender Analyse automatisch aktualisiert
+    // werden. Die Personenansicht enthält jedoch Eingabefelder; ein komplettes
+    // Re-Rendern würde dort den Fokus/Cursor beim Tippen zerstören.
+    if (currentView === "media" && selectedSourceId() !== null) {
       void runSafely(refreshCatalog);
     }
   }, 500);
@@ -180,6 +181,21 @@ function thumbnailUrl(row: MediaRecord): string | null {
 
 function faceCropUrl(faceDetectionId: number): string {
   return `image-sorter-face://face/${faceDetectionId}`;
+}
+
+function isEditingPersonView(): boolean {
+  if (currentView !== "people") return false;
+
+  const active = document.activeElement;
+  if (!(active instanceof HTMLElement) || !personView.contains(active)) {
+    return false;
+  }
+
+  return (
+    active instanceof HTMLInputElement ||
+    active instanceof HTMLSelectElement ||
+    active instanceof HTMLTextAreaElement
+  );
 }
 
 function selectedSourceId(): number | null {
@@ -1081,7 +1097,9 @@ window.imageSorter.people.onUpdated(() => {
     const stats = await window.imageSorter.catalog.getStats(sourceId);
     peopleTabCount.textContent = stats.personCandidates.toLocaleString("de-DE");
 
-    if (currentView === "people") {
+    // Neue Vorschläge dürfen im Hintergrund entstehen, aber eine laufende
+    // Eingabe wird niemals durch replaceChildren()/Neuaufbau unterbrochen.
+    if (currentView === "people" && !isEditingPersonView()) {
       await loadPersonOverview(sourceId);
     }
   });
