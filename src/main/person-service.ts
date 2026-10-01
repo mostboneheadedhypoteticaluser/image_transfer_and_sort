@@ -84,6 +84,19 @@ export class PersonService {
     };
   }
 
+  async refreshAllSources(): Promise<void> {
+    const sources = await this.catalog.request<Array<{
+      id: number;
+      path: string;
+      enabled: boolean;
+    }>>("listSources");
+
+    for (const source of sources) {
+      if (!source.enabled) continue;
+      await this.getOverview(source.id);
+    }
+  }
+
   async confirmCandidate(
     candidateId: number,
     name: string
