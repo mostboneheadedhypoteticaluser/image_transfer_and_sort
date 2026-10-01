@@ -37,6 +37,13 @@ const models = [
     url:
       "https://huggingface.co/opencv/opencv_zoo/resolve/main/models/object_detection_yolox/object_detection_yolox_2022nov.onnx",
     sha256: "c5c2d13e59ae883e6af3b45daea64af4833a4951c92d116ec270d9ddbe998063"
+  },
+  {
+    name: "Dog-ReID DINOv2-B/14",
+    path: path.join(modelDir, "dog_reid_dinov2_b14_0_2_0.onnx"),
+    url:
+      "https://github.com/rtp4jc/immich-animals/releases/download/sidecar-v0.2.0/embedding.onnx",
+    sha256: "9e0bcfbea4003185538e07ea8c36368818525a8e6650a2fb2d478f27e5a39830"
   }
 ];
 
