@@ -1014,6 +1014,7 @@ def extract_dog_embeddings(file_path: str, pets: list[dict]) -> dict:
 
 def cluster_pet_embeddings(
     pets: list[dict],
+    cannot_links: list[dict] | None = None,
     cluster_threshold: float = 0.68,
     verification_threshold: float = 0.60,
     min_cluster_size: int = 2,
@@ -1067,6 +1068,26 @@ def cluster_pet_embeddings(
         key=lambda item: int(item["petDetectionId"]),
     )
 
+    pet_to_content: dict[int, str] = {}
+    for content_key, duplicates in duplicates_by_content.items():
+        for duplicate in duplicates:
+            pet_to_content[int(duplicate["petDetectionId"])] = content_key
+
+    blocked_content_pairs: set[tuple[str, str]] = set()
+    for raw_link in cannot_links or []:
+        if not isinstance(raw_link, dict):
+            continue
+
+        pet_a_id = int(raw_link.get("petAId", 0))
+        pet_b_id = int(raw_link.get("petBId", 0))
+        content_a = pet_to_content.get(pet_a_id)
+        content_b = pet_to_content.get(pet_b_id)
+
+        if not content_a or not content_b or content_a == content_b:
+            continue
+
+        blocked_content_pairs.add(tuple(sorted((content_a, content_b))))
+
     clusters: list[dict] = []
 
     for item in canonical:
@@ -1075,6 +1096,15 @@ def cluster_pet_embeddings(
         best_similarity = -1.0
 
         for index, cluster in enumerate(clusters):
+            item_content = str(item["contentKey"])
+            blocked = any(
+                tuple(sorted((item_content, str(member["contentKey"]))))
+                in blocked_content_pairs
+                for member in cluster["canonicalMembers"]
+            )
+            if blocked:
+                continue
+
             centroid_similarity = float(np.dot(vector, cluster["centroid"]))
             representative_similarity = float(
                 np.dot(vector, cluster["representativeVector"])
@@ -1474,6 +1504,7 @@ def handle(message: dict) -> bool:
             request_id,
             result=cluster_pet_embeddings(
                 pets,
+                payload.get("cannotLinks") or [],
                 float(payload.get("clusterThreshold", 0.68)),
                 float(payload.get("verificationThreshold", 0.60)),
                 int(payload.get("minClusterSize", 2)),
