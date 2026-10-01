@@ -11,9 +11,9 @@ import {
   type PathIdentity
 } from "../../catalog/source-identity";
 import {
-  recycleBinIndex,
-  recycleLookupKey,
-  restoreRecycleBinItem
+  listRecycleBinItems,
+  restoreRecycleBinItem,
+  type RecycleBinItem
 } from "./recycle-bin";
 import type {
   CatalogMethod,
@@ -172,6 +172,8 @@ ensureColumn("media_items", "recycle_detected_at", "TEXT");
 ensureColumn("media_items", "last_moved_at", "TEXT");
 ensureColumn("media_items", "device_id", "TEXT");
 ensureColumn("media_items", "inode", "TEXT");
+ensureColumn("media_items", "recycle_ambiguous", "INTEGER NOT NULL DEFAULT 0");
+ensureColumn("media_items", "recycle_original_path", "TEXT");
 
 db.exec(`
   CREATE INDEX IF NOT EXISTS idx_media_recycle
@@ -349,7 +351,7 @@ function getStats(sourceId: number) {
       COUNT(*) AS total,
       SUM(CASE WHEN availability='AVAILABLE' THEN 1 ELSE 0 END) AS available,
       SUM(CASE WHEN availability='MISSING' THEN 1 ELSE 0 END) AS missing,
-      SUM(CASE WHEN availability='MISSING' AND in_recycle_bin=1 THEN 1 ELSE 0 END) AS recycle_bin
+      SUM(CASE WHEN availability='MISSING' AND (in_recycle_bin=1 OR recycle_ambiguous=1) THEN 1 ELSE 0 END) AS recycle_bin
     FROM media_items
     WHERE source_id=?
   `).get(sourceId);
@@ -375,16 +377,35 @@ function listMedia(sourceId: number, requestedLimit: number) {
   const limit = Math.max(1, Math.min(2000, Math.trunc(requestedLimit || 500)));
 
   return db.prepare(`
-    SELECT id, relative_path, extension, size_bytes, availability, in_recycle_bin, last_seen_at
-    FROM media_items
-    WHERE source_id=?
+    SELECT
+      m.id,
+      m.relative_path,
+      m.extension,
+      m.size_bytes,
+      m.availability,
+      m.in_recycle_bin,
+      m.recycle_ambiguous,
+      m.last_seen_at,
+      CASE
+        WHEN m.availability='AVAILABLE' THEN (
+          SELECT COUNT(*) - 1
+          FROM media_items d
+          WHERE d.availability='AVAILABLE'
+            AND d.sha256=m.sha256
+            AND d.size_bytes=m.size_bytes
+        )
+        ELSE 0
+      END AS duplicate_count
+    FROM media_items m
+    WHERE m.source_id=?
     ORDER BY
       CASE
-        WHEN availability='MISSING' AND in_recycle_bin=1 THEN 1
-        WHEN availability='MISSING' THEN 2
+        WHEN m.availability='MISSING' AND m.in_recycle_bin=1 THEN 1
+        WHEN m.availability='MISSING' AND m.recycle_ambiguous=1 THEN 2
+        WHEN m.availability='MISSING' THEN 3
         ELSE 0
       END,
-      relative_path COLLATE NOCASE
+      m.relative_path COLLATE NOCASE
     LIMIT ?
   `).all(sourceId, limit).map((row) => ({
     id: Number(row.id),
@@ -393,6 +414,12 @@ function listMedia(sourceId: number, requestedLimit: number) {
     sizeBytes: Number(row.size_bytes),
     availability: String(row.availability),
     inRecycleBin: Boolean(row.in_recycle_bin),
+    recycleState: Boolean(row.in_recycle_bin)
+      ? "RESTORABLE"
+      : Boolean(row.recycle_ambiguous)
+        ? "AMBIGUOUS"
+        : "NONE",
+    duplicateCount: Math.max(0, Number(row.duplicate_count ?? 0)),
     lastSeenAt: String(row.last_seen_at)
   }));
 }
@@ -768,69 +795,201 @@ async function uniqueMoveCandidate(
   return missingAtOldLocation.length === 1 ? missingAtOldLocation[0] : null;
 }
 
+function normalizeRecyclePath(value: string): string {
+  const normalized = value.replaceAll("/", "\\");
+  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
+}
+
+function fileNameForPath(value: string): string {
+  return path.basename(value).toLowerCase();
+}
+
 async function refreshRecycleStatus(sourceId: number): Promise<number> {
   db.prepare(`
     UPDATE media_items
-    SET in_recycle_bin=0, recycle_path=NULL, recycle_detected_at=NULL
+    SET
+      in_recycle_bin=0,
+      recycle_ambiguous=0,
+      recycle_path=NULL,
+      recycle_original_path=NULL,
+      recycle_detected_at=NULL
     WHERE source_id=? AND availability='AVAILABLE'
   `).run(sourceId);
 
   if (process.platform !== "win32") {
     db.prepare(`
       UPDATE media_items
-      SET in_recycle_bin=0, recycle_path=NULL, recycle_detected_at=NULL
+      SET
+        in_recycle_bin=0,
+        recycle_ambiguous=0,
+        recycle_path=NULL,
+        recycle_original_path=NULL,
+        recycle_detected_at=NULL
       WHERE source_id=? AND availability='MISSING'
     `).run(sourceId);
     return 0;
   }
 
-  let recycle;
+  let recycleItems: RecycleBinItem[];
   try {
-    recycle = await recycleBinIndex();
+    recycleItems = await listRecycleBinItems();
   } catch {
     return Number(
       db.prepare(`
         SELECT COUNT(*) AS count
         FROM media_items
-        WHERE source_id=? AND availability='MISSING' AND in_recycle_bin=1
+        WHERE source_id=?
+          AND availability='MISSING'
+          AND (in_recycle_bin=1 OR recycle_ambiguous=1)
       `).get(sourceId)?.count ?? 0
     );
   }
 
   const missingRows = db.prepare(`
-    SELECT id, absolute_path
+    SELECT id, absolute_path, size_bytes, sha256
     FROM media_items
     WHERE source_id=? AND availability='MISSING'
   `).all(sourceId);
 
+  const byOriginalPath = new Map<string, RecycleBinItem[]>();
+  for (const item of recycleItems) {
+    const key = normalizeRecyclePath(item.originalPath);
+    const values = byOriginalPath.get(key) ?? [];
+    values.push(item);
+    byOriginalPath.set(key, values);
+  }
+
+  const hashCache = new Map<string, string | null>();
+
+  async function recycleHash(item: RecycleBinItem): Promise<string | null> {
+    if (!item.recyclePath) return null;
+    const key = normalizeRecyclePath(item.recyclePath);
+    if (hashCache.has(key)) return hashCache.get(key) ?? null;
+
+    try {
+      if (!(await isReadable(item.recyclePath))) {
+        hashCache.set(key, null);
+        return null;
+      }
+      const hash = await sha256File(item.recyclePath);
+      hashCache.set(key, hash);
+      return hash;
+    } catch {
+      hashCache.set(key, null);
+      return null;
+    }
+  }
+
   const setRecycle = db.prepare(`
     UPDATE media_items
-    SET in_recycle_bin=1, recycle_path=?, recycle_detected_at=CURRENT_TIMESTAMP
+    SET
+      in_recycle_bin=1,
+      recycle_ambiguous=0,
+      recycle_path=?,
+      recycle_original_path=?,
+      recycle_detected_at=CURRENT_TIMESTAMP
+    WHERE id=?
+  `);
+
+  const setAmbiguous = db.prepare(`
+    UPDATE media_items
+    SET
+      in_recycle_bin=0,
+      recycle_ambiguous=1,
+      recycle_path=NULL,
+      recycle_original_path=NULL,
+      recycle_detected_at=CURRENT_TIMESTAMP
     WHERE id=?
   `);
 
   const clearRecycle = db.prepare(`
     UPDATE media_items
-    SET in_recycle_bin=0, recycle_path=NULL, recycle_detected_at=NULL
+    SET
+      in_recycle_bin=0,
+      recycle_ambiguous=0,
+      recycle_path=NULL,
+      recycle_original_path=NULL,
+      recycle_detected_at=NULL
     WHERE id=?
   `);
 
   let count = 0;
-  db.exec("BEGIN IMMEDIATE");
-  try {
-    for (const row of missingRows) {
-      const item = recycle.get(recycleLookupKey(String(row.absolute_path)));
-      if (item) {
-        setRecycle.run(item.recyclePath, Number(row.id));
-        count += 1;
-      } else {
-        clearRecycle.run(Number(row.id));
+
+  for (const row of missingRows) {
+    const mediaId = Number(row.id);
+    const absolutePath = String(row.absolute_path);
+    const expectedSize = Number(row.size_bytes);
+    const expectedHash = String(row.sha256 ?? "");
+    const exactCandidates = byOriginalPath.get(normalizeRecyclePath(absolutePath)) ?? [];
+
+    let selected: RecycleBinItem | null = null;
+    let ambiguous = false;
+    let candidates = exactCandidates;
+
+    if (candidates.length > 0) {
+      const sameSize = candidates.filter(
+        (candidate) => candidate.sizeBytes === null || candidate.sizeBytes === expectedSize
+      );
+      if (sameSize.length === 1) {
+        selected = sameSize[0];
+      } else if (sameSize.length > 1) {
+        const targetName = fileNameForPath(absolutePath);
+        const sameName = sameSize.filter(
+          (candidate) => fileNameForPath(candidate.originalPath) === targetName
+        );
+        if (sameName.length === 1) {
+          selected = sameName[0];
+        } else {
+          candidates = sameName.length > 0 ? sameName : sameSize;
+          const hashMatches: RecycleBinItem[] = [];
+          for (const candidate of candidates) {
+            if ((await recycleHash(candidate)) === expectedHash) {
+              hashMatches.push(candidate);
+            }
+          }
+          if (hashMatches.length === 1) selected = hashMatches[0];
+          else if (hashMatches.length > 1 || candidates.length > 1) ambiguous = true;
+        }
+      } else if (candidates.length === 1) {
+        selected = candidates[0];
+      }
+    } else {
+      const sizeCandidates = recycleItems.filter(
+        (candidate) => candidate.sizeBytes !== null && candidate.sizeBytes === expectedSize
+      );
+      const hashMatches: RecycleBinItem[] = [];
+
+      for (const candidate of sizeCandidates) {
+        if ((await recycleHash(candidate)) === expectedHash) {
+          hashMatches.push(candidate);
+        }
+      }
+
+      if (hashMatches.length === 1) {
+        selected = hashMatches[0];
+      } else if (hashMatches.length > 1) {
+        const targetName = fileNameForPath(absolutePath);
+        const sameName = hashMatches.filter(
+          (candidate) => fileNameForPath(candidate.originalPath) === targetName
+        );
+        if (sameName.length === 1) selected = sameName[0];
+        else ambiguous = true;
       }
     }
-    db.exec("COMMIT");
-  } catch (error) {
-    db.exec("ROLLBACK");
-    throw error;
+
+    if (selected) {
+      setRecycle.run(
+        selected.recyclePath,
+        selected.originalPath,
+        mediaId
+      );
+      count += 1;
+    } else if (ambiguous) {
+      setAmbiguous.run(mediaId);
+      count += 1;
+    } else {
+      clearRecycle.run(mediaId);
+    }
   }
 
   return count;
@@ -1305,9 +1464,18 @@ async function scanSource(sourceId: number): Promise<ScanResult> {
 
 async function restoreMedia(mediaId: number): Promise<RestoreResult> {
   const row = db.prepare(`
-    SELECT id, absolute_path, availability, in_recycle_bin
-    FROM media_items
-    WHERE id=?
+    SELECT
+      m.id,
+      m.source_id,
+      m.absolute_path,
+      m.availability,
+      m.in_recycle_bin,
+      m.recycle_path,
+      m.recycle_original_path,
+      s.path AS source_path
+    FROM media_items m
+    JOIN media_sources s ON s.id=m.source_id
+    WHERE m.id=?
   `).get(mediaId);
 
   if (!row) throw new Error("Medium wurde im Katalog nicht gefunden.");
@@ -1316,38 +1484,60 @@ async function restoreMedia(mediaId: number): Promise<RestoreResult> {
     throw new Error("Dieses Medium ist nicht als wiederherstellbar im Papierkorb markiert.");
   }
 
-  const originalPath = String(row.absolute_path);
-  await restoreRecycleBinItem(originalPath);
+  const catalogPath = String(row.absolute_path);
+  const restoreTarget = row.recycle_original_path
+    ? String(row.recycle_original_path)
+    : catalogPath;
+  const recyclePath = row.recycle_path ? String(row.recycle_path) : null;
 
-  if (!(await isReadable(originalPath))) {
+  await restoreRecycleBinItem(restoreTarget, recyclePath);
+
+  if (!(await isReadable(restoreTarget))) {
     throw new Error("Windows meldet die Wiederherstellung, aber die Datei ist noch nicht erreichbar.");
   }
 
-  const info = await stat(originalPath);
-  const hash = await sha256File(originalPath);
+  const info = await stat(restoreTarget);
+  const hash = await sha256File(restoreTarget);
+  const identity = await readPathIdentity(restoreTarget);
+  const sourcePath = String(row.source_path);
+  const relativePath = path.relative(sourcePath, restoreTarget).split(path.sep).join("/");
+
+  if (relativePath.startsWith("../") || relativePath === ".." || path.isAbsolute(relativePath)) {
+    throw new Error("Die wiederhergestellte Datei liegt außerhalb der eingestellten Medienquelle.");
+  }
 
   db.prepare(`
     UPDATE media_items
     SET
+      relative_path=?,
+      absolute_path=?,
       size_bytes=?,
       mtime_ms=?,
       sha256=?,
+      device_id=?,
+      inode=?,
       availability='AVAILABLE',
       in_recycle_bin=0,
+      recycle_ambiguous=0,
       recycle_path=NULL,
+      recycle_original_path=NULL,
       recycle_detected_at=NULL,
       last_seen_at=CURRENT_TIMESTAMP
     WHERE id=?
   `).run(
+    relativePath,
+    restoreTarget,
     info.size,
     Math.trunc(info.mtimeMs),
     hash,
+    identity?.deviceId ?? null,
+    identity?.inode ?? null,
     mediaId
   );
 
   return {
     restored: true,
-    path: originalPath
+    path: restoreTarget
   };
 }
 
