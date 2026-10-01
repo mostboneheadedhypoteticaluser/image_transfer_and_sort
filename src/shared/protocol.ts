@@ -20,6 +20,8 @@ export type AnalysisQueueStats = {
 export type PipelineStatus = {
   technical: AnalysisQueueStats;
   thumbnails: AnalysisQueueStats;
+  imageMetadata: AnalysisQueueStats;
+  faces: AnalysisQueueStats;
 };
 
 export type AnalysisJob = {
@@ -68,6 +70,8 @@ export type MediaRecord = {
   duplicateCount: number;
   thumbnailReady: boolean;
   thumbnailVersion: string | null;
+  capturedAt: string | null;
+  faceCount: number;
   lastSeenAt: string;
 };
 
@@ -125,6 +129,8 @@ export type CatalogMethod =
   | "completeAnalysisJob"
   | "failAnalysisJob"
   | "completeThumbnailJob"
+  | "completeImageMetadataJob"
+  | "completeFaceDetectionJob"
   | "getThumbnailInfo"
   | "scanSource"
   | "restoreMedia"
