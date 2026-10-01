@@ -23,6 +23,13 @@ const models = [
     url:
       "https://huggingface.co/opencv/opencv_zoo/resolve/main/models/face_recognition_sface/face_recognition_sface_2021dec.onnx",
     sha256: "0ba9fbfa01b5270c96627c4ef784da859931e02f04419c829e83484087c34e79"
+  },
+  {
+    name: "NanoDet",
+    path: path.join(modelDir, "object_detection_nanodet_2022nov.onnx"),
+    url:
+      "https://huggingface.co/opencv/opencv_zoo/resolve/main/models/object_detection_nanodet/object_detection_nanodet_2022nov.onnx",
+    sha256: "4b82da9944b88577175ee23a459dce2e26e6e4be573def65b1055dc2d9720186"
   }
 ];
 
