@@ -8,6 +8,7 @@ export type CatalogStats = {
   total: number;
   available: number;
   missing: number;
+  recycleBin: number;
   lastScan: string | null;
 };
 
@@ -17,16 +18,24 @@ export type MediaRecord = {
   extension: string;
   sizeBytes: number;
   availability: "AVAILABLE" | "MISSING";
+  inRecycleBin: boolean;
   lastSeenAt: string;
 };
 
 export type ScanResult = {
   discovered: number;
   added: number;
+  moved: number;
   changed: number;
   unchanged: number;
   missing: number;
+  recycleBin: number;
   errors: number;
+};
+
+export type RestoreResult = {
+  restored: boolean;
+  path: string;
 };
 
 export type ScanProgress = {
@@ -40,7 +49,8 @@ export type CatalogMethod =
   | "addSource"
   | "getStats"
   | "listMedia"
-  | "scanSource";
+  | "scanSource"
+  | "restoreMedia";
 
 export type WorkerRequest = {
   kind: "request";
