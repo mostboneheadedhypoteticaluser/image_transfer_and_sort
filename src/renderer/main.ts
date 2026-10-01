@@ -48,6 +48,8 @@ const metadataStageState = document.querySelector<HTMLSpanElement>("#metadataSta
 const metadataStageCounts = document.querySelector<HTMLElement>("#metadataStageCounts")!;
 const faceStageState = document.querySelector<HTMLSpanElement>("#faceStageState")!;
 const faceStageCounts = document.querySelector<HTMLElement>("#faceStageCounts")!;
+const faceEmbeddingStageState = document.querySelector<HTMLSpanElement>("#faceEmbeddingStageState")!;
+const faceEmbeddingStageCounts = document.querySelector<HTMLElement>("#faceEmbeddingStageCounts")!;
 
 let sources: SourceRecord[] = [];
 let currentView: CatalogView = "media";
@@ -57,6 +59,7 @@ let resetting = false;
 let lastThumbnailDone = -1;
 let lastMetadataDone = -1;
 let lastFaceDone = -1;
+let lastFaceEmbeddingDone = -1;
 let analysisRefreshTimer: number | null = null;
 
 function renderAnalysisStatus(status: AnalysisWorkerStatus): void {
@@ -122,15 +125,22 @@ function renderPipelineStatus(status: PipelineStatus): void {
   renderStage(thumbnailStageState, thumbnailStageCounts, status.thumbnails);
   renderStage(metadataStageState, metadataStageCounts, status.imageMetadata);
   renderStage(faceStageState, faceStageCounts, status.faces);
+  renderStage(
+    faceEmbeddingStageState,
+    faceEmbeddingStageCounts,
+    status.faceEmbeddings
+  );
 
   const visualDataChanged =
     status.thumbnails.done !== lastThumbnailDone ||
     status.imageMetadata.done !== lastMetadataDone ||
-    status.faces.done !== lastFaceDone;
+    status.faces.done !== lastFaceDone ||
+    status.faceEmbeddings.done !== lastFaceEmbeddingDone;
 
   lastThumbnailDone = status.thumbnails.done;
   lastMetadataDone = status.imageMetadata.done;
   lastFaceDone = status.faces.done;
+  lastFaceEmbeddingDone = status.faceEmbeddings.done;
 
   if (!visualDataChanged) return;
 
@@ -284,6 +294,16 @@ function renderRows(rows: MediaRecord[], emptyText = "Noch keine Medien katalogi
         `${row.faceCount} ${row.faceCount === 1 ? "Gesicht" : "Gesichter"}`;
       faceBadge.title = "Automatisch erkannte Gesichter; noch keiner Person zugeordnet";
       stateCell.appendChild(faceBadge);
+
+      const embeddingBadge = document.createElement("span");
+      embeddingBadge.className = "badge embedding";
+      embeddingBadge.textContent =
+        row.faceEmbeddingCount >= row.faceCount
+          ? "Merkmale bereit"
+          : `Merkmale ${row.faceEmbeddingCount}/${row.faceCount}`;
+      embeddingBadge.title =
+        "SFace-Merkmale für die spätere Gruppierung derselben Person";
+      stateCell.appendChild(embeddingBadge);
     }
 
     const actionCell = document.createElement("td");
@@ -583,7 +603,8 @@ void window.imageSorter.analysis
       technical: { pending: 0, running: 0, done: 0, failed: 0 },
       thumbnails: { pending: 0, running: 0, done: 0, failed: 0 },
       imageMetadata: { pending: 0, running: 0, done: 0, failed: 0 },
-      faces: { pending: 0, running: 0, done: 0, failed: 0 }
+      faces: { pending: 0, running: 0, done: 0, failed: 0 },
+      faceEmbeddings: { pending: 0, running: 0, done: 0, failed: 0 }
     });
   });
 
