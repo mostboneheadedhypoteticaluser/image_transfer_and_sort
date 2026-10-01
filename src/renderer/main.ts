@@ -58,6 +58,8 @@ const faceStageState = document.querySelector<HTMLSpanElement>("#faceStageState"
 const faceStageCounts = document.querySelector<HTMLElement>("#faceStageCounts")!;
 const faceEmbeddingStageState = document.querySelector<HTMLSpanElement>("#faceEmbeddingStageState")!;
 const faceEmbeddingStageCounts = document.querySelector<HTMLElement>("#faceEmbeddingStageCounts")!;
+const petStageState = document.querySelector<HTMLSpanElement>("#petStageState")!;
+const petStageCounts = document.querySelector<HTMLElement>("#petStageCounts")!;
 
 let sources: SourceRecord[] = [];
 let currentView: CatalogView = "media";
@@ -68,6 +70,7 @@ let lastThumbnailDone = -1;
 let lastMetadataDone = -1;
 let lastFaceDone = -1;
 let lastFaceEmbeddingDone = -1;
+let lastPetDone = -1;
 let analysisRefreshTimer: number | null = null;
 
 function renderAnalysisStatus(status: AnalysisWorkerStatus): void {
@@ -138,17 +141,20 @@ function renderPipelineStatus(status: PipelineStatus): void {
     faceEmbeddingStageCounts,
     status.faceEmbeddings
   );
+  renderStage(petStageState, petStageCounts, status.petDetection);
 
   const visualDataChanged =
     status.thumbnails.done !== lastThumbnailDone ||
     status.imageMetadata.done !== lastMetadataDone ||
     status.faces.done !== lastFaceDone ||
-    status.faceEmbeddings.done !== lastFaceEmbeddingDone;
+    status.faceEmbeddings.done !== lastFaceEmbeddingDone ||
+    status.petDetection.done !== lastPetDone;
 
   lastThumbnailDone = status.thumbnails.done;
   lastMetadataDone = status.imageMetadata.done;
   lastFaceDone = status.faces.done;
   lastFaceEmbeddingDone = status.faceEmbeddings.done;
+  lastPetDone = status.petDetection.done;
 
   if (!visualDataChanged) return;
 
@@ -321,6 +327,26 @@ function renderRows(rows: MediaRecord[], emptyText = "Noch keine Medien katalogi
       embeddingBadge.title =
         "SFace-Merkmale für die spätere Gruppierung derselben Person";
       stateCell.appendChild(embeddingBadge);
+    }
+
+    if (row.availability === "AVAILABLE" && row.petCount > 0) {
+      if (row.dogCount > 0) {
+        const dogBadge = document.createElement("span");
+        dogBadge.className = "badge pet";
+        dogBadge.textContent =
+          `${row.dogCount} ${row.dogCount === 1 ? "Hund" : "Hunde"}`;
+        dogBadge.title = "Automatisch mit NanoDet erkannte Hunde";
+        stateCell.appendChild(dogBadge);
+      }
+
+      if (row.catCount > 0) {
+        const catBadge = document.createElement("span");
+        catBadge.className = "badge pet";
+        catBadge.textContent =
+          `${row.catCount} ${row.catCount === 1 ? "Katze" : "Katzen"}`;
+        catBadge.title = "Automatisch mit NanoDet erkannte Katzen";
+        stateCell.appendChild(catBadge);
+      }
     }
 
     const actionCell = document.createElement("td");
@@ -1070,7 +1096,8 @@ void window.imageSorter.analysis
       thumbnails: { pending: 0, running: 0, done: 0, failed: 0 },
       imageMetadata: { pending: 0, running: 0, done: 0, failed: 0 },
       faces: { pending: 0, running: 0, done: 0, failed: 0 },
-      faceEmbeddings: { pending: 0, running: 0, done: 0, failed: 0 }
+      faceEmbeddings: { pending: 0, running: 0, done: 0, failed: 0 },
+      petDetection: { pending: 0, running: 0, done: 0, failed: 0 }
     });
   });
 
