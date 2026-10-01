@@ -29,6 +29,7 @@ declare global {
           candidateId: number,
           name: string
         ): Promise<ConfirmPersonResult>;
+        onUpdated(listener: () => void): () => void;
       };
       catalog: {
         listSources(): Promise<SourceRecord[]>;
