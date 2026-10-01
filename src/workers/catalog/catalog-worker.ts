@@ -2309,6 +2309,132 @@ function completeFaceDetectionJob(jobId: number, result: unknown) {
   return { completed: true };
 }
 
+function completePetDetectionJob(jobId: number, result: unknown) {
+  if (!result || typeof result !== "object") {
+    throw new Error("Haustierdetektions-Ergebnis ist ungültig.");
+  }
+
+  const value = result as Record<string, unknown>;
+  const rawPets = Array.isArray(value.pets) ? value.pets : [];
+  const detectorVersion =
+    typeof value.detector === "string" && value.detector.trim()
+      ? value.detector.trim()
+      : "NanoDet 2022nov";
+
+  const job = jobForModule(jobId, "pet-detect-nanodet-v1");
+  const mediaId = Number(job.media_id);
+  const inputSha256 = String(job.input_sha256 ?? "");
+
+  const upsert = db.prepare(`
+    INSERT INTO pet_detections(
+      media_id,
+      detector_version,
+      detection_index,
+      input_sha256,
+      pet_class,
+      class_id,
+      x,
+      y,
+      width,
+      height,
+      score,
+      updated_at
+    )
+    VALUES(?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)
+    ON CONFLICT(media_id, detector_version, detection_index) DO UPDATE SET
+      input_sha256=excluded.input_sha256,
+      pet_class=excluded.pet_class,
+      class_id=excluded.class_id,
+      x=excluded.x,
+      y=excluded.y,
+      width=excluded.width,
+      height=excluded.height,
+      score=excluded.score,
+      updated_at=CURRENT_TIMESTAMP
+  `);
+
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    let written = 0;
+
+    for (const rawPet of rawPets) {
+      if (!rawPet || typeof rawPet !== "object") continue;
+
+      const item = rawPet as Record<string, unknown>;
+      const petClass =
+        item.class === "dog" || item.class === "cat"
+          ? String(item.class)
+          : null;
+      if (!petClass) continue;
+
+      const classId = Number(item.classId);
+      const x = Number(item.x);
+      const y = Number(item.y);
+      const width = Number(item.width);
+      const height = Number(item.height);
+      const score = Number(item.score);
+
+      if (
+        !Number.isInteger(classId) ||
+        ![x, y, width, height, score].every(Number.isFinite) ||
+        width <= 0 ||
+        height <= 0
+      ) {
+        continue;
+      }
+
+      upsert.run(
+        mediaId,
+        detectorVersion,
+        written,
+        inputSha256,
+        petClass,
+        classId,
+        x,
+        y,
+        width,
+        height,
+        score
+      );
+      written += 1;
+    }
+
+    db.prepare(`
+      DELETE FROM pet_detections
+      WHERE media_id=?
+        AND detector_version=?
+        AND detection_index>=?
+    `).run(mediaId, detectorVersion, written);
+
+    db.prepare(`
+      DELETE FROM pet_detections
+      WHERE media_id=?
+        AND detector_version<>?
+    `).run(mediaId, detectorVersion);
+
+    db.prepare(`
+      UPDATE analysis_jobs
+      SET
+        status='DONE',
+        result_json=?,
+        error_message=NULL,
+        finished_at=CURRENT_TIMESTAMP,
+        updated_at=CURRENT_TIMESTAMP
+      WHERE id=?
+    `).run(
+      JSON.stringify({ detector: detectorVersion, petCount: written }),
+      jobId
+    );
+
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+
+  return { completed: true, petCount: written };
+}
+
 function getFaceDetectionsForEmbedding(
   mediaId: number,
   inputSha256: string
@@ -3563,6 +3689,11 @@ async function dispatch(method: CatalogMethod, payload: Record<string, unknown> 
       );
     case "completeFaceDetectionJob":
       return completeFaceDetectionJob(
+        asNumber(payload.jobId, "jobId"),
+        payload.result
+      );
+    case "completePetDetectionJob":
+      return completePetDetectionJob(
         asNumber(payload.jobId, "jobId"),
         payload.result
       );
