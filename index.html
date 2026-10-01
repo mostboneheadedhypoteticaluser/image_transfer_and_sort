@@ -38,6 +38,48 @@
           <article class="stat"><span id="lastScan">—</span><small>Letzter Scan</small></article>
         </section>
 
+        <section class="panel analysis-panel">
+          <div class="analysis-heading">
+            <div>
+              <h2>Analyse-Worker</h2>
+              <p>Eigener Python-Prozess im Hintergrund. Die Oberfläche bleibt davon getrennt und bedienbar.</p>
+            </div>
+            <span id="analysisWorkerState" class="analysis-state starting">Startet …</span>
+          </div>
+
+          <div class="analysis-grid">
+            <div class="analysis-metric">
+              <small>Python</small>
+              <strong id="analysisPython">—</strong>
+            </div>
+            <div class="analysis-metric">
+              <small>Priorität</small>
+              <strong id="analysisPriority">Niedrig</strong>
+            </div>
+            <div class="analysis-metric">
+              <small>CPU-Zielbudget</small>
+              <strong id="analysisCpuBudget">50 %</strong>
+            </div>
+            <div class="analysis-metric">
+              <small>Parallel</small>
+              <strong id="analysisParallel">1 Job</strong>
+            </div>
+            <div class="analysis-metric">
+              <small>Warteschlange</small>
+              <strong id="analysisQueue">0</strong>
+            </div>
+            <div class="analysis-metric">
+              <small>Aktiv</small>
+              <strong id="analysisActive">0</strong>
+            </div>
+          </div>
+
+          <div class="analysis-footer">
+            <span id="analysisMessage">Analyse-Worker wird gestartet …</span>
+            <span class="analysis-note">Noch keine KI-Module aktiv.</span>
+          </div>
+        </section>
+
         <section class="panel media-panel">
           <div class="panel-heading">
             <div>
