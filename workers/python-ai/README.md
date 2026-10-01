@@ -31,6 +31,8 @@ Aktuell unterstützt der Worker:
 - `detect_pets`
 - `detect_pets_yolox`
 - `fuse_pet_detections`
+- `extract_dog_embeddings`
+- `cluster_pet_embeddings`
 - `shutdown`
 
 Die externen Python-Abhängigkeiten liegen bewusst in `.ai-venv`. Einrichtung: `npm run setup:ai`.
@@ -38,3 +40,8 @@ Die externen Python-Abhängigkeiten liegen bewusst in `.ai-venv`. Einrichtung: `
 Die Oberfläche zeigt Zustand, verwendete Python-Laufzeit, Priorität, CPU-Zielbudget, Parallelität, Warteschlange und aktive Jobs an.
 
 Damit können Analysemodelle später ersetzt oder erweitert werden, ohne Katalog-Worker oder Renderer neu zu koppeln.
+
+
+### Dog-ReID
+
+`pet-embed-dogreid-v1` nutzt das externe ONNX-Modell **DogReID DINOv2-B14 0.2.0**. Die Session wird lazy geladen; Bilder ohne fusionierten Hundefund schließen den Job ohne Bilddekodierung und ohne Modellinferenz ab. Eingabe: RGB 224×224, ImageNet-Normalisierung, NCHW. Ausgabe: L2-normalisierter Merkmalsvektor.
