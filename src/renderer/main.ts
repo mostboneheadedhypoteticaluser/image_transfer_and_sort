@@ -3,6 +3,7 @@ import type {
   AnalysisWorkerStatus,
   DuplicateGroup,
   MediaRecord,
+  PipelineStatus,
   SourceRecord
 } from "../shared/protocol";
 
@@ -39,12 +40,18 @@ const analysisParallel = document.querySelector<HTMLElement>("#analysisParallel"
 const analysisQueue = document.querySelector<HTMLElement>("#analysisQueue")!;
 const analysisActive = document.querySelector<HTMLElement>("#analysisActive")!;
 const analysisMessage = document.querySelector<HTMLSpanElement>("#analysisMessage")!;
+const technicalStageState = document.querySelector<HTMLSpanElement>("#technicalStageState")!;
+const technicalStageCounts = document.querySelector<HTMLElement>("#technicalStageCounts")!;
+const thumbnailStageState = document.querySelector<HTMLSpanElement>("#thumbnailStageState")!;
+const thumbnailStageCounts = document.querySelector<HTMLElement>("#thumbnailStageCounts")!;
 
 let sources: SourceRecord[] = [];
 let currentView: CatalogView = "media";
 let scanning = false;
 let restoring = false;
 let resetting = false;
+let lastThumbnailDone = -1;
+let thumbnailRefreshTimer: number | null = null;
 
 function renderAnalysisStatus(status: AnalysisWorkerStatus): void {
   analysisWorkerState.className = "analysis-state";
@@ -77,6 +84,56 @@ function renderAnalysisStatus(status: AnalysisWorkerStatus): void {
   analysisQueue.textContent = status.queuedJobs.toLocaleString("de-DE");
   analysisActive.textContent = status.activeJobs.toLocaleString("de-DE");
   analysisMessage.textContent = status.message;
+}
+
+function stageText(stats: PipelineStatus["technical"]): {
+  text: string;
+  className: string;
+} {
+  if (stats.running > 0) return { text: "Läuft", className: "running" };
+  if (stats.pending > 0) return { text: "Wartet", className: "waiting" };
+  if (stats.failed > 0) return { text: "Mit Fehlern", className: "error" };
+  if (stats.done > 0) return { text: "Fertig", className: "done" };
+  return { text: "Bereit", className: "waiting" };
+}
+
+function renderStage(
+  stateElement: HTMLSpanElement,
+  countsElement: HTMLElement,
+  stats: PipelineStatus["technical"]
+): void {
+  const state = stageText(stats);
+  stateElement.className = `stage-state ${state.className}`;
+  stateElement.textContent = state.text;
+  countsElement.textContent =
+    `${stats.done.toLocaleString("de-DE")} fertig · ` +
+    `${stats.pending.toLocaleString("de-DE")} offen · ` +
+    `${stats.failed.toLocaleString("de-DE")} Fehler`;
+}
+
+function renderPipelineStatus(status: PipelineStatus): void {
+  renderStage(technicalStageState, technicalStageCounts, status.technical);
+  renderStage(thumbnailStageState, thumbnailStageCounts, status.thumbnails);
+
+  if (status.thumbnails.done !== lastThumbnailDone) {
+    lastThumbnailDone = status.thumbnails.done;
+
+    if (thumbnailRefreshTimer !== null) {
+      window.clearTimeout(thumbnailRefreshTimer);
+    }
+
+    thumbnailRefreshTimer = window.setTimeout(() => {
+      thumbnailRefreshTimer = null;
+      if (currentView === "media" && selectedSourceId() !== null) {
+        void runSafely(refreshCatalog);
+      }
+    }, 500);
+  }
+}
+
+function thumbnailUrl(row: MediaRecord): string | null {
+  if (!row.thumbnailReady || !row.thumbnailVersion) return null;
+  return `image-sorter-thumb://media/${row.id}?v=${encodeURIComponent(row.thumbnailVersion)}`;
 }
 
 function selectedSourceId(): number | null {
@@ -127,7 +184,7 @@ function renderRows(rows: MediaRecord[], emptyText = "Noch keine Medien katalogi
   if (rows.length === 0) {
     const tr = document.createElement("tr");
     const td = document.createElement("td");
-    td.colSpan = 5;
+    td.colSpan = 6;
     td.className = "empty";
     td.textContent = emptyText;
     tr.appendChild(td);
@@ -139,6 +196,34 @@ function renderRows(rows: MediaRecord[], emptyText = "Noch keine Medien katalogi
 
   for (const row of rows) {
     const tr = document.createElement("tr");
+
+    const previewCell = document.createElement("td");
+    previewCell.className = "preview-cell";
+
+    const thumbnail = thumbnailUrl(row);
+    if (thumbnail) {
+      const img = document.createElement("img");
+      img.className = "media-thumbnail";
+      img.src = thumbnail;
+      img.alt = "";
+      img.loading = "lazy";
+      img.addEventListener("error", () => {
+        previewCell.replaceChildren();
+        const fallback = document.createElement("span");
+        fallback.className = "preview-placeholder";
+        fallback.textContent = row.extension.replace(".", "").toUpperCase();
+        previewCell.appendChild(fallback);
+      });
+      previewCell.appendChild(img);
+    } else {
+      const placeholder = document.createElement("span");
+      placeholder.className = "preview-placeholder";
+      placeholder.textContent =
+        row.availability === "AVAILABLE"
+          ? row.extension.replace(".", "").toUpperCase()
+          : "—";
+      previewCell.appendChild(placeholder);
+    }
 
     const pathCell = document.createElement("td");
     pathCell.className = "path-cell";
@@ -185,7 +270,7 @@ function renderRows(rows: MediaRecord[], emptyText = "Noch keine Medien katalogi
       actionCell.className = "muted";
     }
 
-    tr.append(pathCell, typeCell, sizeCell, stateCell, actionCell);
+    tr.append(previewCell, pathCell, typeCell, sizeCell, stateCell, actionCell);
     fragment.appendChild(tr);
   }
 
@@ -453,6 +538,17 @@ window.imageSorter.catalog.onProgress((progress) => {
 });
 
 window.imageSorter.analysis.onStatus(renderAnalysisStatus);
+window.imageSorter.analysis.onPipelineStatus(renderPipelineStatus);
+
+void window.imageSorter.analysis
+  .getPipelineStatus()
+  .then(renderPipelineStatus)
+  .catch(() => {
+    renderPipelineStatus({
+      technical: { pending: 0, running: 0, done: 0, failed: 0 },
+      thumbnails: { pending: 0, running: 0, done: 0, failed: 0 }
+    });
+  });
 
 void window.imageSorter.analysis
   .getStatus()
