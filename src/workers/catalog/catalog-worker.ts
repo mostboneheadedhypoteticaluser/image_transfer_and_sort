@@ -237,6 +237,30 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_pet_detection_class
     ON pet_detections(pet_class);
 
+  CREATE TABLE IF NOT EXISTS pet_fused_detections (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    media_id INTEGER NOT NULL REFERENCES media_items(id) ON DELETE CASCADE,
+    fusion_version TEXT NOT NULL,
+    detection_index INTEGER NOT NULL,
+    input_sha256 TEXT NOT NULL,
+    pet_class TEXT NOT NULL CHECK(pet_class IN ('dog','cat')),
+    class_id INTEGER NOT NULL,
+    x REAL NOT NULL,
+    y REAL NOT NULL,
+    width REAL NOT NULL,
+    height REAL NOT NULL,
+    score REAL NOT NULL,
+    agreement_count INTEGER NOT NULL DEFAULT 1,
+    sources_json TEXT NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(media_id, fusion_version, detection_index)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_pet_fused_media
+    ON pet_fused_detections(media_id);
+  CREATE INDEX IF NOT EXISTS idx_pet_fused_class
+    ON pet_fused_detections(pet_class);
+
   CREATE TABLE IF NOT EXISTS persons (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
@@ -595,20 +619,20 @@ function listMedia(sourceId: number, requestedLimit: number) {
       ) AS face_embedding_count,
       (
         SELECT COUNT(*)
-        FROM pet_detections pd
+        FROM pet_fused_detections pd
         WHERE pd.media_id=m.id
           AND pd.input_sha256=m.sha256
       ) AS pet_count,
       (
         SELECT COUNT(*)
-        FROM pet_detections pd
+        FROM pet_fused_detections pd
         WHERE pd.media_id=m.id
           AND pd.input_sha256=m.sha256
           AND pd.pet_class='dog'
       ) AS dog_count,
       (
         SELECT COUNT(*)
-        FROM pet_detections pd
+        FROM pet_fused_detections pd
         WHERE pd.media_id=m.id
           AND pd.input_sha256=m.sha256
           AND pd.pet_class='cat'
@@ -692,20 +716,20 @@ function listRecycleMedia(sourceId: number, requestedLimit: number) {
       ) AS face_embedding_count,
       (
         SELECT COUNT(*)
-        FROM pet_detections pd
+        FROM pet_fused_detections pd
         WHERE pd.media_id=m.id
           AND pd.input_sha256=m.sha256
       ) AS pet_count,
       (
         SELECT COUNT(*)
-        FROM pet_detections pd
+        FROM pet_fused_detections pd
         WHERE pd.media_id=m.id
           AND pd.input_sha256=m.sha256
           AND pd.pet_class='dog'
       ) AS dog_count,
       (
         SELECT COUNT(*)
-        FROM pet_detections pd
+        FROM pet_fused_detections pd
         WHERE pd.media_id=m.id
           AND pd.input_sha256=m.sha256
           AND pd.pet_class='cat'
@@ -1386,7 +1410,9 @@ function enqueueAnalysisJobs(sourceId: number, module = "file-probe-v1") {
     "image-metadata-v1",
     "face-detect-yunet-v1",
     "face-embed-sface-v1",
-    "pet-detect-nanodet-v1"
+    "pet-detect-nanodet-v1",
+    "pet-detect-yolox-v1",
+    "pet-fuse-ensemble-v1"
   ]);
   const imageFilter =
     imageOnlyModules.has(module)
@@ -1511,6 +1537,27 @@ function claimAnalysisJob(module = "file-probe-v1") {
               AND dependency.module='face-detect-yunet-v1'
               AND dependency.status='DONE'
               AND dependency.input_sha256=j.input_sha256
+          )
+        )
+        AND (
+          j.module<>'pet-fuse-ensemble-v1'
+          OR (
+            EXISTS (
+              SELECT 1
+              FROM analysis_jobs dependency
+              WHERE dependency.media_id=j.media_id
+                AND dependency.module='pet-detect-nanodet-v1'
+                AND dependency.status='DONE'
+                AND dependency.input_sha256=j.input_sha256
+            )
+            AND EXISTS (
+              SELECT 1
+              FROM analysis_jobs dependency
+              WHERE dependency.media_id=j.media_id
+                AND dependency.module='pet-detect-yolox-v1'
+                AND dependency.status='DONE'
+                AND dependency.input_sha256=j.input_sha256
+            )
           )
         )
       ORDER BY j.priority ASC, j.id ASC
@@ -1999,6 +2046,8 @@ async function scanSource(sourceId: number): Promise<ScanResult> {
     enqueueAnalysisJobs(sourceId, "face-detect-yunet-v1");
     enqueueAnalysisJobs(sourceId, "face-embed-sface-v1");
     enqueueAnalysisJobs(sourceId, "pet-detect-nanodet-v1");
+    enqueueAnalysisJobs(sourceId, "pet-detect-yolox-v1");
+    enqueueAnalysisJobs(sourceId, "pet-fuse-ensemble-v1");
 
     const result: ScanResult = {
       discovered,
@@ -3609,6 +3658,7 @@ function resetCatalog(): { reset: true } {
       DELETE FROM person_face_exclusions;
       DELETE FROM person_face_assignments;
       DELETE FROM persons;
+      DELETE FROM pet_fused_detections;
       DELETE FROM pet_detections;
       DELETE FROM face_embeddings;
       DELETE FROM face_detections;
