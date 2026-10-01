@@ -12,7 +12,7 @@ Der Analyse-Worker läuft jetzt als **eigener Hintergrundprozess**, wird aber vo
 - Prozesspriorität wird vom Electron-Main-Prozess auf **Below Normal** gesetzt
 - Standard-Parallelität: **1 Analysejob**
 - konfiguriertes CPU-Zielbudget: **50 %**
-- technische Dateiprüfung, EXIF-Metadaten, YuNet-Gesichtsdetektion und SFace-Gesichtsmerkmale laufen bereits modular
+- technische Dateiprüfung, EXIF-Metadaten, YuNet-Gesichtsdetektion, SFace-Gesichtsmerkmale und NanoDet-Hund-/Katzendetektion laufen bereits modular
 - Personen-Embeddings, Haustiere und weitere Analyse-Module werden darauf aufgebaut
 
 Das CPU-Zielbudget ist aktuell eine Steuerungsgröße für die späteren Analysejobs und **keine harte betriebssystemseitige 50-%-CPU-Grenze**. Die wirksamen Schutzmaßnahmen sind bereits aktiv: eigener Prozess, niedrige Prozesspriorität und nur ein gleichzeitiger Analysejob.
@@ -28,6 +28,7 @@ Aktuell unterstützt der Worker:
 - `extract_image_metadata`
 - `detect_faces`
 - `extract_face_embeddings`
+- `detect_pets`
 - `shutdown`
 
 Die externen Python-Abhängigkeiten liegen bewusst in `.ai-venv`. Einrichtung: `npm run setup:ai`.
