@@ -104,3 +104,12 @@ Die Haustierdetektion verwendet jetzt zwei unabhängige OpenCV-DNN-Modelle: **Na
 Nach Abschluss beider Detektoren startet `pet-fuse-ensemble-v1`. Gleichartige Boxen werden ab IoU 0,45 zusammengeführt. Bei Übereinstimmung beider Modelle wird die Box konfidenzgewichtet gemittelt und als Mehrmodell-Fund gespeichert. Einzelmodell-Funde bleiben nur oberhalb einer strengeren Mindestkonfidenz erhalten. Das fusionierte Resultat liegt in `pet_fused_detections` und ist die einzige Haustierquelle für die normale Medienanzeige.
 
 Die Modelle laufen absichtlich nacheinander im bestehenden Hintergrund-Worker statt gleichzeitig CPU-Spitzen zu erzeugen. Der Ensemble-Nutzen entsteht durch die Kombination der Ergebnisse, nicht durch zeitgleiche Ausführung.
+
+
+## Individuelle Hunde-ID
+
+Nach `pet-fuse-ensemble-v1` folgt `pet-embed-dogreid-v1`. Nur fusionierte Fundstellen der Klasse `dog` werden an den Dog-ReID-Embedder gegeben. Das Modell erzeugt L2-normalisierte Merkmalsvektoren, die in `pet_embeddings` gespeichert werden.
+
+Die anschließende Gruppierung `dogreid-centroid-v1` ist bewusst konservativ und erzeugt nur Gruppen mit mindestens zwei ausreichend ähnlichen Hundefundstellen. Unbestätigte Gruppen liegen in `pet_candidates` / `pet_candidate_items`; erst die Nutzerbestätigung erzeugt einen Datensatz in `pets` und feste `pet_assignments`.
+
+Exakte Bilddubletten werden beim Clustering über `SHA-256 + detection_index` nicht mehrfach als unabhängige Evidenz gewichtet. Katzen werden von der Ensemble-Detektion erfasst, aber noch nicht durch dieses hundespezifische ReID-Modell verarbeitet.
