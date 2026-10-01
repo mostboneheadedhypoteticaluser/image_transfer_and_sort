@@ -33,6 +33,11 @@ SFACE_MODEL = os.path.join(
     "models",
     "face_recognition_sface_2021dec.onnx",
 )
+NANODET_MODEL = os.path.join(
+    WORKER_DIR,
+    "models",
+    "object_detection_nanodet_2022nov.onnx",
+)
 
 
 @dataclass
@@ -63,12 +68,18 @@ def snapshot() -> dict:
             "opencv": cv2 is not None,
             "yunetModel": os.path.isfile(YUNET_MODEL),
             "sfaceModel": os.path.isfile(SFACE_MODEL),
+            "nanodetModel": os.path.isfile(NANODET_MODEL),
             "imageMetadata": Image is not None,
             "faceDetection": cv2 is not None and os.path.isfile(YUNET_MODEL),
             "faceEmbeddings": (
                 cv2 is not None
                 and np is not None
                 and os.path.isfile(SFACE_MODEL)
+            ),
+            "petDetection": (
+                cv2 is not None
+                and np is not None
+                and os.path.isfile(NANODET_MODEL)
             ),
         },
     }
@@ -357,6 +368,179 @@ def extract_face_embeddings(file_path: str, faces: list[dict]) -> dict:
     }
 
 
+def nanodet_letterbox(image, target_size: tuple[int, int] = (416, 416)):
+    target_h, target_w = target_size
+    source_h, source_w = image.shape[:2]
+
+    if source_h <= 0 or source_w <= 0:
+        raise RuntimeError("Bild hat ungültige Abmessungen.")
+
+    scale = min(target_w / float(source_w), target_h / float(source_h))
+    new_w = max(1, int(round(source_w * scale)))
+    new_h = max(1, int(round(source_h * scale)))
+
+    resized = cv2.resize(image, (new_w, new_h), interpolation=cv2.INTER_AREA)
+    left = (target_w - new_w) // 2
+    top = (target_h - new_h) // 2
+    right = target_w - new_w - left
+    bottom = target_h - new_h - top
+
+    padded = cv2.copyMakeBorder(
+        resized,
+        top,
+        bottom,
+        left,
+        right,
+        cv2.BORDER_CONSTANT,
+        value=0,
+    )
+
+    return padded, scale, left, top
+
+
+def detect_pets(file_path: str) -> dict:
+    if cv2 is None or np is None:
+        raise RuntimeError(
+            "OpenCV/Numpy fehlt. Einmal 'npm.cmd run setup:ai' ausführen."
+        )
+
+    if not os.path.isfile(NANODET_MODEL):
+        raise RuntimeError(
+            "NanoDet-Modell fehlt. Einmal 'npm.cmd run setup:ai' ausführen."
+        )
+
+    image = cv2.imread(file_path, cv2.IMREAD_COLOR)
+    if image is None:
+        raise RuntimeError("Bild konnte von OpenCV nicht gelesen werden.")
+
+    original_height, original_width = image.shape[:2]
+    rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+    work, scale, left, top = nanodet_letterbox(rgb)
+
+    net = cv2.dnn.readNet(NANODET_MODEL)
+
+    work_float = work.astype(np.float32)
+    mean = np.array([103.53, 116.28, 123.675], dtype=np.float32).reshape(1, 1, 3)
+    std = np.array([57.375, 57.12, 58.395], dtype=np.float32).reshape(1, 1, 3)
+    normalized = (work_float - mean) / std
+
+    blob = cv2.dnn.blobFromImage(normalized)
+    net.setInput(blob)
+    outputs = net.forward(net.getUnconnectedOutLayersNames())
+
+    strides = (8, 16, 32, 64)
+    reg_max = 7
+    project = np.arange(reg_max + 1, dtype=np.float32)
+    boxes: list[list[float]] = []
+    scores: list[float] = []
+    class_ids: list[int] = []
+
+    for stride, cls_score, bbox_pred in zip(
+        strides,
+        outputs[::2],
+        outputs[1::2],
+    ):
+        if cls_score.ndim == 3:
+            cls_score = cls_score.squeeze(axis=0)
+        if bbox_pred.ndim == 3:
+            bbox_pred = bbox_pred.squeeze(axis=0)
+
+        feat_h = 416 // stride
+        feat_w = 416 // stride
+        shift_x = np.arange(0, feat_w, dtype=np.float32) * stride
+        shift_y = np.arange(0, feat_h, dtype=np.float32) * stride
+        xv, yv = np.meshgrid(shift_x, shift_y)
+        anchors = np.column_stack((
+            xv.reshape(-1) + 0.5 * (stride - 1),
+            yv.reshape(-1) + 0.5 * (stride - 1),
+        ))
+
+        exp_values = np.exp(bbox_pred.reshape(-1, reg_max + 1))
+        probabilities = exp_values / np.sum(exp_values, axis=1, keepdims=True)
+        distances = np.dot(probabilities, project).reshape(-1, 4) * stride
+
+        max_scores = cls_score.max(axis=1)
+        if cls_score.shape[0] > 1000:
+            top_indices = max_scores.argsort()[::-1][:1000]
+            anchors = anchors[top_indices]
+            distances = distances[top_indices]
+            cls_score = cls_score[top_indices]
+
+        classes = np.argmax(cls_score, axis=1)
+        confidences = np.max(cls_score, axis=1)
+
+        for anchor, distance, class_id, confidence in zip(
+            anchors,
+            distances,
+            classes,
+            confidences,
+        ):
+            class_id = int(class_id)
+            confidence = float(confidence)
+
+            # COCO: cat=15, dog=16.
+            if class_id not in (15, 16) or confidence < 0.38:
+                continue
+
+            x1 = max(0.0, float(anchor[0] - distance[0]))
+            y1 = max(0.0, float(anchor[1] - distance[1]))
+            x2 = min(416.0, float(anchor[0] + distance[2]))
+            y2 = min(416.0, float(anchor[1] + distance[3]))
+
+            boxes.append([x1, y1, max(0.0, x2 - x1), max(0.0, y2 - y1)])
+            scores.append(confidence)
+            class_ids.append(class_id)
+
+    pets: list[dict] = []
+
+    if boxes:
+        indices = cv2.dnn.NMSBoxes(boxes, scores, 0.38, 0.60)
+
+        for raw_index in indices:
+            index = int(raw_index)
+            x, y, width, height = boxes[index]
+
+            original_x = max(0.0, (x - left) / scale)
+            original_y = max(0.0, (y - top) / scale)
+            original_width_box = max(0.0, width / scale)
+            original_height_box = max(0.0, height / scale)
+
+            original_x = min(original_x, float(original_width))
+            original_y = min(original_y, float(original_height))
+            original_width_box = min(
+                original_width_box,
+                float(original_width) - original_x,
+            )
+            original_height_box = min(
+                original_height_box,
+                float(original_height) - original_y,
+            )
+
+            if original_width_box <= 1.0 or original_height_box <= 1.0:
+                continue
+
+            class_id = class_ids[index]
+            pets.append({
+                "class": "cat" if class_id == 15 else "dog",
+                "classId": class_id,
+                "score": float(scores[index]),
+                "x": original_x,
+                "y": original_y,
+                "width": original_width_box,
+                "height": original_height_box,
+            })
+
+    pets.sort(key=lambda pet: float(pet["score"]), reverse=True)
+
+    return {
+        "module": "pet-detect-nanodet-v1",
+        "detector": "NanoDet 2022nov",
+        "imageWidth": int(original_width),
+        "imageHeight": int(original_height),
+        "pets": pets,
+    }
+
+
 def cluster_face_embeddings(
     faces: list[dict],
     cannot_links: list[dict] | None = None,
@@ -607,6 +791,12 @@ def handle(message: dict) -> bool:
         file_path = require_file(payload)
         verify_expected_size(file_path, payload)
         respond(request_id, result=detect_faces(file_path))
+        return True
+
+    if method == "detect_pets":
+        file_path = require_file(payload)
+        verify_expected_size(file_path, payload)
+        respond(request_id, result=detect_pets(file_path))
         return True
 
     if method == "extract_face_embeddings":
