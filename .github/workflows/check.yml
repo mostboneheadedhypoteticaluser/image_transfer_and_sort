@@ -26,5 +26,11 @@ jobs:
       - name: Type check
         run: npm run check
 
+      - name: Check AI setup script
+        run: node --check scripts/setup-ai.mjs
+
+      - name: Check Python worker syntax
+        run: python3 -m py_compile workers/python-ai/worker.py
+
       - name: Build
         run: npm run build
