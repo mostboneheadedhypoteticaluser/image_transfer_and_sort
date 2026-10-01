@@ -214,6 +214,52 @@ db.exec(`
 
   CREATE INDEX IF NOT EXISTS idx_face_embedding_media
     ON face_embeddings(media_id);
+
+  CREATE TABLE IF NOT EXISTS persons (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE TABLE IF NOT EXISTS person_face_assignments (
+    face_detection_id INTEGER PRIMARY KEY REFERENCES face_detections(id) ON DELETE CASCADE,
+    person_id INTEGER NOT NULL REFERENCES persons(id) ON DELETE CASCADE,
+    assignment_source TEXT NOT NULL DEFAULT 'CONFIRMED',
+    confidence REAL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_person_assignment_person
+    ON person_face_assignments(person_id);
+
+  CREATE TABLE IF NOT EXISTS person_candidates (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    source_id INTEGER NOT NULL REFERENCES media_sources(id) ON DELETE CASCADE,
+    algorithm_version TEXT NOT NULL,
+    representative_face_id INTEGER REFERENCES face_detections(id) ON DELETE SET NULL,
+    average_similarity REAL NOT NULL,
+    min_similarity REAL NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_person_candidate_source
+    ON person_candidates(source_id);
+
+  CREATE TABLE IF NOT EXISTS person_candidate_faces (
+    candidate_id INTEGER NOT NULL REFERENCES person_candidates(id) ON DELETE CASCADE,
+    face_detection_id INTEGER NOT NULL REFERENCES face_detections(id) ON DELETE CASCADE,
+    similarity REAL NOT NULL,
+    PRIMARY KEY(candidate_id, face_detection_id)
+  );
+
+  CREATE TABLE IF NOT EXISTS person_cluster_runs (
+    source_id INTEGER PRIMARY KEY REFERENCES media_sources(id) ON DELETE CASCADE,
+    embedding_revision TEXT NOT NULL,
+    algorithm_version TEXT NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
 `);
 
 function tableHasColumn(table: string, column: string): boolean {
@@ -444,6 +490,18 @@ function getStats(sourceId: number) {
     )
   `).get(sourceId);
 
+  const personStats = db.prepare(`
+    SELECT
+      (SELECT COUNT(*) FROM person_candidates WHERE source_id=?) AS candidate_count,
+      (
+        SELECT COUNT(DISTINCT pfa.person_id)
+        FROM person_face_assignments pfa
+        JOIN face_detections fd ON fd.id=pfa.face_detection_id
+        JOIN media_items m ON m.id=fd.media_id
+        WHERE m.source_id=?
+      ) AS person_count
+  `).get(sourceId, sourceId);
+
   const lastScan = db.prepare(`
     SELECT finished_at
     FROM scans
@@ -459,6 +517,8 @@ function getStats(sourceId: number) {
     recycleBin: Number(row?.recycle_bin ?? 0),
     duplicateGroups: Number(duplicateStats?.duplicate_groups ?? 0),
     duplicateFiles: Number(duplicateStats?.duplicate_files ?? 0),
+    personCandidates: Number(personStats?.candidate_count ?? 0),
+    persons: Number(personStats?.person_count ?? 0),
     lastScan: lastScan?.finished_at ? String(lastScan.finished_at) : null
   };
 }
