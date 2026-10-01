@@ -1648,6 +1648,26 @@ function failAnalysisJob(jobId: number, errorMessage: string) {
       `).run(Number(job.media_id));
     }
 
+    if (
+      job &&
+      (
+        String(job.module) === "pet-detect-nanodet-v1" ||
+        String(job.module) === "pet-detect-yolox-v1"
+      )
+    ) {
+      db.prepare(`
+        UPDATE analysis_jobs
+        SET
+          status='FAILED',
+          error_message='Mindestens ein abhängiger Haustierdetektor ist fehlgeschlagen.',
+          finished_at=CURRENT_TIMESTAMP,
+          updated_at=CURRENT_TIMESTAMP
+        WHERE media_id=?
+          AND module='pet-fuse-ensemble-v1'
+          AND status<>'DONE'
+      `).run(Number(job.media_id));
+    }
+
     db.exec("COMMIT");
   } catch (error) {
     db.exec("ROLLBACK");
@@ -2368,9 +2388,20 @@ function completePetDetectionJob(jobId: number, result: unknown) {
   const detectorVersion =
     typeof value.detector === "string" && value.detector.trim()
       ? value.detector.trim()
-      : "NanoDet 2022nov";
+      : "Unbekannter Haustierdetektor";
 
-  const job = jobForModule(jobId, "pet-detect-nanodet-v1");
+  const module =
+    value.module === "pet-detect-yolox-v1"
+      ? "pet-detect-yolox-v1"
+      : value.module === "pet-detect-nanodet-v1"
+        ? "pet-detect-nanodet-v1"
+        : null;
+
+  if (!module) {
+    throw new Error("Haustierdetektions-Ergebnis enthält kein bekanntes Modul.");
+  }
+
+  const job = jobForModule(jobId, module);
   const mediaId = Number(job.media_id);
   const inputSha256 = String(job.input_sha256 ?? "");
 
@@ -2456,10 +2487,171 @@ function completePetDetectionJob(jobId: number, result: unknown) {
     `).run(mediaId, detectorVersion, written);
 
     db.prepare(`
-      DELETE FROM pet_detections
+      UPDATE analysis_jobs
+      SET
+        status='DONE',
+        result_json=?,
+        error_message=NULL,
+        finished_at=CURRENT_TIMESTAMP,
+        updated_at=CURRENT_TIMESTAMP
+      WHERE id=?
+    `).run(
+      JSON.stringify({ detector: detectorVersion, petCount: written }),
+      jobId
+    );
+
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+
+  return { completed: true, petCount: written };
+}
+
+function getPetDetectionsForFusion(
+  mediaId: number,
+  inputSha256: string
+) {
+  return db.prepare(`
+    SELECT
+      detector_version,
+      pet_class,
+      class_id,
+      x,
+      y,
+      width,
+      height,
+      score
+    FROM pet_detections
+    WHERE media_id=?
+      AND input_sha256=?
+      AND detector_version IN ('NanoDet 2022nov', 'YOLOX-S 2022nov')
+    ORDER BY detector_version, detection_index
+  `).all(mediaId, inputSha256).map((row) => ({
+    detector: String(row.detector_version),
+    petClass: String(row.pet_class),
+    classId: Number(row.class_id),
+    x: Number(row.x),
+    y: Number(row.y),
+    width: Number(row.width),
+    height: Number(row.height),
+    score: Number(row.score)
+  }));
+}
+
+function completePetFusionJob(jobId: number, result: unknown) {
+  if (!result || typeof result !== "object") {
+    throw new Error("Haustierfusions-Ergebnis ist ungültig.");
+  }
+
+  const value = result as Record<string, unknown>;
+  const rawPets = Array.isArray(value.pets) ? value.pets : [];
+  const fusionVersion =
+    typeof value.fusion === "string" && value.fusion.trim()
+      ? value.fusion.trim()
+      : "NanoDet+YOLOX-S weighted-box-v1";
+
+  const job = jobForModule(jobId, "pet-fuse-ensemble-v1");
+  const mediaId = Number(job.media_id);
+  const inputSha256 = String(job.input_sha256 ?? "");
+
+  const insert = db.prepare(`
+    INSERT INTO pet_fused_detections(
+      media_id,
+      fusion_version,
+      detection_index,
+      input_sha256,
+      pet_class,
+      class_id,
+      x,
+      y,
+      width,
+      height,
+      score,
+      agreement_count,
+      sources_json,
+      updated_at
+    )
+    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)
+    ON CONFLICT(media_id, fusion_version, detection_index) DO UPDATE SET
+      input_sha256=excluded.input_sha256,
+      pet_class=excluded.pet_class,
+      class_id=excluded.class_id,
+      x=excluded.x,
+      y=excluded.y,
+      width=excluded.width,
+      height=excluded.height,
+      score=excluded.score,
+      agreement_count=excluded.agreement_count,
+      sources_json=excluded.sources_json,
+      updated_at=CURRENT_TIMESTAMP
+  `);
+
+  let written = 0;
+
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    for (const rawPet of rawPets) {
+      if (!rawPet || typeof rawPet !== "object") continue;
+
+      const item = rawPet as Record<string, unknown>;
+      const petClass =
+        item.class === "dog" || item.class === "cat"
+          ? String(item.class)
+          : null;
+      if (!petClass) continue;
+
+      const classId = Number(item.classId);
+      const x = Number(item.x);
+      const y = Number(item.y);
+      const width = Number(item.width);
+      const height = Number(item.height);
+      const score = Number(item.score);
+      const agreementCount = Math.max(1, Math.trunc(Number(item.agreementCount)));
+      const sources = Array.isArray(item.sources)
+        ? item.sources.filter((source) => typeof source === "string")
+        : [];
+
+      if (
+        !Number.isInteger(classId) ||
+        ![x, y, width, height, score].every(Number.isFinite) ||
+        width <= 0 ||
+        height <= 0
+      ) {
+        continue;
+      }
+
+      insert.run(
+        mediaId,
+        fusionVersion,
+        written,
+        inputSha256,
+        petClass,
+        classId,
+        x,
+        y,
+        width,
+        height,
+        score,
+        Number.isFinite(agreementCount) ? agreementCount : 1,
+        JSON.stringify(sources)
+      );
+      written += 1;
+    }
+
+    db.prepare(`
+      DELETE FROM pet_fused_detections
       WHERE media_id=?
-        AND detector_version<>?
-    `).run(mediaId, detectorVersion);
+        AND fusion_version=?
+        AND detection_index>=?
+    `).run(mediaId, fusionVersion, written);
+
+    db.prepare(`
+      DELETE FROM pet_fused_detections
+      WHERE media_id=?
+        AND fusion_version<>?
+    `).run(mediaId, fusionVersion);
 
     db.prepare(`
       UPDATE analysis_jobs
@@ -2471,7 +2663,7 @@ function completePetDetectionJob(jobId: number, result: unknown) {
         updated_at=CURRENT_TIMESTAMP
       WHERE id=?
     `).run(
-      JSON.stringify({ detector: detectorVersion, petCount: written }),
+      JSON.stringify({ fusion: fusionVersion, petCount: written }),
       jobId
     );
 
@@ -3669,7 +3861,7 @@ function resetCatalog(): { reset: true } {
       DELETE FROM scans;
       DELETE FROM media_sources;
       DELETE FROM sqlite_sequence
-      WHERE name IN ('analysis_jobs', 'person_candidate_faces', 'person_candidates', 'person_cluster_runs', 'person_face_assignments', 'persons', 'pet_detections', 'face_embeddings', 'face_detections', 'media_image_metadata', 'media_thumbnails', 'media_items', 'media_directories', 'scans', 'media_sources');
+      WHERE name IN ('analysis_jobs', 'person_candidate_faces', 'person_candidates', 'person_cluster_runs', 'person_face_assignments', 'persons', 'pet_fused_detections', 'pet_detections', 'face_embeddings', 'face_detections', 'media_image_metadata', 'media_thumbnails', 'media_items', 'media_directories', 'scans', 'media_sources');
     `);
     db.exec("COMMIT");
   } catch (error) {
@@ -3744,6 +3936,16 @@ async function dispatch(method: CatalogMethod, payload: Record<string, unknown> 
       );
     case "completePetDetectionJob":
       return completePetDetectionJob(
+        asNumber(payload.jobId, "jobId"),
+        payload.result
+      );
+    case "getPetDetectionsForFusion":
+      return getPetDetectionsForFusion(
+        asNumber(payload.mediaId, "mediaId"),
+        typeof payload.inputSha256 === "string" ? payload.inputSha256 : ""
+      );
+    case "completePetFusionJob":
+      return completePetFusionJob(
         asNumber(payload.jobId, "jobId"),
         payload.result
       );
