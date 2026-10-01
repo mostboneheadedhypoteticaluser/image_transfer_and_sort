@@ -1160,3 +1160,54 @@ td .badge + .badge {
   background: #fff6e8;
   color: #8a5a16;
 }
+
+
+.pet-crop {
+  background: #edf1f3;
+}
+
+.pet-crop img {
+  object-fit: cover;
+}
+
+.pet-confirmed-card {
+  display: grid;
+  grid-template-columns: 76px minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  min-height: 92px;
+  padding: 9px;
+  border: 1px solid #e3e7eb;
+  border-radius: 10px;
+  background: #fff;
+}
+
+.pet-confirmed-card img {
+  width: 76px;
+  height: 76px;
+  border-radius: 8px;
+  object-fit: cover;
+  background: #e9edf0;
+}
+
+.pet-confirmed-card div {
+  min-width: 0;
+}
+
+.pet-confirmed-card strong,
+.pet-confirmed-card small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pet-confirmed-card strong {
+  font-size: 14px;
+}
+
+.pet-confirmed-card small {
+  margin-top: 4px;
+  color: #7a8490;
+  font-size: 10px;
+}
