@@ -144,11 +144,19 @@ if (!existsSync(venvPython())) {
   run(python.command, [...python.args, "-m", "venv", venv]);
 }
 
-console.log("Aktualisiere pip …");
-run(venvPython(), ["-m", "pip", "install", "--upgrade", "pip"]);
+console.log("Prüfe pip …");
+run(venvPython(), ["-m", "pip", "--version"]);
 
-console.log("Installiere AI-Abhängigkeiten …");
-run(venvPython(), ["-m", "pip", "install", "-r", requirements]);
+console.log("Installiere/prüfe AI-Abhängigkeiten …");
+run(venvPython(), [
+  "-m",
+  "pip",
+  "install",
+  "--disable-pip-version-check",
+  "--no-input",
+  "-r",
+  requirements
+]);
 
 for (const model of models) {
   await ensureModel(model);
