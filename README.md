@@ -18,10 +18,12 @@ Der erste Schritt macht bewusst nur:
 
 - **Electron + TypeScript:** Oberfläche
 - **Catalog Worker:** eigener Utility-Prozess für Dateiscan, Hashing und SQLite
-- **Python-AI-Worker:** bereits als getrennte Schnittstelle vorbereitet, aber noch nicht für KI-Erkennung aktiviert
+- **Python-AI-Worker:** startet bereits automatisch als eigener Hintergrundprozess; die eigentlichen KI-Modelle für Personen/Haustiere sind noch nicht angeschlossen
 - **SQLite:** wird ausschließlich vom Catalog Worker direkt beschrieben
 
 Dadurch können Scanner und spätere KI unter Last laufen, ohne die Renderer-Oberfläche zu blockieren.
+
+Der Analyse-Worker läuft mit niedriger Prozesspriorität, standardmäßig nur einem parallelen Job und einem konfigurierten CPU-Zielbudget von 50 %. Das Zielbudget ist keine harte Betriebssystemgrenze.
 
 Details: `docs/architecture.md`
 
