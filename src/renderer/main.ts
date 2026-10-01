@@ -352,12 +352,18 @@ function renderRows(rows: MediaRecord[], emptyText = "Noch keine Medien katalogi
     }
 
     if (row.availability === "AVAILABLE" && row.petCount > 0) {
+      const ensembleTitle =
+        `Ensemble-Fusion: ${row.petMultiModelCount} ` +
+        `${row.petMultiModelCount === 1 ? "Fundstelle von beiden Modellen" : "Fundstellen von beiden Modellen"}; ` +
+        `${row.petSingleModelCount} ` +
+        `${row.petSingleModelCount === 1 ? "Fundstelle nur von einem Modell" : "Fundstellen nur von einem Modell"}.`;
+
       if (row.dogCount > 0) {
         const dogBadge = document.createElement("span");
         dogBadge.className = "badge pet";
         dogBadge.textContent =
           `${row.dogCount} ${row.dogCount === 1 ? "Hund" : "Hunde"}`;
-        dogBadge.title = "Aus NanoDet und YOLOX-S fusionierte Hundeerkennung";
+        dogBadge.title = ensembleTitle;
         stateCell.appendChild(dogBadge);
       }
 
@@ -366,9 +372,21 @@ function renderRows(rows: MediaRecord[], emptyText = "Noch keine Medien katalogi
         catBadge.className = "badge pet";
         catBadge.textContent =
           `${row.catCount} ${row.catCount === 1 ? "Katze" : "Katzen"}`;
-        catBadge.title = "Aus NanoDet und YOLOX-S fusionierte Katzenerkennung";
+        catBadge.title = ensembleTitle;
         stateCell.appendChild(catBadge);
       }
+
+      const ensembleBadge = document.createElement("span");
+      ensembleBadge.className =
+        row.petSingleModelCount > 0
+          ? "badge ensemble mixed"
+          : "badge ensemble";
+      ensembleBadge.textContent =
+        row.petSingleModelCount > 0
+          ? `Ensemble ${row.petMultiModelCount}/${row.petCount}`
+          : "Ensemble bestätigt";
+      ensembleBadge.title = ensembleTitle;
+      stateCell.appendChild(ensembleBadge);
     }
 
     const actionCell = document.createElement("td");
