@@ -5,6 +5,7 @@ import type {
   CatalogStats,
   MediaRecord,
   RestoreResult,
+  ResetCatalogResult,
   ScanResult,
   SourceRecord
 } from "../shared/protocol";
@@ -40,7 +41,7 @@ function createWindow(): BrowserWindow {
 function registerIpc(): void {
   ipcMain.handle("dialog:pickSource", async () => {
     const result = await dialog.showOpenDialog(windowRef!, {
-      title: "Festplatte oder Bildordner auswählen",
+      title: "Festplatte oder Medienordner auswählen",
       properties: ["openDirectory"]
     });
     return result.canceled ? null : result.filePaths[0] ?? null;
@@ -68,6 +69,10 @@ function registerIpc(): void {
 
   ipcMain.handle("catalog:restoreMedia", (_event, mediaId: number) =>
     catalog!.request<RestoreResult>("restoreMedia", { mediaId })
+  );
+
+  ipcMain.handle("catalog:resetCatalog", () =>
+    catalog!.request<ResetCatalogResult>("resetCatalog")
   );
 }
 
