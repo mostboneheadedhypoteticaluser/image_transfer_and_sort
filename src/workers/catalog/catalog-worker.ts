@@ -256,7 +256,9 @@ async function scanSource(sourceId: number): Promise<ScanResult> {
   `);
 
   try {
-    for await (const file of walkImages(root)) {
+    for await (const file of walkImages(root, () => {
+      errors += 1;
+    })) {
       discovered += 1;
 
       try {
@@ -300,19 +302,28 @@ async function scanSource(sourceId: number): Promise<ScanResult> {
       }
     }
 
-    const missingRows = db.prepare(`
-      SELECT id
-      FROM media_items
-      WHERE source_id=? AND scan_token<>? AND availability='AVAILABLE'
-    `).all(sourceId, token);
+    let missing = 0;
+    if (errors === 0) {
+      const missingRows = db.prepare(`
+        SELECT id
+        FROM media_items
+        WHERE source_id=? AND scan_token<>? AND availability='AVAILABLE'
+      `).all(sourceId, token);
 
-    db.prepare(`
-      UPDATE media_items
-      SET availability='MISSING'
-      WHERE source_id=? AND scan_token<>? AND availability='AVAILABLE'
-    `).run(sourceId, token);
+      db.prepare(`
+        UPDATE media_items
+        SET availability='MISSING'
+        WHERE source_id=? AND scan_token<>? AND availability='AVAILABLE'
+      `).run(sourceId, token);
 
-    const missing = missingRows.length;
+      missing = missingRows.length;
+    } else {
+      progress(
+        sourceId,
+        discovered,
+        `${errors.toLocaleString("de-DE")} Lesefehler – Fehlend-Abgleich aus Sicherheitsgründen übersprungen.`
+      );
+    }
     const result: ScanResult = { discovered, added, changed, unchanged, missing, errors };
 
     db.prepare(`
