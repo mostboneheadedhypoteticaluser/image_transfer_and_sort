@@ -2,6 +2,7 @@ import path from "node:path";
 import { app, BrowserWindow, dialog, ipcMain } from "electron";
 import { CatalogService } from "./catalog-service";
 import { AnalysisService } from "./analysis-service";
+import { AnalysisCoordinator } from "./analysis-coordinator";
 import type {
   AnalysisWorkerStatus,
   CatalogStats,
@@ -16,6 +17,7 @@ import type {
 let windowRef: BrowserWindow | null = null;
 let catalog: CatalogService | null = null;
 let analysis: AnalysisService | null = null;
+let analysisCoordinator: AnalysisCoordinator | null = null;
 let isQuitting = false;
 
 function sendToRenderer(channel: string, payload: unknown): void {
@@ -129,11 +131,17 @@ app.whenReady().then(() => {
     sendToRenderer("analysis:status", status);
   });
 
+  analysisCoordinator = new AnalysisCoordinator(catalog, analysis);
+
   catalog.start();
   registerIpc();
 
   windowRef = createWindow();
-  void analysis.start();
+  void analysis.start().then(() => {
+    if (analysis?.getStatus().state === "READY") {
+      void analysisCoordinator?.start();
+    }
+  });
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) windowRef = createWindow();
@@ -146,6 +154,7 @@ app.on("window-all-closed", () => {
 
 app.on("before-quit", () => {
   isQuitting = true;
+  analysisCoordinator?.stop();
   analysis?.stop();
   catalog?.stop();
 });
