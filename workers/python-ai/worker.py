@@ -38,6 +38,11 @@ NANODET_MODEL = os.path.join(
     "models",
     "object_detection_nanodet_2022nov.onnx",
 )
+YOLOX_MODEL = os.path.join(
+    WORKER_DIR,
+    "models",
+    "object_detection_yolox_2022nov.onnx",
+)
 
 
 @dataclass
@@ -69,6 +74,7 @@ def snapshot() -> dict:
             "yunetModel": os.path.isfile(YUNET_MODEL),
             "sfaceModel": os.path.isfile(SFACE_MODEL),
             "nanodetModel": os.path.isfile(NANODET_MODEL),
+            "yoloxModel": os.path.isfile(YOLOX_MODEL),
             "imageMetadata": Image is not None,
             "faceDetection": cv2 is not None and os.path.isfile(YUNET_MODEL),
             "faceEmbeddings": (
@@ -80,6 +86,7 @@ def snapshot() -> dict:
                 cv2 is not None
                 and np is not None
                 and os.path.isfile(NANODET_MODEL)
+                and os.path.isfile(YOLOX_MODEL)
             ),
         },
     }
@@ -541,6 +548,326 @@ def detect_pets(file_path: str) -> dict:
     }
 
 
+def yolox_letterbox(image, target_size: tuple[int, int] = (640, 640)):
+    target_h, target_w = target_size
+    source_h, source_w = image.shape[:2]
+
+    if source_h <= 0 or source_w <= 0:
+        raise RuntimeError("Bild hat ungültige Abmessungen.")
+
+    ratio = min(target_h / float(source_h), target_w / float(source_w))
+    resized_w = max(1, int(source_w * ratio))
+    resized_h = max(1, int(source_h * ratio))
+
+    resized = cv2.resize(
+        image,
+        (resized_w, resized_h),
+        interpolation=cv2.INTER_LINEAR,
+    ).astype(np.float32)
+
+    padded = np.ones((target_h, target_w, 3), dtype=np.float32) * 114.0
+    padded[:resized_h, :resized_w] = resized
+
+    return padded, ratio
+
+
+def yolox_grids_and_strides():
+    grids = []
+    expanded_strides = []
+
+    for stride in (8, 16, 32):
+        height = 640 // stride
+        width = 640 // stride
+        xv, yv = np.meshgrid(np.arange(width), np.arange(height))
+        grid = np.stack((xv, yv), axis=2).reshape(1, -1, 2)
+        grids.append(grid)
+        expanded_strides.append(
+            np.full((1, grid.shape[1], 1), stride, dtype=np.float32)
+        )
+
+    return (
+        np.concatenate(grids, axis=1).astype(np.float32),
+        np.concatenate(expanded_strides, axis=1).astype(np.float32),
+    )
+
+
+def detect_pets_yolox(file_path: str) -> dict:
+    if cv2 is None or np is None:
+        raise RuntimeError(
+            "OpenCV/Numpy fehlt. Einmal 'npm.cmd run setup:ai' ausführen."
+        )
+
+    if not os.path.isfile(YOLOX_MODEL):
+        raise RuntimeError(
+            "YOLOX-S-Modell fehlt. Einmal 'npm.cmd run setup:ai' ausführen."
+        )
+
+    image = cv2.imread(file_path, cv2.IMREAD_COLOR)
+    if image is None:
+        raise RuntimeError("Bild konnte von OpenCV nicht gelesen werden.")
+
+    original_height, original_width = image.shape[:2]
+    rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+    work, ratio = yolox_letterbox(rgb)
+
+    blob = np.transpose(work, (2, 0, 1))[np.newaxis, :, :, :].astype(np.float32)
+
+    net = cv2.dnn.readNet(YOLOX_MODEL)
+    net.setInput(blob)
+    outputs = net.forward(net.getUnconnectedOutLayersNames())
+
+    if not outputs:
+        raise RuntimeError("YOLOX-S hat keine Ausgabedaten geliefert.")
+
+    raw = outputs[0]
+    if raw.ndim == 3:
+        detections = raw[0].copy()
+    elif raw.ndim == 2:
+        detections = raw.copy()
+    else:
+        raise RuntimeError(f"Unerwartete YOLOX-S-Ausgabeform: {raw.shape}")
+
+    grids, expanded_strides = yolox_grids_and_strides()
+    grid = grids[0]
+    strides = expanded_strides[0]
+
+    if detections.shape[0] != grid.shape[0]:
+        raise RuntimeError(
+            f"YOLOX-S-Ausgabe passt nicht zum 640x640-Raster: "
+            f"{detections.shape[0]} statt {grid.shape[0]}."
+        )
+
+    detections[:, 0:2] = (detections[:, 0:2] + grid) * strides
+    detections[:, 2:4] = np.exp(detections[:, 2:4]) * strides
+
+    boxes_xywh = np.empty_like(detections[:, 0:4])
+    boxes_xywh[:, 0] = detections[:, 0] - detections[:, 2] / 2.0
+    boxes_xywh[:, 1] = detections[:, 1] - detections[:, 3] / 2.0
+    boxes_xywh[:, 2] = detections[:, 2]
+    boxes_xywh[:, 3] = detections[:, 3]
+
+    class_scores = detections[:, 4:5] * detections[:, 5:]
+    pet_candidates: list[dict] = []
+
+    for class_id, pet_class in ((15, "cat"), (16, "dog")):
+        scores = class_scores[:, class_id]
+        indices = np.where(scores >= 0.35)[0]
+        if indices.size == 0:
+            continue
+
+        boxes = [boxes_xywh[index].tolist() for index in indices]
+        confidences = [float(scores[index]) for index in indices]
+
+        keep = cv2.dnn.NMSBoxes(
+            boxes,
+            confidences,
+            0.35,
+            0.50,
+        )
+
+        for raw_index in keep:
+            local_index = int(raw_index)
+            source_index = int(indices[local_index])
+            x, y, width, height = boxes_xywh[source_index]
+
+            original_x = max(0.0, float(x) / ratio)
+            original_y = max(0.0, float(y) / ratio)
+            original_width_box = max(0.0, float(width) / ratio)
+            original_height_box = max(0.0, float(height) / ratio)
+
+            original_x = min(original_x, float(original_width))
+            original_y = min(original_y, float(original_height))
+            original_width_box = min(
+                original_width_box,
+                float(original_width) - original_x,
+            )
+            original_height_box = min(
+                original_height_box,
+                float(original_height) - original_y,
+            )
+
+            if original_width_box <= 1.0 or original_height_box <= 1.0:
+                continue
+
+            pet_candidates.append({
+                "class": pet_class,
+                "classId": class_id,
+                "score": float(scores[source_index]),
+                "x": original_x,
+                "y": original_y,
+                "width": original_width_box,
+                "height": original_height_box,
+            })
+
+    pet_candidates.sort(key=lambda pet: float(pet["score"]), reverse=True)
+
+    return {
+        "module": "pet-detect-yolox-v1",
+        "detector": "YOLOX-S 2022nov",
+        "imageWidth": int(original_width),
+        "imageHeight": int(original_height),
+        "pets": pet_candidates,
+    }
+
+
+def box_iou(a: dict, b: dict) -> float:
+    ax1 = float(a["x"])
+    ay1 = float(a["y"])
+    ax2 = ax1 + float(a["width"])
+    ay2 = ay1 + float(a["height"])
+
+    bx1 = float(b["x"])
+    by1 = float(b["y"])
+    bx2 = bx1 + float(b["width"])
+    by2 = by1 + float(b["height"])
+
+    ix1 = max(ax1, bx1)
+    iy1 = max(ay1, by1)
+    ix2 = min(ax2, bx2)
+    iy2 = min(ay2, by2)
+
+    intersection = max(0.0, ix2 - ix1) * max(0.0, iy2 - iy1)
+    union = (
+        max(0.0, ax2 - ax1) * max(0.0, ay2 - ay1)
+        + max(0.0, bx2 - bx1) * max(0.0, by2 - by1)
+        - intersection
+    )
+
+    return intersection / union if union > 0.0 else 0.0
+
+
+def fuse_pet_detections(detections: list[dict]) -> dict:
+    cleaned: list[dict] = []
+
+    for raw in detections:
+        if not isinstance(raw, dict):
+            continue
+
+        pet_class = raw.get("petClass")
+        detector = str(raw.get("detector", "")).strip()
+        score = float(raw.get("score", 0.0))
+
+        if pet_class not in ("dog", "cat") or not detector:
+            continue
+
+        item = {
+            "petClass": pet_class,
+            "classId": 16 if pet_class == "dog" else 15,
+            "detector": detector,
+            "score": score,
+            "x": float(raw.get("x", 0.0)),
+            "y": float(raw.get("y", 0.0)),
+            "width": float(raw.get("width", 0.0)),
+            "height": float(raw.get("height", 0.0)),
+        }
+
+        if (
+            item["width"] <= 1.0
+            or item["height"] <= 1.0
+            or not math.isfinite(item["score"])
+        ):
+            continue
+
+        cleaned.append(item)
+
+    cleaned.sort(key=lambda item: float(item["score"]), reverse=True)
+    groups: list[list[dict]] = []
+
+    for item in cleaned:
+        best_group = None
+        best_iou = 0.0
+
+        for group in groups:
+            if any(
+                str(member["detector"]) == str(item["detector"])
+                for member in group
+            ):
+                continue
+
+            if str(group[0]["petClass"]) != str(item["petClass"]):
+                continue
+
+            weights = np.array(
+                [max(0.01, float(member["score"])) for member in group],
+                dtype=np.float32,
+            )
+            centroid = {
+                key: float(np.average(
+                    [float(member[key]) for member in group],
+                    weights=weights,
+                ))
+                for key in ("x", "y", "width", "height")
+            }
+
+            overlap = box_iou(item, centroid)
+            if overlap >= 0.45 and overlap > best_iou:
+                best_iou = overlap
+                best_group = group
+
+        if best_group is None:
+            groups.append([item])
+        else:
+            best_group.append(item)
+
+    fused: list[dict] = []
+
+    for group in groups:
+        sources = sorted({str(member["detector"]) for member in group})
+        scores = [float(member["score"]) for member in group]
+        agreement_count = len(sources)
+
+        if agreement_count == 1:
+            detector = sources[0]
+            minimum = 0.45 if detector.startswith("YOLOX") else 0.50
+            if max(scores) < minimum:
+                continue
+
+        weights = np.array(
+            [max(0.01, score) for score in scores],
+            dtype=np.float32,
+        )
+
+        box = {
+            key: float(np.average(
+                [float(member[key]) for member in group],
+                weights=weights,
+            ))
+            for key in ("x", "y", "width", "height")
+        }
+
+        best_score = max(scores)
+        fused_score = (
+            min(0.99, best_score + 0.08 * (1.0 - best_score))
+            if agreement_count >= 2
+            else best_score
+        )
+
+        fused.append({
+            "class": str(group[0]["petClass"]),
+            "classId": int(group[0]["classId"]),
+            "score": float(fused_score),
+            "x": box["x"],
+            "y": box["y"],
+            "width": box["width"],
+            "height": box["height"],
+            "agreementCount": agreement_count,
+            "sources": sources,
+        })
+
+    fused.sort(
+        key=lambda pet: (
+            -int(pet["agreementCount"]),
+            -float(pet["score"]),
+        )
+    )
+
+    return {
+        "module": "pet-fuse-ensemble-v1",
+        "fusion": "NanoDet+YOLOX-S weighted-box-v1",
+        "pets": fused,
+    }
+
+
 def cluster_face_embeddings(
     faces: list[dict],
     cannot_links: list[dict] | None = None,
@@ -797,6 +1124,19 @@ def handle(message: dict) -> bool:
         file_path = require_file(payload)
         verify_expected_size(file_path, payload)
         respond(request_id, result=detect_pets(file_path))
+        return True
+
+    if method == "detect_pets_yolox":
+        file_path = require_file(payload)
+        verify_expected_size(file_path, payload)
+        respond(request_id, result=detect_pets_yolox(file_path))
+        return True
+
+    if method == "fuse_pet_detections":
+        detections = payload.get("detections") or []
+        if not isinstance(detections, list):
+            raise RuntimeError("Haustierdetektionen für die Fusion sind ungültig.")
+        respond(request_id, result=fuse_pet_detections(detections))
         return True
 
     if method == "extract_face_embeddings":
