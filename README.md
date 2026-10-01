@@ -12,7 +12,7 @@ Der erste Schritt macht bewusst nur:
 4. Katalog lokal in SQLite speichern
 5. fehlende Bilder markieren, aber nicht löschen
 
-**Noch nicht aktiv:** Personen-, Gesichts- oder Haustiererkennung. Die technische Analyse-Queue und Bild-Thumbnails sind bereits aktiv. Videos werden katalogisiert und technisch geprüft; Video-Thumbnails folgen später.
+**Noch nicht aktiv:** Personen-Namenszuordnung und Haustiererkennung. Technische Prüfung, Bild-Thumbnails, EXIF-Metadaten und reine Gesichtsdetektion mit YuNet sind bereits als getrennte Pipeline-Stufen aktiv. Videos werden katalogisiert und technisch geprüft; Video-Thumbnails folgen später.
 
 ## Architektur
 
@@ -36,8 +36,11 @@ Im Projektordner:
 
 ```powershell
 npm install
+npm run setup:ai
 npm start
 ```
+
+`setup:ai` erzeugt einmalig die lokale `.ai-venv`, installiert Pillow/OpenCV und lädt das geprüfte YuNet-Modell für die Gesichtsdetektion.
 
 Danach genügt für normale Starts ebenfalls:
 
