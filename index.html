@@ -42,23 +42,42 @@
           <div class="panel-heading">
             <div>
               <h2>Medien</h2>
-              <p id="tableHint">Bilder und Videos werden katalogisiert. Papierkorb-Dateien werden nicht als normale Medien aufgenommen; wiederherstellbare Löschungen und identische Dubletten werden separat gekennzeichnet.</p>
+              <p id="tableHint">Medien, exakte Dubletten und Papierkorb-Fälle werden getrennt dargestellt. Es wird nichts automatisch gelöscht.</p>
             </div>
             <button id="refresh" class="ghost">Aktualisieren</button>
           </div>
-          <div class="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Pfad</th>
-                  <th>Typ</th>
-                  <th>Größe</th>
-                  <th>Status</th>
-                  <th>Aktion</th>
-                </tr>
-              </thead>
-              <tbody id="mediaRows"></tbody>
-            </table>
+
+          <div class="view-tabs" role="tablist" aria-label="Katalogansicht">
+            <button id="mediaTab" class="view-tab active" type="button">
+              Alle Medien <span id="mediaTabCount" class="tab-count">0</span>
+            </button>
+            <button id="duplicateTab" class="view-tab" type="button">
+              Dubletten <span id="duplicateTabCount" class="tab-count">0</span>
+            </button>
+            <button id="recycleTab" class="view-tab" type="button">
+              Papierkorb <span id="recycleTabCount" class="tab-count">0</span>
+            </button>
+          </div>
+
+          <div id="mediaView" class="catalog-view">
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Pfad</th>
+                    <th>Typ</th>
+                    <th>Größe</th>
+                    <th>Status</th>
+                    <th>Aktion</th>
+                  </tr>
+                </thead>
+                <tbody id="mediaRows"></tbody>
+              </table>
+            </div>
+          </div>
+
+          <div id="duplicateView" class="catalog-view duplicate-view" hidden>
+            <div id="duplicateGroups" class="duplicate-groups"></div>
           </div>
         </section>
       </main>
