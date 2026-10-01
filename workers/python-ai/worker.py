@@ -1,10 +1,31 @@
 from __future__ import annotations
 
 import json
+import math
 import mimetypes
 import os
 import sys
 from dataclasses import asdict, dataclass
+from datetime import datetime
+from typing import Any
+
+try:
+    from PIL import Image
+except Exception:
+    Image = None
+
+try:
+    import cv2
+except Exception:
+    cv2 = None
+
+
+WORKER_DIR = os.path.dirname(os.path.abspath(__file__))
+YUNET_MODEL = os.path.join(
+    WORKER_DIR,
+    "models",
+    "face_detection_yunet_2023mar.onnx",
+)
 
 
 @dataclass
@@ -30,6 +51,13 @@ def snapshot() -> dict:
         **asdict(runtime),
         "worker": "python-ai",
         "status": "ready",
+        "capabilities": {
+            "pillow": Image is not None,
+            "opencv": cv2 is not None,
+            "yunetModel": os.path.isfile(YUNET_MODEL),
+            "imageMetadata": Image is not None,
+            "faceDetection": cv2 is not None and os.path.isfile(YUNET_MODEL),
+        },
     }
 
 
@@ -40,6 +68,194 @@ def respond(request_id: str | None, *, result=None, error: str | None = None) ->
     else:
         message["error"] = error
     print(json.dumps(message, ensure_ascii=False), flush=True)
+
+
+def require_file(payload: dict) -> str:
+    file_path = os.path.abspath(str(payload.get("path", "")))
+    if not file_path:
+        raise RuntimeError("Dateipfad fehlt.")
+    if not os.path.isfile(file_path):
+        raise RuntimeError(f"Datei ist nicht erreichbar: {file_path}")
+    return file_path
+
+
+def rational_to_float(value: Any) -> float | None:
+    try:
+        result = float(value)
+        if math.isfinite(result):
+            return result
+    except Exception:
+        pass
+    return None
+
+
+def gps_coordinate(values: Any, reference: Any) -> float | None:
+    if not values or len(values) < 3:
+        return None
+
+    degrees = rational_to_float(values[0])
+    minutes = rational_to_float(values[1])
+    seconds = rational_to_float(values[2])
+
+    if degrees is None or minutes is None or seconds is None:
+        return None
+
+    coordinate = degrees + minutes / 60.0 + seconds / 3600.0
+    ref = str(reference or "").upper()
+
+    if ref in {"S", "W"}:
+        coordinate *= -1
+
+    return coordinate
+
+
+def normalize_exif_datetime(value: Any) -> str | None:
+    if not value:
+        return None
+
+    text = str(value).strip()
+    for fmt in ("%Y:%m:%d %H:%M:%S", "%Y-%m-%d %H:%M:%S"):
+        try:
+            return datetime.strptime(text, fmt).isoformat(timespec="seconds")
+        except ValueError:
+            continue
+
+    return text[:100] if text else None
+
+
+def extract_image_metadata(file_path: str) -> dict:
+    if Image is None:
+        raise RuntimeError(
+            "Pillow fehlt. Einmal 'npm.cmd run setup:ai' ausführen."
+        )
+
+    with Image.open(file_path) as image:
+        exif = image.getexif()
+
+        captured_at = (
+            exif.get(36867)
+            or exif.get(36868)
+            or exif.get(306)
+        )
+
+        gps_latitude = None
+        gps_longitude = None
+
+        try:
+            gps = exif.get_ifd(34853)
+            if gps:
+                gps_latitude = gps_coordinate(gps.get(2), gps.get(1))
+                gps_longitude = gps_coordinate(gps.get(4), gps.get(3))
+        except Exception:
+            gps_latitude = None
+            gps_longitude = None
+
+        return {
+            "module": "image-metadata-v1",
+            "width": int(image.width),
+            "height": int(image.height),
+            "format": str(image.format or ""),
+            "mode": str(image.mode or ""),
+            "orientation": int(exif.get(274) or 1),
+            "capturedAt": normalize_exif_datetime(captured_at),
+            "cameraMake": str(exif.get(271) or "").strip() or None,
+            "cameraModel": str(exif.get(272) or "").strip() or None,
+            "lensModel": str(exif.get(42036) or "").strip() or None,
+            "gpsLatitude": gps_latitude,
+            "gpsLongitude": gps_longitude,
+        }
+
+
+def detect_faces(file_path: str) -> dict:
+    if cv2 is None:
+        raise RuntimeError(
+            "OpenCV fehlt. Einmal 'npm.cmd run setup:ai' ausführen."
+        )
+
+    if not os.path.isfile(YUNET_MODEL):
+        raise RuntimeError(
+            "YuNet-Modell fehlt. Einmal 'npm.cmd run setup:ai' ausführen."
+        )
+
+    image = cv2.imread(file_path, cv2.IMREAD_COLOR)
+    if image is None:
+        raise RuntimeError("Bild konnte von OpenCV nicht gelesen werden.")
+
+    original_height, original_width = image.shape[:2]
+
+    if original_width <= 0 or original_height <= 0:
+        raise RuntimeError("Bild hat ungültige Abmessungen.")
+
+    max_dimension = 1600
+    scale = min(1.0, max_dimension / float(max(original_width, original_height)))
+
+    if scale < 1.0:
+        work_width = max(1, int(round(original_width * scale)))
+        work_height = max(1, int(round(original_height * scale)))
+        working = cv2.resize(
+            image,
+            (work_width, work_height),
+            interpolation=cv2.INTER_AREA,
+        )
+    else:
+        working = image
+        work_height, work_width = working.shape[:2]
+
+    detector = cv2.FaceDetectorYN.create(
+        YUNET_MODEL,
+        "",
+        (work_width, work_height),
+        0.80,
+        0.30,
+        5000,
+    )
+
+    detector.setInputSize((work_width, work_height))
+    _retval, detections = detector.detect(working)
+
+    faces: list[dict] = []
+
+    if detections is not None:
+        inverse_scale = 1.0 / scale
+
+        for index, row in enumerate(detections):
+            x = max(0.0, float(row[0]) * inverse_scale)
+            y = max(0.0, float(row[1]) * inverse_scale)
+            width = max(0.0, float(row[2]) * inverse_scale)
+            height = max(0.0, float(row[3]) * inverse_scale)
+            score = float(row[14])
+
+            x = min(x, float(original_width))
+            y = min(y, float(original_height))
+            width = min(width, float(original_width) - x)
+            height = min(height, float(original_height) - y)
+
+            landmarks = []
+            for landmark_index in range(5):
+                lx = float(row[4 + landmark_index * 2]) * inverse_scale
+                ly = float(row[5 + landmark_index * 2]) * inverse_scale
+                landmarks.append({
+                    "x": max(0.0, min(lx, float(original_width))),
+                    "y": max(0.0, min(ly, float(original_height))),
+                })
+
+            faces.append({
+                "index": index,
+                "x": x,
+                "y": y,
+                "width": width,
+                "height": height,
+                "score": score,
+                "landmarks": landmarks,
+            })
+
+    return {
+        "module": "face-detect-yunet-v1",
+        "detector": "YuNet 2023mar",
+        "imageWidth": int(original_width),
+        "imageHeight": int(original_height),
+        "faces": faces,
+    }
 
 
 def handle(message: dict) -> bool:
@@ -68,15 +284,7 @@ def handle(message: dict) -> bool:
         return True
 
     if method == "probe_media":
-        file_path = os.path.abspath(str(payload.get("path", "")))
-        if not file_path:
-            respond(request_id, error="Dateipfad fehlt.")
-            return True
-
-        if not os.path.isfile(file_path):
-            respond(request_id, error=f"Datei ist nicht erreichbar: {file_path}")
-            return True
-
+        file_path = require_file(payload)
         info = os.stat(file_path)
         expected_size = payload.get("expectedSizeBytes")
 
@@ -107,6 +315,16 @@ def handle(message: dict) -> bool:
         )
         return True
 
+    if method == "extract_image_metadata":
+        file_path = require_file(payload)
+        respond(request_id, result=extract_image_metadata(file_path))
+        return True
+
+    if method == "detect_faces":
+        file_path = require_file(payload)
+        respond(request_id, result=detect_faces(file_path))
+        return True
+
     if method == "shutdown":
         respond(request_id, result={"status": "bye"})
         return False
@@ -120,12 +338,19 @@ def main() -> int:
         line = line.strip()
         if not line:
             continue
+
         try:
             message = json.loads(line)
             if not handle(message):
                 break
         except Exception as exc:
-            respond(None, error=str(exc))
+            request_id = None
+            try:
+                request_id = message.get("id")  # type: ignore[name-defined]
+            except Exception:
+                pass
+            respond(request_id, error=str(exc))
+
     return 0
 
 
