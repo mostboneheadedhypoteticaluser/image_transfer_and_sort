@@ -3154,10 +3154,18 @@ function confirmPersonCandidate(candidateId: number, rawName: unknown) {
       VALUES(?,?,'CONFIRMED',?,CURRENT_TIMESTAMP)
     `);
 
+    const clearExplicitExclusion = db.prepare(`
+      DELETE FROM person_face_exclusions
+      WHERE person_id=?
+        AND face_detection_id=?
+    `);
+
     let faceCount = 0;
     for (const member of members) {
+      const faceDetectionId = Number(member.face_detection_id);
+      clearExplicitExclusion.run(personId, faceDetectionId);
       assign.run(
-        Number(member.face_detection_id),
+        faceDetectionId,
         personId,
         Number(member.similarity)
       );
