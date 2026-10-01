@@ -21,6 +21,11 @@ except Exception:
     cv2 = None
     np = None
 
+try:
+    import onnxruntime as ort
+except Exception:
+    ort = None
+
 
 WORKER_DIR = os.path.dirname(os.path.abspath(__file__))
 YUNET_MODEL = os.path.join(
@@ -43,6 +48,13 @@ YOLOX_MODEL = os.path.join(
     "models",
     "object_detection_yolox_2022nov.onnx",
 )
+DOG_REID_MODEL = os.path.join(
+    WORKER_DIR,
+    "models",
+    "dog_reid_dinov2_b14_0_2_0.onnx",
+)
+
+_dog_reid_session = None
 
 
 @dataclass
@@ -75,6 +87,8 @@ def snapshot() -> dict:
             "sfaceModel": os.path.isfile(SFACE_MODEL),
             "nanodetModel": os.path.isfile(NANODET_MODEL),
             "yoloxModel": os.path.isfile(YOLOX_MODEL),
+            "dogReIdModel": os.path.isfile(DOG_REID_MODEL),
+            "onnxRuntime": ort is not None,
             "imageMetadata": Image is not None,
             "faceDetection": cv2 is not None and os.path.isfile(YUNET_MODEL),
             "faceEmbeddings": (
@@ -87,6 +101,12 @@ def snapshot() -> dict:
                 and np is not None
                 and os.path.isfile(NANODET_MODEL)
                 and os.path.isfile(YOLOX_MODEL)
+            ),
+            "petEmbeddings": (
+                cv2 is not None
+                and np is not None
+                and ort is not None
+                and os.path.isfile(DOG_REID_MODEL)
             ),
         },
     }
@@ -868,6 +888,274 @@ def fuse_pet_detections(detections: list[dict]) -> dict:
     }
 
 
+def dog_reid_session():
+    global _dog_reid_session
+
+    if ort is None:
+        raise RuntimeError(
+            "ONNX Runtime fehlt. Einmal 'npm.cmd run setup:ai' ausführen."
+        )
+
+    if not os.path.isfile(DOG_REID_MODEL):
+        raise RuntimeError(
+            "Dog-ReID-Modell fehlt. Einmal 'npm.cmd run setup:ai' ausführen."
+        )
+
+    if _dog_reid_session is None:
+        options = ort.SessionOptions()
+        options.intra_op_num_threads = 4
+        options.inter_op_num_threads = 1
+        options.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
+        _dog_reid_session = ort.InferenceSession(
+            DOG_REID_MODEL,
+            sess_options=options,
+            providers=["CPUExecutionProvider"],
+        )
+
+    return _dog_reid_session
+
+
+def dog_crop_with_margin(image, box: dict, margin_fraction: float = 0.10):
+    image_height, image_width = image.shape[:2]
+
+    x = float(box.get("x", 0.0))
+    y = float(box.get("y", 0.0))
+    width = max(1.0, float(box.get("width", 0.0)))
+    height = max(1.0, float(box.get("height", 0.0)))
+
+    margin_x = width * margin_fraction
+    margin_y = height * margin_fraction
+
+    left = max(0, int(math.floor(x - margin_x)))
+    top = max(0, int(math.floor(y - margin_y)))
+    right = min(image_width, int(math.ceil(x + width + margin_x)))
+    bottom = min(image_height, int(math.ceil(y + height + margin_y)))
+
+    if right <= left or bottom <= top:
+        raise RuntimeError("Hundeausschnitt hat ungültige Abmessungen.")
+
+    return image[top:bottom, left:right]
+
+
+def extract_dog_embeddings(file_path: str, pets: list[dict]) -> dict:
+    if cv2 is None or np is None:
+        raise RuntimeError(
+            "OpenCV/Numpy fehlt. Einmal 'npm.cmd run setup:ai' ausführen."
+        )
+
+    image = cv2.imread(file_path, cv2.IMREAD_COLOR)
+    if image is None:
+        raise RuntimeError("Bild konnte von OpenCV nicht gelesen werden.")
+
+    session = dog_reid_session()
+    input_info = session.get_inputs()[0]
+    input_name = input_info.name
+    output_name = session.get_outputs()[0].name
+
+    mean = np.asarray([0.485, 0.456, 0.406], dtype=np.float32).reshape(1, 1, 3)
+    std = np.asarray([0.229, 0.224, 0.225], dtype=np.float32).reshape(1, 1, 3)
+
+    embeddings: list[dict] = []
+
+    for pet in pets:
+        if not isinstance(pet, dict) or pet.get("petClass") != "dog":
+            continue
+
+        pet_detection_id = int(pet.get("id", 0))
+        if pet_detection_id <= 0:
+            continue
+
+        try:
+            crop = dog_crop_with_margin(image, pet, 0.10)
+            crop = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
+            crop = cv2.resize(crop, (224, 224), interpolation=cv2.INTER_AREA)
+            normalized = crop.astype(np.float32) / 255.0
+            normalized = (normalized - mean) / std
+            tensor = np.transpose(normalized, (2, 0, 1))[np.newaxis, :, :, :]
+            tensor = np.ascontiguousarray(tensor, dtype=np.float32)
+
+            result = session.run([output_name], {input_name: tensor})[0]
+            vector = np.asarray(result, dtype=np.float32).reshape(-1)
+            norm = float(np.linalg.norm(vector))
+
+            if not math.isfinite(norm) or norm <= 0.0:
+                continue
+
+            vector = vector / norm
+
+            embeddings.append({
+                "petDetectionId": pet_detection_id,
+                "vector": [float(value) for value in vector.tolist()],
+            })
+        except Exception:
+            continue
+
+    return {
+        "module": "pet-embed-dogreid-v1",
+        "model": "DogReID DINOv2-B14 0.2.0",
+        "embeddings": embeddings,
+    }
+
+
+def cluster_pet_embeddings(
+    pets: list[dict],
+    cluster_threshold: float = 0.68,
+    verification_threshold: float = 0.60,
+    min_cluster_size: int = 2,
+) -> dict:
+    if np is None:
+        raise RuntimeError(
+            "Numpy fehlt. Einmal 'npm.cmd run setup:ai' ausführen."
+        )
+
+    cluster_threshold = max(
+        verification_threshold,
+        min(0.95, float(cluster_threshold)),
+    )
+    verification_threshold = max(
+        0.0,
+        min(cluster_threshold, float(verification_threshold)),
+    )
+    min_cluster_size = max(2, min(20, int(min_cluster_size)))
+
+    canonical_by_content: dict[str, dict] = {}
+    duplicates_by_content: dict[str, list[dict]] = {}
+
+    for raw in pets:
+        if not isinstance(raw, dict) or raw.get("petClass") != "dog":
+            continue
+
+        pet_id = int(raw.get("petDetectionId", 0))
+        content_key = str(raw.get("contentKey", "")).strip()
+        vector_values = raw.get("vector")
+
+        if pet_id <= 0 or not content_key or not isinstance(vector_values, list):
+            continue
+
+        vector = np.asarray(vector_values, dtype=np.float32).reshape(-1)
+        norm = float(np.linalg.norm(vector))
+        if vector.size == 0 or not math.isfinite(norm) or norm <= 0.0:
+            continue
+
+        vector = vector / norm
+        item = {
+            "petDetectionId": pet_id,
+            "contentKey": content_key,
+            "vector": vector,
+        }
+
+        duplicates_by_content.setdefault(content_key, []).append(item)
+        canonical_by_content.setdefault(content_key, item)
+
+    canonical = sorted(
+        canonical_by_content.values(),
+        key=lambda item: int(item["petDetectionId"]),
+    )
+
+    clusters: list[dict] = []
+
+    for item in canonical:
+        vector = item["vector"]
+        best_index = None
+        best_similarity = -1.0
+
+        for index, cluster in enumerate(clusters):
+            centroid_similarity = float(np.dot(vector, cluster["centroid"]))
+            representative_similarity = float(
+                np.dot(vector, cluster["representativeVector"])
+            )
+
+            if (
+                centroid_similarity >= cluster_threshold
+                and representative_similarity >= verification_threshold
+                and centroid_similarity > best_similarity
+            ):
+                best_index = index
+                best_similarity = centroid_similarity
+
+        if best_index is None:
+            clusters.append({
+                "centroid": vector.copy(),
+                "representativeVector": vector.copy(),
+                "canonicalMembers": [item],
+            })
+            continue
+
+        cluster = clusters[best_index]
+        cluster["canonicalMembers"].append(item)
+
+        stacked = np.vstack([
+            member["vector"]
+            for member in cluster["canonicalMembers"]
+        ])
+        centroid = np.mean(stacked, axis=0)
+        centroid_norm = float(np.linalg.norm(centroid))
+        if centroid_norm > 0.0:
+            centroid = centroid / centroid_norm
+        cluster["centroid"] = centroid
+
+        representative = max(
+            cluster["canonicalMembers"],
+            key=lambda member: float(np.dot(member["vector"], centroid)),
+        )
+        cluster["representativeVector"] = representative["vector"]
+
+    result_clusters: list[dict] = []
+
+    for cluster in clusters:
+        canonical_members = cluster["canonicalMembers"]
+        if len(canonical_members) < min_cluster_size:
+            continue
+
+        centroid = cluster["centroid"]
+        representative = max(
+            canonical_members,
+            key=lambda member: float(np.dot(member["vector"], centroid)),
+        )
+
+        members: list[dict] = []
+        similarities: list[float] = []
+
+        for canonical_member in canonical_members:
+            content_key = canonical_member["contentKey"]
+            similarity = float(np.dot(canonical_member["vector"], centroid))
+            similarity = max(-1.0, min(1.0, similarity))
+
+            for duplicate in duplicates_by_content.get(content_key, []):
+                members.append({
+                    "petDetectionId": int(duplicate["petDetectionId"]),
+                    "similarity": similarity,
+                })
+                similarities.append(similarity)
+
+        if not members:
+            continue
+
+        result_clusters.append({
+            "representativePetId": int(representative["petDetectionId"]),
+            "averageSimilarity": float(sum(similarities) / len(similarities)),
+            "minSimilarity": float(min(similarities)),
+            "members": members,
+        })
+
+    result_clusters.sort(
+        key=lambda cluster: (
+            -len(cluster["members"]),
+            -float(cluster["averageSimilarity"]),
+            int(cluster["representativePetId"]),
+        )
+    )
+
+    return {
+        "algorithm": "dogreid-centroid-v1",
+        "clusterThreshold": cluster_threshold,
+        "verificationThreshold": verification_threshold,
+        "minClusterSize": min_cluster_size,
+        "clusterCount": len(result_clusters),
+        "clusters": result_clusters,
+    }
+
+
 def cluster_face_embeddings(
     faces: list[dict],
     cannot_links: list[dict] | None = None,
@@ -1148,6 +1436,33 @@ def handle(message: dict) -> bool:
         respond(
             request_id,
             result=extract_face_embeddings(file_path, faces),
+        )
+        return True
+
+    if method == "extract_dog_embeddings":
+        file_path = require_file(payload)
+        verify_expected_size(file_path, payload)
+        pets = payload.get("pets") or []
+        if not isinstance(pets, list):
+            raise RuntimeError("Haustierfundstellen für Dog-ReID sind ungültig.")
+        respond(
+            request_id,
+            result=extract_dog_embeddings(file_path, pets),
+        )
+        return True
+
+    if method == "cluster_pet_embeddings":
+        pets = payload.get("pets") or []
+        if not isinstance(pets, list):
+            raise RuntimeError("Haustiermerkmale für die Gruppierung sind ungültig.")
+        respond(
+            request_id,
+            result=cluster_pet_embeddings(
+                pets,
+                float(payload.get("clusterThreshold", 0.68)),
+                float(payload.get("verificationThreshold", 0.60)),
+                int(payload.get("minClusterSize", 2)),
+            ),
         )
         return True
 
