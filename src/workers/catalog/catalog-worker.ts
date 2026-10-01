@@ -2468,12 +2468,31 @@ function getFaceEmbeddingsForClustering(
     WHERE m.source_id=?
   `).get(sourceId);
 
+  const cannotLinkRows = db.prepare(`
+    SELECT pce.face_a_id, pce.face_b_id, pce.created_at
+    FROM person_cluster_exclusions pce
+    JOIN face_detections fa ON fa.id=pce.face_a_id
+    JOIN media_items ma ON ma.id=fa.media_id
+    JOIN face_detections fb ON fb.id=pce.face_b_id
+    JOIN media_items mb ON mb.id=fb.media_id
+    WHERE ma.source_id=?
+      AND mb.source_id=?
+  `).all(sourceId, sourceId);
+
+  const cannotLinkSignature = cannotLinkRows
+    .map((row) =>
+      `${Number(row.face_a_id)}-${Number(row.face_b_id)}-${String(row.created_at ?? "")}`
+    )
+    .sort()
+    .join("|");
+
   const revision = [
     rows.length,
     faceIds.length > 0 ? Math.max(...faceIds) : 0,
     idSum,
     maxUpdatedAt,
-    Number(assignmentCount?.count ?? 0)
+    Number(assignmentCount?.count ?? 0),
+    cannotLinkSignature
   ].join(":");
 
   const previousRun = db.prepare(`
@@ -2493,6 +2512,10 @@ function getFaceEmbeddingsForClustering(
       mediaId: Number(row.media_id),
       contentKey: `${String(row.sha256)}:${Number(row.detection_index)}`,
       vector: vectorFromBlob(row.vector_blob, Number(row.dimension))
+    })),
+    cannotLinks: cannotLinkRows.map((row) => ({
+      faceAId: Number(row.face_a_id),
+      faceBId: Number(row.face_b_id)
     }))
   };
 }
