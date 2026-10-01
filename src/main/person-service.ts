@@ -2,6 +2,8 @@ import type {
   AnalysisQueueStats,
   ConfirmPersonResult,
   FaceEmbeddingSet,
+  MergePersonsResult,
+  PersonCorrectionResult,
   PersonCandidate,
   PersonClusterInput,
   PersonOverview,
@@ -105,6 +107,46 @@ export class PersonService {
     return this.catalog.request<ConfirmPersonResult>(
       "confirmPersonCandidate",
       { candidateId, name }
+    );
+  }
+
+  async removeCandidateFace(
+    candidateId: number,
+    faceDetectionId: number
+  ): Promise<PersonCorrectionResult> {
+    return this.catalog.request<PersonCorrectionResult>(
+      "removeFaceFromPersonCandidate",
+      { candidateId, faceDetectionId }
+    );
+  }
+
+  async removePersonFace(
+    personId: number,
+    faceDetectionId: number
+  ): Promise<PersonCorrectionResult> {
+    return this.catalog.request<PersonCorrectionResult>(
+      "removeFaceFromPerson",
+      { personId, faceDetectionId }
+    );
+  }
+
+  async mergePersons(
+    targetPersonId: number,
+    sourcePersonId: number
+  ): Promise<MergePersonsResult> {
+    return this.catalog.request<MergePersonsResult>(
+      "mergePersons",
+      { targetPersonId, sourcePersonId }
+    );
+  }
+
+  async renamePerson(
+    personId: number,
+    name: string
+  ): Promise<PersonCorrectionResult> {
+    return this.catalog.request<PersonCorrectionResult>(
+      "renamePerson",
+      { personId, name }
     );
   }
 }
