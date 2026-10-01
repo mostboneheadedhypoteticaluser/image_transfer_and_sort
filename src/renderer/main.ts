@@ -44,6 +44,10 @@ const technicalStageState = document.querySelector<HTMLSpanElement>("#technicalS
 const technicalStageCounts = document.querySelector<HTMLElement>("#technicalStageCounts")!;
 const thumbnailStageState = document.querySelector<HTMLSpanElement>("#thumbnailStageState")!;
 const thumbnailStageCounts = document.querySelector<HTMLElement>("#thumbnailStageCounts")!;
+const metadataStageState = document.querySelector<HTMLSpanElement>("#metadataStageState")!;
+const metadataStageCounts = document.querySelector<HTMLElement>("#metadataStageCounts")!;
+const faceStageState = document.querySelector<HTMLSpanElement>("#faceStageState")!;
+const faceStageCounts = document.querySelector<HTMLElement>("#faceStageCounts")!;
 
 let sources: SourceRecord[] = [];
 let currentView: CatalogView = "media";
@@ -51,7 +55,9 @@ let scanning = false;
 let restoring = false;
 let resetting = false;
 let lastThumbnailDone = -1;
-let thumbnailRefreshTimer: number | null = null;
+let lastMetadataDone = -1;
+let lastFaceDone = -1;
+let analysisRefreshTimer: number | null = null;
 
 function renderAnalysisStatus(status: AnalysisWorkerStatus): void {
   analysisWorkerState.className = "analysis-state";
@@ -114,21 +120,30 @@ function renderStage(
 function renderPipelineStatus(status: PipelineStatus): void {
   renderStage(technicalStageState, technicalStageCounts, status.technical);
   renderStage(thumbnailStageState, thumbnailStageCounts, status.thumbnails);
+  renderStage(metadataStageState, metadataStageCounts, status.imageMetadata);
+  renderStage(faceStageState, faceStageCounts, status.faces);
 
-  if (status.thumbnails.done !== lastThumbnailDone) {
-    lastThumbnailDone = status.thumbnails.done;
+  const visualDataChanged =
+    status.thumbnails.done !== lastThumbnailDone ||
+    status.imageMetadata.done !== lastMetadataDone ||
+    status.faces.done !== lastFaceDone;
 
-    if (thumbnailRefreshTimer !== null) {
-      window.clearTimeout(thumbnailRefreshTimer);
-    }
+  lastThumbnailDone = status.thumbnails.done;
+  lastMetadataDone = status.imageMetadata.done;
+  lastFaceDone = status.faces.done;
 
-    thumbnailRefreshTimer = window.setTimeout(() => {
-      thumbnailRefreshTimer = null;
-      if (currentView === "media" && selectedSourceId() !== null) {
-        void runSafely(refreshCatalog);
-      }
-    }, 500);
+  if (!visualDataChanged) return;
+
+  if (analysisRefreshTimer !== null) {
+    window.clearTimeout(analysisRefreshTimer);
   }
+
+  analysisRefreshTimer = window.setTimeout(() => {
+    analysisRefreshTimer = null;
+    if (currentView === "media" && selectedSourceId() !== null) {
+      void runSafely(refreshCatalog);
+    }
+  }, 500);
 }
 
 function thumbnailUrl(row: MediaRecord): string | null {
@@ -227,8 +242,19 @@ function renderRows(rows: MediaRecord[], emptyText = "Noch keine Medien katalogi
 
     const pathCell = document.createElement("td");
     pathCell.className = "path-cell";
-    pathCell.textContent = row.relativePath;
     pathCell.title = row.relativePath;
+
+    const pathMain = document.createElement("div");
+    pathMain.className = "path-main";
+    pathMain.textContent = row.relativePath;
+    pathCell.appendChild(pathMain);
+
+    if (row.capturedAt) {
+      const captured = document.createElement("small");
+      captured.className = "path-meta";
+      captured.textContent = `Aufnahme: ${row.capturedAt.replace("T", " ")}`;
+      pathCell.appendChild(captured);
+    }
 
     const typeCell = document.createElement("td");
     typeCell.textContent = row.extension.replace(".", "").toUpperCase();
@@ -249,6 +275,15 @@ function renderRows(rows: MediaRecord[], emptyText = "Noch keine Medien katalogi
       duplicateBadge.textContent = `Dubletten ×${row.duplicateCount + 1}`;
       duplicateBadge.title = "Dateien mit identischem SHA-256-Inhalt";
       stateCell.appendChild(duplicateBadge);
+    }
+
+    if (row.availability === "AVAILABLE" && row.faceCount > 0) {
+      const faceBadge = document.createElement("span");
+      faceBadge.className = "badge faces";
+      faceBadge.textContent =
+        `${row.faceCount} ${row.faceCount === 1 ? "Gesicht" : "Gesichter"}`;
+      faceBadge.title = "Automatisch erkannte Gesichter; noch keiner Person zugeordnet";
+      stateCell.appendChild(faceBadge);
     }
 
     const actionCell = document.createElement("td");
@@ -546,7 +581,9 @@ void window.imageSorter.analysis
   .catch(() => {
     renderPipelineStatus({
       technical: { pending: 0, running: 0, done: 0, failed: 0 },
-      thumbnails: { pending: 0, running: 0, done: 0, failed: 0 }
+      thumbnails: { pending: 0, running: 0, done: 0, failed: 0 },
+      imageMetadata: { pending: 0, running: 0, done: 0, failed: 0 },
+      faces: { pending: 0, running: 0, done: 0, failed: 0 }
     });
   });
 
