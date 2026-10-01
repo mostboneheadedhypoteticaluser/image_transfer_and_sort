@@ -4519,6 +4519,12 @@ function resetCatalog(): { reset: true } {
       DELETE FROM person_face_exclusions;
       DELETE FROM person_face_assignments;
       DELETE FROM persons;
+      DELETE FROM pet_candidate_items;
+      DELETE FROM pet_candidates;
+      DELETE FROM pet_cluster_runs;
+      DELETE FROM pet_assignments;
+      DELETE FROM pets;
+      DELETE FROM pet_embeddings;
       DELETE FROM pet_fused_detections;
       DELETE FROM pet_detections;
       DELETE FROM face_embeddings;
@@ -4530,7 +4536,7 @@ function resetCatalog(): { reset: true } {
       DELETE FROM scans;
       DELETE FROM media_sources;
       DELETE FROM sqlite_sequence
-      WHERE name IN ('analysis_jobs', 'person_candidate_faces', 'person_candidates', 'person_cluster_runs', 'person_face_assignments', 'persons', 'pet_fused_detections', 'pet_detections', 'face_embeddings', 'face_detections', 'media_image_metadata', 'media_thumbnails', 'media_items', 'media_directories', 'scans', 'media_sources');
+      WHERE name IN ('analysis_jobs', 'person_candidate_faces', 'person_candidates', 'person_cluster_runs', 'person_face_assignments', 'persons', 'pet_candidate_items', 'pet_candidates', 'pet_cluster_runs', 'pet_assignments', 'pets', 'pet_embeddings', 'pet_fused_detections', 'pet_detections', 'face_embeddings', 'face_detections', 'media_image_metadata', 'media_thumbnails', 'media_items', 'media_directories', 'scans', 'media_sources');
     `);
     db.exec("COMMIT");
   } catch (error) {
@@ -4618,6 +4624,46 @@ async function dispatch(method: CatalogMethod, payload: Record<string, unknown> 
         asNumber(payload.jobId, "jobId"),
         payload.result
       );
+    case "getPetDetectionsForEmbedding":
+      return getPetDetectionsForEmbedding(
+        asNumber(payload.mediaId, "mediaId"),
+        typeof payload.inputSha256 === "string" ? payload.inputSha256 : ""
+      );
+    case "completePetEmbeddingJob":
+      return completePetEmbeddingJob(
+        asNumber(payload.jobId, "jobId"),
+        payload.result
+      );
+    case "getPetEmbeddingsForClustering":
+      return getPetEmbeddingsForClustering(
+        asNumber(payload.sourceId, "sourceId"),
+        typeof payload.algorithmVersion === "string"
+          ? payload.algorithmVersion
+          : "dogreid-centroid-v1"
+      );
+    case "replacePetCandidates":
+      return replacePetCandidates(
+        asNumber(payload.sourceId, "sourceId"),
+        typeof payload.revision === "string" ? payload.revision : "",
+        typeof payload.algorithmVersion === "string"
+          ? payload.algorithmVersion
+          : "dogreid-centroid-v1",
+        payload.clusters
+      );
+    case "listPetCandidates":
+      return listPetCandidates(
+        asNumber(payload.sourceId, "sourceId"),
+        payload.limit === undefined ? 100 : asNumber(payload.limit, "limit")
+      );
+    case "listPets":
+      return listPets(asNumber(payload.sourceId, "sourceId"));
+    case "confirmPetCandidate":
+      return confirmPetCandidate(
+        asNumber(payload.candidateId, "candidateId"),
+        payload.name
+      );
+    case "getPetCropInfo":
+      return getPetCropInfo(asNumber(payload.petDetectionId, "petDetectionId"));
     case "getFaceDetectionsForEmbedding":
       return getFaceDetectionsForEmbedding(
         asNumber(payload.mediaId, "mediaId"),
