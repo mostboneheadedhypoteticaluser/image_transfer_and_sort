@@ -261,6 +261,69 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_pet_fused_class
     ON pet_fused_detections(pet_class);
 
+  CREATE TABLE IF NOT EXISTS pet_embeddings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    pet_detection_id INTEGER NOT NULL REFERENCES pet_fused_detections(id) ON DELETE CASCADE,
+    media_id INTEGER NOT NULL REFERENCES media_items(id) ON DELETE CASCADE,
+    model_version TEXT NOT NULL,
+    input_sha256 TEXT NOT NULL,
+    dimension INTEGER NOT NULL,
+    vector_blob BLOB NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(pet_detection_id, model_version)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_pet_embedding_media
+    ON pet_embeddings(media_id);
+
+  CREATE TABLE IF NOT EXISTS pets (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    pet_class TEXT NOT NULL CHECK(pet_class IN ('dog','cat')),
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE TABLE IF NOT EXISTS pet_assignments (
+    pet_detection_id INTEGER PRIMARY KEY REFERENCES pet_fused_detections(id) ON DELETE CASCADE,
+    pet_id INTEGER NOT NULL REFERENCES pets(id) ON DELETE CASCADE,
+    assignment_source TEXT NOT NULL DEFAULT 'CONFIRMED',
+    confidence REAL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_pet_assignment_pet
+    ON pet_assignments(pet_id);
+
+  CREATE TABLE IF NOT EXISTS pet_candidates (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    source_id INTEGER NOT NULL REFERENCES media_sources(id) ON DELETE CASCADE,
+    pet_class TEXT NOT NULL CHECK(pet_class IN ('dog','cat')),
+    algorithm_version TEXT NOT NULL,
+    representative_pet_id INTEGER REFERENCES pet_fused_detections(id) ON DELETE SET NULL,
+    average_similarity REAL NOT NULL,
+    min_similarity REAL NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_pet_candidate_source
+    ON pet_candidates(source_id);
+
+  CREATE TABLE IF NOT EXISTS pet_candidate_items (
+    candidate_id INTEGER NOT NULL REFERENCES pet_candidates(id) ON DELETE CASCADE,
+    pet_detection_id INTEGER NOT NULL REFERENCES pet_fused_detections(id) ON DELETE CASCADE,
+    similarity REAL NOT NULL,
+    PRIMARY KEY(candidate_id, pet_detection_id)
+  );
+
+  CREATE TABLE IF NOT EXISTS pet_cluster_runs (
+    source_id INTEGER PRIMARY KEY REFERENCES media_sources(id) ON DELETE CASCADE,
+    embedding_revision TEXT NOT NULL,
+    algorithm_version TEXT NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+
   CREATE TABLE IF NOT EXISTS persons (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
@@ -568,6 +631,18 @@ function getStats(sourceId: number) {
       ) AS person_count
   `).get(sourceId, sourceId);
 
+  const petIdentityStats = db.prepare(`
+    SELECT
+      (SELECT COUNT(*) FROM pet_candidates WHERE source_id=?) AS candidate_count,
+      (
+        SELECT COUNT(DISTINCT pa.pet_id)
+        FROM pet_assignments pa
+        JOIN pet_fused_detections pd ON pd.id=pa.pet_detection_id
+        JOIN media_items m ON m.id=pd.media_id
+        WHERE m.source_id=?
+      ) AS pet_count
+  `).get(sourceId, sourceId);
+
   const lastScan = db.prepare(`
     SELECT finished_at
     FROM scans
@@ -585,6 +660,8 @@ function getStats(sourceId: number) {
     duplicateFiles: Number(duplicateStats?.duplicate_files ?? 0),
     personCandidates: Number(personStats?.candidate_count ?? 0),
     persons: Number(personStats?.person_count ?? 0),
+    petCandidates: Number(petIdentityStats?.candidate_count ?? 0),
+    pets: Number(petIdentityStats?.pet_count ?? 0),
     lastScan: lastScan?.finished_at ? String(lastScan.finished_at) : null
   };
 }
