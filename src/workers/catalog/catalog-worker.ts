@@ -425,6 +425,8 @@ function listMedia(sourceId: number, requestedLimit: number) {
       m.in_recycle_bin,
       m.recycle_ambiguous,
       m.last_seen_at,
+      CASE WHEN t.media_id IS NOT NULL AND t.input_sha256=m.sha256 THEN 1 ELSE 0 END AS thumbnail_ready,
+      CASE WHEN t.media_id IS NOT NULL AND t.input_sha256=m.sha256 THEN t.input_sha256 ELSE NULL END AS thumbnail_version,
       CASE
         WHEN m.availability='AVAILABLE' THEN (
           SELECT COUNT(*) - 1
@@ -437,6 +439,7 @@ function listMedia(sourceId: number, requestedLimit: number) {
         ELSE 0
       END AS duplicate_count
     FROM media_items m
+    LEFT JOIN media_thumbnails t ON t.media_id=m.id
     WHERE m.source_id=?
     ORDER BY
       CASE
@@ -460,6 +463,8 @@ function listMedia(sourceId: number, requestedLimit: number) {
         ? "AMBIGUOUS"
         : "NONE",
     duplicateCount: Math.max(0, Number(row.duplicate_count ?? 0)),
+    thumbnailReady: Boolean(row.thumbnail_ready),
+    thumbnailVersion: row.thumbnail_version ? String(row.thumbnail_version) : null,
     lastSeenAt: String(row.last_seen_at)
   }));
 }
@@ -476,8 +481,11 @@ function listRecycleMedia(sourceId: number, requestedLimit: number) {
       m.availability,
       m.in_recycle_bin,
       m.recycle_ambiguous,
-      m.last_seen_at
+      m.last_seen_at,
+      CASE WHEN t.media_id IS NOT NULL AND t.input_sha256=m.sha256 THEN 1 ELSE 0 END AS thumbnail_ready,
+      CASE WHEN t.media_id IS NOT NULL AND t.input_sha256=m.sha256 THEN t.input_sha256 ELSE NULL END AS thumbnail_version
     FROM media_items m
+    LEFT JOIN media_thumbnails t ON t.media_id=m.id
     WHERE m.source_id=?
       AND m.availability='MISSING'
       AND (m.in_recycle_bin=1 OR m.recycle_ambiguous=1)
@@ -496,6 +504,8 @@ function listRecycleMedia(sourceId: number, requestedLimit: number) {
       ? "RESTORABLE" as const
       : "AMBIGUOUS" as const,
     duplicateCount: 0,
+    thumbnailReady: Boolean(row.thumbnail_ready),
+    thumbnailVersion: row.thumbnail_version ? String(row.thumbnail_version) : null,
     lastSeenAt: String(row.last_seen_at)
   }));
 }
