@@ -100,7 +100,8 @@ button.primary {
 }
 
 button.secondary,
-button.ghost {
+button.ghost,
+button.table-action {
   background: #fff;
   color: #26323f;
 }
@@ -108,6 +109,13 @@ button.ghost {
 button.ghost {
   height: 34px;
   font-weight: 600;
+}
+
+button.table-action {
+  height: 30px;
+  padding: 0 10px;
+  font-size: 12px;
+  font-weight: 700;
 }
 
 .progress-row {
@@ -146,7 +154,7 @@ button.ghost {
 
 .stats-grid {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 12px;
 }
 
@@ -154,6 +162,7 @@ button.ghost {
   padding: 18px;
   display: grid;
   gap: 4px;
+  min-width: 0;
 }
 
 .stat span {
@@ -216,10 +225,11 @@ th {
   letter-spacing: .04em;
 }
 
-th:first-child { width: 67%; }
-th:nth-child(2) { width: 10%; }
-th:nth-child(3) { width: 11%; }
-th:nth-child(4) { width: 12%; }
+th:first-child { width: 53%; }
+th:nth-child(2) { width: 8%; }
+th:nth-child(3) { width: 10%; }
+th:nth-child(4) { width: 18%; }
+th:nth-child(5) { width: 11%; }
 
 .path-cell {
   overflow: hidden;
@@ -233,6 +243,10 @@ th:nth-child(4) { width: 12%; }
   padding: 48px;
 }
 
+.muted {
+  color: #9aa2ab;
+}
+
 .badge,
 .status-pill {
   display: inline-flex;
@@ -242,7 +256,10 @@ th:nth-child(4) { width: 12%; }
   font-weight: 700;
 }
 
-.badge { padding: 4px 8px; }
+.badge {
+  padding: 4px 8px;
+  white-space: nowrap;
+}
 
 .badge.ok {
   background: #eef7f1;
@@ -252,6 +269,11 @@ th:nth-child(4) { width: 12%; }
 .badge.missing {
   background: #fff1f0;
   color: #8d302d;
+}
+
+.badge.recycle {
+  background: #fff6df;
+  color: #765711;
 }
 
 .status-pill {
@@ -266,7 +288,7 @@ th:nth-child(4) { width: 12%; }
   color: #25653c;
 }
 
-@media (max-width: 1050px) {
+@media (max-width: 1120px) {
   .topbar, main { padding-left: 22px; padding-right: 22px; }
-  .stats-grid { grid-template-columns: repeat(2, 1fr); }
+  .stats-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
