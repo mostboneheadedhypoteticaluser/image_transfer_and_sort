@@ -182,9 +182,13 @@ export class AnalysisService {
           );
         }
 
-        if (capabilities.nanodetModel !== true || capabilities.petDetection !== true) {
+        if (
+          capabilities.nanodetModel !== true ||
+          capabilities.yoloxModel !== true ||
+          capabilities.petDetection !== true
+        ) {
           throw new Error(
-            "Das NanoDet-Modell für Hunde- und Katzendetektion fehlt oder ist nicht verfügbar. " +
+            "Mindestens ein Haustiermodell (NanoDet/YOLOX-S) fehlt oder ist nicht verfügbar. " +
             "Bitte 'npm.cmd run setup:ai' ausführen."
           );
         }
