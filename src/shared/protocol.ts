@@ -19,6 +19,8 @@ export type MediaRecord = {
   sizeBytes: number;
   availability: "AVAILABLE" | "MISSING";
   inRecycleBin: boolean;
+  recycleState: "NONE" | "RESTORABLE" | "AMBIGUOUS";
+  duplicateCount: number;
   lastSeenAt: string;
 };
 
