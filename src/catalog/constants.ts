@@ -11,3 +11,8 @@ export const IMAGE_EXTENSIONS = new Set([
   ".heif",
   ".avif"
 ]);
+
+export const IGNORED_DIRECTORY_NAMES = new Set([
+  "$recycle.bin",
+  "system volume information"
+]);
