@@ -11,7 +11,8 @@
     "build": "npm run clean && npm run build:electron && npm run build:renderer",
     "start": "npm run build && electron .",
     "dev": "concurrently -k \"tsc -p tsconfig.electron.json -w\" \"vite --host 127.0.0.1\" \"wait-on dist/main/main.js tcp:5173 && cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:5173 electron .\"",
-    "check": "tsc -p tsconfig.electron.json --noEmit && tsc -p tsconfig.renderer.json --noEmit"
+    "check": "tsc -p tsconfig.electron.json --noEmit && tsc -p tsconfig.renderer.json --noEmit",
+    "setup:ai": "node scripts/setup-ai.mjs"
   },
   "devDependencies": {
     "@types/node": "^24.10.0",
