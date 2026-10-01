@@ -130,10 +130,21 @@
               </div>
             </article>
 
+            <article class="pipeline-stage">
+              <div>
+                <small>Stufe 6</small>
+                <strong>Personen bestätigen</strong>
+              </div>
+              <div class="pipeline-stage-status">
+                <span class="stage-state done">Über Reiter</span>
+                <small>Vorschläge aus SFace-Merkmalen</small>
+              </div>
+            </article>
+
             <article class="pipeline-stage future">
               <div>
                 <small>Danach</small>
-                <strong>Personen gruppieren · Haustiere · Motive</strong>
+                <strong>Haustiere · Motive</strong>
               </div>
               <div class="pipeline-stage-status">
                 <span class="stage-state future">Noch nicht aktiv</span>
@@ -163,6 +174,9 @@
             <button id="duplicateTab" class="view-tab" type="button">
               Dubletten <span id="duplicateTabCount" class="tab-count">0</span>
             </button>
+            <button id="peopleTab" class="view-tab" type="button">
+              Personen bestätigen <span id="peopleTabCount" class="tab-count">0</span>
+            </button>
             <button id="recycleTab" class="view-tab" type="button">
               Papierkorb <span id="recycleTabCount" class="tab-count">0</span>
             </button>
@@ -188,6 +202,34 @@
 
           <div id="duplicateView" class="catalog-view duplicate-view" hidden>
             <div id="duplicateGroups" class="duplicate-groups"></div>
+          </div>
+
+          <div id="personView" class="catalog-view person-view" hidden>
+            <div class="person-view-header">
+              <div>
+                <h3>Personen bestätigen</h3>
+                <p id="personStatus">
+                  Ähnliche Gesichter werden vorsichtig gruppiert. Erst deine Bestätigung macht daraus eine Person.
+                </p>
+              </div>
+              <button id="refreshPeople" class="ghost" type="button">Vorschläge neu berechnen</button>
+            </div>
+
+            <section class="person-section">
+              <div class="person-section-heading">
+                <h3>Zu bestätigen</h3>
+                <p>Ein falsches Zusammenführen ist problematischer als zwei getrennte Vorschläge – deshalb gruppieren wir konservativ.</p>
+              </div>
+              <div id="personCandidates" class="person-candidates"></div>
+            </section>
+
+            <section class="person-section confirmed-section">
+              <div class="person-section-heading">
+                <h3>Bestätigte Personen</h3>
+                <p>Diese Zuordnungen bleiben erhalten und werden bei späteren Neuberechnungen nicht überschrieben.</p>
+              </div>
+              <div id="confirmedPersons" class="confirmed-persons"></div>
+            </section>
           </div>
         </section>
       </main>
