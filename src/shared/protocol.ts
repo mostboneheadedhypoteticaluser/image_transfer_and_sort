@@ -182,6 +182,8 @@ export type MediaRecord = {
   petCount: number;
   dogCount: number;
   catCount: number;
+  petMultiModelCount: number;
+  petSingleModelCount: number;
   lastSeenAt: string;
 };
 
