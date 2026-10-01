@@ -3205,6 +3205,106 @@ function replacePetCandidates(
   }
 }
 
+function cosineSimilarity(left: number[], right: number[]): number {
+  if (left.length === 0 || left.length !== right.length) return -1;
+
+  let dot = 0;
+  let leftNorm = 0;
+  let rightNorm = 0;
+
+  for (let index = 0; index < left.length; index += 1) {
+    dot += left[index] * right[index];
+    leftNorm += left[index] * left[index];
+    rightNorm += right[index] * right[index];
+  }
+
+  if (leftNorm <= 0 || rightNorm <= 0) return -1;
+  return dot / Math.sqrt(leftNorm * rightNorm);
+}
+
+function centroid(vectors: number[][]): number[] | null {
+  if (vectors.length === 0) return null;
+  const dimension = vectors[0].length;
+  if (dimension === 0 || vectors.some((vector) => vector.length !== dimension)) {
+    return null;
+  }
+
+  const result = new Array<number>(dimension).fill(0);
+  for (const vector of vectors) {
+    for (let index = 0; index < dimension; index += 1) {
+      result[index] += vector[index];
+    }
+  }
+
+  for (let index = 0; index < dimension; index += 1) {
+    result[index] /= vectors.length;
+  }
+
+  const norm = Math.sqrt(result.reduce((sum, value) => sum + value * value, 0));
+  if (!Number.isFinite(norm) || norm <= 0) return null;
+  return result.map((value) => value / norm);
+}
+
+function knownPetCentroids(sourceId: number) {
+  const rows = db.prepare(`
+    SELECT
+      p.id AS pet_id,
+      p.name,
+      p.pet_class,
+      pe.dimension,
+      pe.vector_blob
+    FROM pets p
+    JOIN pet_assignments pa ON pa.pet_id=p.id
+    JOIN pet_fused_detections pd ON pd.id=pa.pet_detection_id
+    JOIN media_items m ON m.id=pd.media_id
+    JOIN pet_embeddings pe ON pe.pet_detection_id=pd.id
+    WHERE m.source_id=?
+      AND m.availability='AVAILABLE'
+      AND pe.model_version='DogReID DINOv2-B14 0.2.0'
+      AND pe.input_sha256=m.sha256
+      AND pd.input_sha256=m.sha256
+    ORDER BY p.id, pd.id
+  `).all(sourceId);
+
+  const grouped = new Map<number, {
+    id: number;
+    name: string;
+    petClass: string;
+    vectors: number[][];
+  }>();
+
+  for (const row of rows) {
+    const id = Number(row.pet_id);
+    const entry = grouped.get(id) ?? {
+      id,
+      name: String(row.name),
+      petClass: String(row.pet_class),
+      vectors: []
+    };
+
+    entry.vectors.push(
+      vectorFromBlob(row.vector_blob, Number(row.dimension))
+    );
+    grouped.set(id, entry);
+  }
+
+  return [...grouped.values()]
+    .map((entry) => ({
+      id: entry.id,
+      name: entry.name,
+      petClass: entry.petClass,
+      vector: centroid(entry.vectors)
+    }))
+    .filter(
+      (entry): entry is {
+        id: number;
+        name: string;
+        petClass: string;
+        vector: number[];
+      } => entry.vector !== null
+    );
+}
+
 function listPetCandidates(sourceId: number, requestedLimit: number) {
   const limit = Math.max(1, Math.min(500, Math.trunc(requestedLimit || 100)));
 
@@ -3241,20 +3341,75 @@ function listPetCandidates(sourceId: number, requestedLimit: number) {
     LIMIT 24
   `);
 
+  const embeddingQuery = db.prepare(`
+    SELECT
+      pci.pet_detection_id,
+      pe.dimension,
+      pe.vector_blob
+    FROM pet_candidate_items pci
+    JOIN pet_embeddings pe ON pe.pet_detection_id=pci.pet_detection_id
+    WHERE pci.candidate_id=?
+      AND pe.model_version='DogReID DINOv2-B14 0.2.0'
+    ORDER BY pci.pet_detection_id
+  `);
+
+  const exclusionQuery = db.prepare(`
+    SELECT 1
+    FROM pet_candidate_items pci
+    JOIN pet_assignment_exclusions pae
+      ON pae.pet_detection_id=pci.pet_detection_id
+    WHERE pci.candidate_id=?
+      AND pae.pet_id=?
+    LIMIT 1
+  `);
+
+  const knownPets = knownPetCentroids(sourceId);
+
   return candidates.map((candidate) => {
+    const candidateId = Number(candidate.id);
     const representativePetId = candidate.representative_pet_id === null
       ? null
       : Number(candidate.representative_pet_id);
 
+    const candidateVector = centroid(
+      embeddingQuery.all(candidateId).map((row) =>
+        vectorFromBlob(row.vector_blob, Number(row.dimension))
+      )
+    );
+
+    let suggestedPetId: number | null = null;
+    let suggestedPetName: string | null = null;
+    let suggestedPetSimilarity: number | null = null;
+
+    if (candidateVector) {
+      for (const known of knownPets) {
+        if (known.petClass !== String(candidate.pet_class)) continue;
+        if (exclusionQuery.get(candidateId, known.id)) continue;
+
+        const similarity = cosineSimilarity(candidateVector, known.vector);
+        if (
+          similarity >= 0.60 &&
+          (suggestedPetSimilarity === null || similarity > suggestedPetSimilarity)
+        ) {
+          suggestedPetId = known.id;
+          suggestedPetName = known.name;
+          suggestedPetSimilarity = similarity;
+        }
+      }
+    }
+
     return {
-      id: Number(candidate.id),
+      id: candidateId,
       petClass: String(candidate.pet_class),
       detectionCount: Number(candidate.detection_count),
       representativePetId,
       averageSimilarity: Number(candidate.average_similarity),
       minSimilarity: Number(candidate.min_similarity),
+      suggestedPetId,
+      suggestedPetName,
+      suggestedPetSimilarity,
       pets: itemQuery.all(
-        Number(candidate.id),
+        candidateId,
         representativePetId ?? -1
       ).map((row) => ({
         petDetectionId: Number(row.pet_detection_id),
@@ -3267,7 +3422,7 @@ function listPetCandidates(sourceId: number, requestedLimit: number) {
 }
 
 function listPets(sourceId: number) {
-  return db.prepare(`
+  const pets = db.prepare(`
     SELECT
       p.id,
       p.name,
@@ -3281,13 +3436,39 @@ function listPets(sourceId: number) {
     WHERE m.source_id=?
     GROUP BY p.id, p.name, p.pet_class
     ORDER BY p.name COLLATE NOCASE, p.id
-  `).all(sourceId).map((row) => ({
+  `).all(sourceId);
+
+  const itemQuery = db.prepare(`
+    SELECT
+      pa.pet_detection_id,
+      pd.media_id,
+      m.relative_path,
+      pa.confidence
+    FROM pet_assignments pa
+    JOIN pet_fused_detections pd ON pd.id=pa.pet_detection_id
+    JOIN media_items m ON m.id=pd.media_id
+    WHERE pa.pet_id=?
+      AND m.source_id=?
+    ORDER BY pa.pet_detection_id ASC
+    LIMIT 48
+  `);
+
+  return pets.map((row) => ({
     id: Number(row.id),
     name: String(row.name),
     petClass: String(row.pet_class),
     detectionCount: Number(row.detection_count),
     representativePetId:
-      row.representative_pet_id === null ? null : Number(row.representative_pet_id)
+      row.representative_pet_id === null ? null : Number(row.representative_pet_id),
+    pets: itemQuery.all(Number(row.id), sourceId).map((pet) => ({
+      petDetectionId: Number(pet.pet_detection_id),
+      mediaId: Number(pet.media_id),
+      relativePath: String(pet.relative_path),
+      confidence:
+        pet.confidence === null || pet.confidence === undefined
+          ? null
+          : Number(pet.confidence)
+    }))
   }));
 }
 
