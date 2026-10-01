@@ -3,6 +3,7 @@ import type {
   CatalogStats,
   MediaRecord,
   RestoreResult,
+  ResetCatalogResult,
   ScanProgress,
   ScanResult,
   SourceRecord
@@ -18,6 +19,7 @@ const api = {
       ipcRenderer.invoke("catalog:listMedia", sourceId, limit),
     scanSource: (sourceId: number): Promise<ScanResult> => ipcRenderer.invoke("catalog:scanSource", sourceId),
     restoreMedia: (mediaId: number): Promise<RestoreResult> => ipcRenderer.invoke("catalog:restoreMedia", mediaId),
+    resetCatalog: (): Promise<ResetCatalogResult> => ipcRenderer.invoke("catalog:resetCatalog"),
     onProgress: (listener: (progress: ScanProgress) => void) => {
       const handler = (_event: Electron.IpcRendererEvent, progress: ScanProgress) => listener(progress);
       ipcRenderer.on("catalog:progress", handler);
