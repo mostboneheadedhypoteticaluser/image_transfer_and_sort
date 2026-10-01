@@ -3,8 +3,10 @@ import type {
   AnalysisWorkerStatus,
   PipelineStatus,
   CatalogStats,
+  ConfirmPersonResult,
   DuplicateGroup,
   MediaRecord,
+  PersonOverview,
   RestoreResult,
   ResetCatalogResult,
   ScanProgress,
@@ -27,6 +29,15 @@ const api = {
       ipcRenderer.on("analysis:pipelineStatus", handler);
       return () => ipcRenderer.removeListener("analysis:pipelineStatus", handler);
     }
+  },
+  people: {
+    getOverview: (sourceId: number, forceRefresh = false): Promise<PersonOverview> =>
+      ipcRenderer.invoke("people:getOverview", sourceId, forceRefresh),
+    confirmCandidate: (
+      candidateId: number,
+      name: string
+    ): Promise<ConfirmPersonResult> =>
+      ipcRenderer.invoke("people:confirmCandidate", candidateId, name)
   },
   catalog: {
     listSources: (): Promise<SourceRecord[]> => ipcRenderer.invoke("catalog:listSources"),
