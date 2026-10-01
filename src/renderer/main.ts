@@ -990,7 +990,31 @@ function renderPetOverview(overview: PetOverview): void {
           fallback.hidden = false;
         });
 
-        figure.append(img, fallback);
+        const removeButton = document.createElement("button");
+        removeButton.type = "button";
+        removeButton.className = "face-correction-button";
+        removeButton.textContent = "×";
+        removeButton.title = "Diesen Hund aus der vorgeschlagenen Gruppe entfernen";
+        removeButton.addEventListener("click", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+
+          void runSafely(async () => {
+            removeButton.disabled = true;
+            const result = await window.imageSorter.pets.removeCandidatePet(
+              candidate.id,
+              pet.petDetectionId
+            );
+            const sourceId = selectedSourceId();
+            if (sourceId !== null) await loadPetOverview(sourceId, true);
+            progressText.textContent =
+              result.affectedPets.toLocaleString("de-DE") + " " +
+              (result.affectedPets === 1 ? "Fundstelle wurde" : "Fundstellen wurden") +
+              " dauerhaft aus dieser Hundegruppe getrennt.";
+          });
+        });
+
+        figure.append(img, fallback, removeButton);
         cropStrip.appendChild(figure);
       }
 
@@ -1012,6 +1036,19 @@ function renderPetOverview(overview: PetOverview): void {
         " · Minimum " + candidate.minSimilarity.toFixed(3);
 
       titleBlock.append(title, similarity);
+
+      if (
+        candidate.suggestedPetName &&
+        candidate.suggestedPetSimilarity !== null
+      ) {
+        const suggestion = document.createElement("p");
+        suggestion.className = "pet-suggestion";
+        suggestion.textContent =
+          "Vermutlich „" + candidate.suggestedPetName + "“ · Referenzähnlichkeit " +
+          candidate.suggestedPetSimilarity.toFixed(3);
+        titleBlock.appendChild(suggestion);
+      }
+
       heading.appendChild(titleBlock);
 
       const confirmRow = document.createElement("div");
@@ -1022,11 +1059,14 @@ function renderPetOverview(overview: PetOverview): void {
       input.maxLength = 120;
       input.placeholder = "Name des Hundes";
       input.autocomplete = "off";
+      input.value = candidate.suggestedPetName ?? "";
 
       const button = document.createElement("button");
       button.className = "primary person-confirm";
       button.type = "button";
-      button.textContent = "Bestätigen";
+      button.textContent = candidate.suggestedPetName
+        ? "Vorschlag bestätigen"
+        : "Bestätigen";
 
       const confirm = async () => {
         const name = input.value.trim();
@@ -1101,32 +1141,185 @@ function renderPetOverview(overview: PetOverview): void {
 
     for (const pet of overview.pets) {
       const card = document.createElement("article");
-      card.className = "pet-confirmed-card";
+      card.className = "confirmed-person-card";
+
+      const header = document.createElement("div");
+      header.className = "confirmed-person-header";
 
       if (pet.representativePetId !== null) {
         const img = document.createElement("img");
         img.src = petCropUrl(pet.representativePetId);
         img.alt = "";
         img.loading = "lazy";
-        card.appendChild(img);
+        header.appendChild(img);
       }
 
       const text = document.createElement("div");
       const name = document.createElement("strong");
       name.textContent = pet.name;
-
       const count = document.createElement("small");
       count.textContent =
         pet.detectionCount.toLocaleString("de-DE") + " " +
         (pet.detectionCount === 1
           ? "bestätigte Fundstelle"
           : "bestätigte Fundstellen");
-
       const type = document.createElement("small");
       type.textContent = pet.petClass === "dog" ? "Hund" : "Katze";
-
       text.append(name, count, type);
-      card.appendChild(text);
+      header.appendChild(text);
+      card.appendChild(header);
+
+      const cropStrip = document.createElement("div");
+      cropStrip.className = "confirmed-face-strip";
+
+      for (const detection of pet.pets) {
+        const figure = document.createElement("figure");
+        figure.className = "person-face confirmed-face pet-crop";
+
+        const img = document.createElement("img");
+        img.src = petCropUrl(detection.petDetectionId);
+        img.alt = "";
+        img.loading = "lazy";
+        img.title = detection.relativePath;
+
+        const fallback = document.createElement("span");
+        fallback.className = "face-fallback";
+        fallback.textContent = "Hund";
+        fallback.hidden = true;
+
+        img.addEventListener("error", () => {
+          img.hidden = true;
+          fallback.hidden = false;
+        });
+
+        const removeButton = document.createElement("button");
+        removeButton.type = "button";
+        removeButton.className = "face-correction-button";
+        removeButton.textContent = "×";
+        removeButton.title =
+          "Diese Fundstelle aus „" + pet.name + "“ entfernen";
+        removeButton.addEventListener("click", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+
+          const confirmed = window.confirm(
+            "Diese Hundefundstelle wirklich aus „" + pet.name + "“ entfernen? " +
+            "Die Korrektur wird für zukünftige Vorschläge gespeichert."
+          );
+          if (!confirmed) return;
+
+          void runSafely(async () => {
+            removeButton.disabled = true;
+            const result = await window.imageSorter.pets.removePetDetection(
+              pet.id,
+              detection.petDetectionId
+            );
+            const sourceId = selectedSourceId();
+            if (sourceId !== null) await loadPetOverview(sourceId, true);
+            progressText.textContent =
+              result.affectedPets.toLocaleString("de-DE") + " " +
+              (result.affectedPets === 1 ? "Fundstelle wurde" : "Fundstellen wurden") +
+              " aus „" + pet.name + "“ entfernt.";
+          });
+        });
+
+        figure.append(img, fallback, removeButton);
+        cropStrip.appendChild(figure);
+      }
+
+      card.appendChild(cropStrip);
+
+      const controls = document.createElement("div");
+      controls.className = "confirmed-person-controls";
+
+      const renameGroup = document.createElement("div");
+      renameGroup.className = "person-control-group";
+
+      const renameInput = document.createElement("input");
+      renameInput.type = "text";
+      renameInput.maxLength = 120;
+      renameInput.value = pet.name;
+      renameInput.setAttribute("aria-label", "Name von " + pet.name);
+
+      const renameButton = document.createElement("button");
+      renameButton.type = "button";
+      renameButton.className = "ghost";
+      renameButton.textContent = "Umbenennen";
+      renameButton.addEventListener("click", () => {
+        const newName = renameInput.value.trim();
+        if (!newName || newName === pet.name) return;
+
+        void runSafely(async () => {
+          renameButton.disabled = true;
+          await window.imageSorter.pets.renamePet(pet.id, newName);
+          const sourceId = selectedSourceId();
+          if (sourceId !== null) await loadPetOverview(sourceId);
+          progressText.textContent =
+            "Haustier wurde in „" + newName + "“ umbenannt.";
+        });
+      });
+
+      renameGroup.append(renameInput, renameButton);
+      controls.appendChild(renameGroup);
+
+      const mergeTargets = overview.pets.filter(
+        (item) => item.id !== pet.id && item.petClass === pet.petClass
+      );
+
+      if (mergeTargets.length > 0) {
+        const mergeGroup = document.createElement("div");
+        mergeGroup.className = "person-control-group";
+
+        const select = document.createElement("select");
+        const placeholder = document.createElement("option");
+        placeholder.value = "";
+        placeholder.textContent = "Zusammenführen mit …";
+        select.appendChild(placeholder);
+
+        for (const target of mergeTargets) {
+          const option = document.createElement("option");
+          option.value = String(target.id);
+          option.textContent = target.name;
+          select.appendChild(option);
+        }
+
+        const mergeButton = document.createElement("button");
+        mergeButton.type = "button";
+        mergeButton.className = "ghost";
+        mergeButton.textContent = "Zusammenführen";
+        mergeButton.addEventListener("click", () => {
+          const targetId = Number(select.value);
+          if (!Number.isInteger(targetId) || targetId <= 0) return;
+
+          const target = overview.pets.find((item) => item.id === targetId);
+          if (!target) return;
+
+          const confirmed = window.confirm(
+            "„" + pet.name + "“ vollständig mit „" + target.name +
+            "“ zusammenführen?"
+          );
+          if (!confirmed) return;
+
+          void runSafely(async () => {
+            mergeButton.disabled = true;
+            const result = await window.imageSorter.pets.mergePets(
+              target.id,
+              pet.id
+            );
+            const sourceId = selectedSourceId();
+            if (sourceId !== null) await loadPetOverview(sourceId, true);
+            progressText.textContent =
+              "Zusammengeführt: „" + result.name + "“ hat jetzt " +
+              result.detectionCount.toLocaleString("de-DE") +
+              " bestätigte Fundstellen.";
+          });
+        });
+
+        mergeGroup.append(select, mergeButton);
+        controls.appendChild(mergeGroup);
+      }
+
+      card.appendChild(controls);
       fragment.appendChild(card);
     }
 
