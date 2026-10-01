@@ -1,3 +1,15 @@
+export type AnalysisWorkerStatus = {
+  state: "STARTING" | "READY" | "STOPPED" | "ERROR";
+  pid: number | null;
+  python: string | null;
+  processPriority: "below-normal";
+  cpuBudgetPercent: number;
+  maxConcurrentJobs: number;
+  queuedJobs: number;
+  activeJobs: number;
+  message: string;
+};
+
 export type SourceRecord = {
   id: number;
   path: string;
