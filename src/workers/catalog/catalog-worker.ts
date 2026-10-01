@@ -2,7 +2,7 @@ import path from "node:path";
 import { stat } from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";
 import { randomUUID } from "node:crypto";
-import { walkImages } from "../../catalog/file-scanner";
+import { walkMedia } from "../../catalog/file-scanner";
 import { sha256File } from "../../catalog/hash";
 import {
   findRenamedSibling,
@@ -610,7 +610,7 @@ async function scanSource(sourceId: number): Promise<ScanResult> {
       VALUES(?,?,?,?,?,?,?,'AVAILABLE',0,?)
     `);
 
-    for await (const file of walkImages(root, (readError) => {
+    for await (const file of walkMedia(root, (readError) => {
       errors += 1;
       readErrorPaths.push(readError.path);
     })) {
@@ -699,7 +699,7 @@ async function scanSource(sourceId: number): Promise<ScanResult> {
         progress(
           sourceId,
           discovered,
-          `${discovered.toLocaleString("de-DE")} Bilder gefunden …`
+          `${discovered.toLocaleString("de-DE")} Medien gefunden …`
         );
       }
     }
@@ -830,10 +830,10 @@ async function restoreMedia(mediaId: number): Promise<RestoreResult> {
     WHERE id=?
   `).get(mediaId);
 
-  if (!row) throw new Error("Bild wurde im Katalog nicht gefunden.");
+  if (!row) throw new Error("Medium wurde im Katalog nicht gefunden.");
 
   if (String(row.availability) !== "MISSING" || !Boolean(row.in_recycle_bin)) {
-    throw new Error("Dieses Bild ist nicht als wiederherstellbar im Papierkorb markiert.");
+    throw new Error("Dieses Medium ist nicht als wiederherstellbar im Papierkorb markiert.");
   }
 
   const originalPath = String(row.absolute_path);
@@ -871,6 +871,30 @@ async function restoreMedia(mediaId: number): Promise<RestoreResult> {
   };
 }
 
+function resetCatalog(): { reset: true } {
+  if (scanRunning) {
+    throw new Error("Während eines laufenden Scans kann der Katalog nicht zurückgesetzt werden.");
+  }
+
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    db.exec(`
+      DELETE FROM analysis_jobs;
+      DELETE FROM media_items;
+      DELETE FROM scans;
+      DELETE FROM media_sources;
+      DELETE FROM sqlite_sequence
+      WHERE name IN ('analysis_jobs', 'media_items', 'scans', 'media_sources');
+    `);
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+
+  return { reset: true };
+}
+
 async function dispatch(method: CatalogMethod, payload: Record<string, unknown> = {}) {
   switch (method) {
     case "listSources":
@@ -888,6 +912,8 @@ async function dispatch(method: CatalogMethod, payload: Record<string, unknown> 
       return scanSource(asNumber(payload.sourceId, "sourceId"));
     case "restoreMedia":
       return restoreMedia(asNumber(payload.mediaId, "mediaId"));
+    case "resetCatalog":
+      return resetCatalog();
   }
 }
 
