@@ -831,6 +831,20 @@ window.imageSorter.catalog.onProgress((progress) => {
 window.imageSorter.analysis.onStatus(renderAnalysisStatus);
 window.imageSorter.analysis.onPipelineStatus(renderPipelineStatus);
 
+window.imageSorter.people.onUpdated(() => {
+  const sourceId = selectedSourceId();
+  if (sourceId === null) return;
+
+  void runSafely(async () => {
+    const stats = await window.imageSorter.catalog.getStats(sourceId);
+    peopleTabCount.textContent = stats.personCandidates.toLocaleString("de-DE");
+
+    if (currentView === "people") {
+      await loadPersonOverview(sourceId);
+    }
+  });
+});
+
 void window.imageSorter.analysis
   .getPipelineStatus()
   .then(renderPipelineStatus)
