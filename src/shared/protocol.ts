@@ -46,6 +46,10 @@ export type FaceEmbeddingSet = {
   revision: string;
   needsRebuild: boolean;
   faces: FaceEmbeddingForClustering[];
+  cannotLinks: Array<{
+    faceAId: number;
+    faceBId: number;
+  }>;
 };
 
 export type PersonClusterInput = {
@@ -74,11 +78,19 @@ export type PersonCandidate = {
   faces: PersonCandidateFace[];
 };
 
+export type PersonFace = {
+  faceDetectionId: number;
+  mediaId: number;
+  relativePath: string;
+  confidence: number | null;
+};
+
 export type PersonRecord = {
   id: number;
   name: string;
   faceCount: number;
   representativeFaceId: number | null;
+  faces: PersonFace[];
 };
 
 export type PersonOverview = {
@@ -88,6 +100,17 @@ export type PersonOverview = {
 };
 
 export type ConfirmPersonResult = {
+  personId: number;
+  name: string;
+  faceCount: number;
+};
+
+export type PersonCorrectionResult = {
+  changed: true;
+  affectedFaces: number;
+};
+
+export type MergePersonsResult = {
   personId: number;
   name: string;
   faceCount: number;
@@ -220,6 +243,10 @@ export type CatalogMethod =
   | "listPersonCandidates"
   | "listPersons"
   | "confirmPersonCandidate"
+  | "removeFaceFromPersonCandidate"
+  | "removeFaceFromPerson"
+  | "mergePersons"
+  | "renamePerson"
   | "getFaceCropInfo"
   | "getThumbnailInfo"
   | "scanSource"
