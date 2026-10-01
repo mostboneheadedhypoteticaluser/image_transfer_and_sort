@@ -199,6 +199,21 @@ db.exec(`
 
   CREATE INDEX IF NOT EXISTS idx_face_media
     ON face_detections(media_id);
+
+  CREATE TABLE IF NOT EXISTS face_embeddings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    face_detection_id INTEGER NOT NULL REFERENCES face_detections(id) ON DELETE CASCADE,
+    media_id INTEGER NOT NULL REFERENCES media_items(id) ON DELETE CASCADE,
+    model_version TEXT NOT NULL,
+    input_sha256 TEXT NOT NULL,
+    dimension INTEGER NOT NULL,
+    vector_blob BLOB NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(face_detection_id, model_version)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_face_embedding_media
+    ON face_embeddings(media_id);
 `);
 
 function tableHasColumn(table: string, column: string): boolean {
@@ -470,6 +485,12 @@ function listMedia(sourceId: number, requestedLimit: number) {
         WHERE fd.media_id=m.id
           AND fd.input_sha256=m.sha256
       ) AS face_count,
+      (
+        SELECT COUNT(*)
+        FROM face_embeddings fe
+        WHERE fe.media_id=m.id
+          AND fe.input_sha256=m.sha256
+      ) AS face_embedding_count,
       CASE
         WHEN m.availability='AVAILABLE' THEN (
           SELECT COUNT(*) - 1
@@ -511,6 +532,7 @@ function listMedia(sourceId: number, requestedLimit: number) {
     thumbnailVersion: row.thumbnail_version ? String(row.thumbnail_version) : null,
     capturedAt: row.captured_at ? String(row.captured_at) : null,
     faceCount: Number(row.face_count ?? 0),
+    faceEmbeddingCount: Number(row.face_embedding_count ?? 0),
     lastSeenAt: String(row.last_seen_at)
   }));
 }
@@ -536,7 +558,13 @@ function listRecycleMedia(sourceId: number, requestedLimit: number) {
         FROM face_detections fd
         WHERE fd.media_id=m.id
           AND fd.input_sha256=m.sha256
-      ) AS face_count
+      ) AS face_count,
+      (
+        SELECT COUNT(*)
+        FROM face_embeddings fe
+        WHERE fe.media_id=m.id
+          AND fe.input_sha256=m.sha256
+      ) AS face_embedding_count
     FROM media_items m
     LEFT JOIN media_thumbnails t ON t.media_id=m.id
     LEFT JOIN media_image_metadata md ON md.media_id=m.id
@@ -562,6 +590,7 @@ function listRecycleMedia(sourceId: number, requestedLimit: number) {
     thumbnailVersion: row.thumbnail_version ? String(row.thumbnail_version) : null,
     capturedAt: row.captured_at ? String(row.captured_at) : null,
     faceCount: Number(row.face_count ?? 0),
+    faceEmbeddingCount: Number(row.face_embedding_count ?? 0),
     lastSeenAt: String(row.last_seen_at)
   }));
 }
@@ -1207,7 +1236,8 @@ function enqueueAnalysisJobs(sourceId: number, module = "file-probe-v1") {
   const imageOnlyModules = new Set([
     "thumbnail-v1",
     "image-metadata-v1",
-    "face-detect-yunet-v1"
+    "face-detect-yunet-v1",
+    "face-embed-sface-v1"
   ]);
   const imageFilter =
     imageOnlyModules.has(module)
@@ -1323,6 +1353,17 @@ function claimAnalysisJob(module = "file-probe-v1") {
       WHERE j.module=?
         AND j.status='PENDING'
         AND m.availability='AVAILABLE'
+        AND (
+          j.module<>'face-embed-sface-v1'
+          OR EXISTS (
+            SELECT 1
+            FROM analysis_jobs dependency
+            WHERE dependency.media_id=j.media_id
+              AND dependency.module='face-detect-yunet-v1'
+              AND dependency.status='DONE'
+              AND dependency.input_sha256=j.input_sha256
+          )
+        )
       ORDER BY j.priority ASC, j.id ASC
       LIMIT 1
     `).get(module);
@@ -1779,6 +1820,7 @@ async function scanSource(sourceId: number): Promise<ScanResult> {
     enqueueAnalysisJobs(sourceId, "thumbnail-v1");
     enqueueAnalysisJobs(sourceId, "image-metadata-v1");
     enqueueAnalysisJobs(sourceId, "face-detect-yunet-v1");
+    enqueueAnalysisJobs(sourceId, "face-embed-sface-v1");
 
     const result: ScanResult = {
       discovered,
@@ -2260,6 +2302,7 @@ function resetCatalog(): { reset: true } {
   try {
     db.exec(`
       DELETE FROM analysis_jobs;
+      DELETE FROM face_embeddings;
       DELETE FROM face_detections;
       DELETE FROM media_image_metadata;
       DELETE FROM media_thumbnails;
@@ -2268,7 +2311,7 @@ function resetCatalog(): { reset: true } {
       DELETE FROM scans;
       DELETE FROM media_sources;
       DELETE FROM sqlite_sequence
-      WHERE name IN ('analysis_jobs', 'face_detections', 'media_image_metadata', 'media_thumbnails', 'media_items', 'media_directories', 'scans', 'media_sources');
+      WHERE name IN ('analysis_jobs', 'face_embeddings', 'face_detections', 'media_image_metadata', 'media_thumbnails', 'media_items', 'media_directories', 'scans', 'media_sources');
     `);
     db.exec("COMMIT");
   } catch (error) {
