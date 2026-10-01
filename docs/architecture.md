@@ -88,3 +88,10 @@ Korrekturen werden nicht nur an der aktuellen UI-Gruppe vorgenommen. Beim manuel
 Wird ein Gesicht aus einer bestätigten Person entfernt, wird zusätzlich die Negativzuordnung in `person_face_exclusions` gespeichert. Die feste Zuordnung in `person_face_assignments` wird entfernt; die Person selbst und ihre übrigen bestätigten Gesichter bleiben unverändert. Eine spätere explizite Nutzerbestätigung darf eine solche frühere Sperre bewusst wieder aufheben.
 
 Bestätigte Personen können umbenannt oder zusammengeführt werden. Beim Zusammenführen werden bestehende bestätigte Gesichtszuordnungen und Negativregeln konsistent auf die Zielperson übertragen. Exakte Dateidubletten desselben Gesichtes werden bei Korrekturen gemeinsam behandelt.
+
+
+## Haustierdetektion
+
+Die erste Haustierstufe verwendet das CPU-taugliche OpenCV-Zoo-Modell **NanoDet 2022nov**. Aus den COCO-Klassen werden bewusst nur `dog` und `cat` übernommen. Pro Fundstelle speichert `pet_detections` Klasse, Konfidenz, Bounding Box, Eingabe-SHA-256 und Detektorversion.
+
+Diese Stufe erkennt zunächst nur **Tierart und Position**, nicht die Identität eines einzelnen Tieres. Individuelle Tiere (z. B. derselbe Hund auf verschiedenen Bildern) werden in einer separaten nächsten Stufe über Crop-Embeddings und Nutzerbestätigung aufgebaut. So bleiben Detektion und Identität wie bei Personen getrennt.
