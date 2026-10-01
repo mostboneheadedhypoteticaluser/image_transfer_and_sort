@@ -1,5 +1,10 @@
 import "./style.css";
-import type { DuplicateGroup, MediaRecord, SourceRecord } from "../shared/protocol";
+import type {
+  AnalysisWorkerStatus,
+  DuplicateGroup,
+  MediaRecord,
+  SourceRecord
+} from "../shared/protocol";
 
 type CatalogView = "media" | "duplicates" | "recycle";
 
@@ -26,12 +31,53 @@ const availableCount = document.querySelector<HTMLSpanElement>("#availableCount"
 const missingCount = document.querySelector<HTMLSpanElement>("#missingCount")!;
 const recycleCount = document.querySelector<HTMLSpanElement>("#recycleCount")!;
 const lastScan = document.querySelector<HTMLSpanElement>("#lastScan")!;
+const analysisWorkerState = document.querySelector<HTMLSpanElement>("#analysisWorkerState")!;
+const analysisPython = document.querySelector<HTMLElement>("#analysisPython")!;
+const analysisPriority = document.querySelector<HTMLElement>("#analysisPriority")!;
+const analysisCpuBudget = document.querySelector<HTMLElement>("#analysisCpuBudget")!;
+const analysisParallel = document.querySelector<HTMLElement>("#analysisParallel")!;
+const analysisQueue = document.querySelector<HTMLElement>("#analysisQueue")!;
+const analysisActive = document.querySelector<HTMLElement>("#analysisActive")!;
+const analysisMessage = document.querySelector<HTMLSpanElement>("#analysisMessage")!;
 
 let sources: SourceRecord[] = [];
 let currentView: CatalogView = "media";
 let scanning = false;
 let restoring = false;
 let resetting = false;
+
+function renderAnalysisStatus(status: AnalysisWorkerStatus): void {
+  analysisWorkerState.className = "analysis-state";
+
+  switch (status.state) {
+    case "READY":
+      analysisWorkerState.classList.add("ready");
+      analysisWorkerState.textContent = "Bereit";
+      break;
+    case "STARTING":
+      analysisWorkerState.classList.add("starting");
+      analysisWorkerState.textContent = "Startet …";
+      break;
+    case "ERROR":
+      analysisWorkerState.classList.add("error");
+      analysisWorkerState.textContent = "Fehler";
+      break;
+    case "STOPPED":
+      analysisWorkerState.classList.add("stopped");
+      analysisWorkerState.textContent = "Gestoppt";
+      break;
+  }
+
+  analysisPython.textContent = status.python ?? "—";
+  analysisPriority.textContent =
+    status.processPriority === "below-normal" ? "Niedrig" : status.processPriority;
+  analysisCpuBudget.textContent = `${status.cpuBudgetPercent} % Ziel`;
+  analysisParallel.textContent =
+    `${status.maxConcurrentJobs} ${status.maxConcurrentJobs === 1 ? "Job" : "Jobs"}`;
+  analysisQueue.textContent = status.queuedJobs.toLocaleString("de-DE");
+  analysisActive.textContent = status.activeJobs.toLocaleString("de-DE");
+  analysisMessage.textContent = status.message;
+}
 
 function selectedSourceId(): number | null {
   const value = sourceSelect.value;
@@ -405,6 +451,25 @@ window.imageSorter.catalog.onProgress((progress) => {
   if (progress.sourceId !== selectedSourceId()) return;
   progressText.textContent = progress.message;
 });
+
+window.imageSorter.analysis.onStatus(renderAnalysisStatus);
+
+void window.imageSorter.analysis
+  .getStatus()
+  .then(renderAnalysisStatus)
+  .catch((error) => {
+    renderAnalysisStatus({
+      state: "ERROR",
+      pid: null,
+      python: null,
+      processPriority: "below-normal",
+      cpuBudgetPercent: 50,
+      maxConcurrentJobs: 1,
+      queuedJobs: 0,
+      activeJobs: 0,
+      message: error instanceof Error ? error.message : String(error)
+    });
+  });
 
 void runSafely(async () => {
   await loadSources();
