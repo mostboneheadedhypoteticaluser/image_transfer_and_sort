@@ -1250,7 +1250,12 @@ function enqueueAnalysisJobs(sourceId: number, module = "file-probe-v1") {
       ${imageFilter}
     ON CONFLICT(media_id, module) DO UPDATE SET
       status='PENDING',
-      attempts=0,
+      attempts=CASE
+        WHEN analysis_jobs.input_sha256 IS NULL
+          OR analysis_jobs.input_sha256<>excluded.input_sha256
+        THEN 0
+        ELSE analysis_jobs.attempts
+      END,
       payload_json=NULL,
       input_sha256=excluded.input_sha256,
       result_json=NULL,
@@ -1260,6 +1265,7 @@ function enqueueAnalysisJobs(sourceId: number, module = "file-probe-v1") {
       updated_at=CURRENT_TIMESTAMP
     WHERE analysis_jobs.input_sha256 IS NULL
        OR analysis_jobs.input_sha256<>excluded.input_sha256
+       OR (analysis_jobs.status='FAILED' AND analysis_jobs.attempts<3)
   `);
 
   const args: (string | number)[] = [module, sourceId];
@@ -1874,6 +1880,12 @@ function jobForModule(jobId: number, module: string) {
   return job;
 }
 
+function nullableNumber(value: unknown): number | null {
+  if (value === null || value === undefined || value === "") return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
 function completeImageMetadataJob(jobId: number, result: unknown) {
   if (!result || typeof result !== "object") {
     throw new Error("Metadaten-Ergebnis ist ungültig.");
@@ -1930,13 +1942,15 @@ function completeImageMetadataJob(jobId: number, result: unknown) {
       Math.trunc(height),
       typeof value.format === "string" ? value.format : null,
       typeof value.mode === "string" ? value.mode : null,
-      Number.isFinite(Number(value.orientation)) ? Math.trunc(Number(value.orientation)) : null,
+      nullableNumber(value.orientation) === null
+        ? null
+        : Math.trunc(nullableNumber(value.orientation)!),
       typeof value.capturedAt === "string" ? value.capturedAt : null,
       typeof value.cameraMake === "string" ? value.cameraMake : null,
       typeof value.cameraModel === "string" ? value.cameraModel : null,
       typeof value.lensModel === "string" ? value.lensModel : null,
-      Number.isFinite(Number(value.gpsLatitude)) ? Number(value.gpsLatitude) : null,
-      Number.isFinite(Number(value.gpsLongitude)) ? Number(value.gpsLongitude) : null
+      nullableNumber(value.gpsLatitude),
+      nullableNumber(value.gpsLongitude)
     );
 
     db.prepare(`
