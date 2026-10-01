@@ -60,6 +60,8 @@ const faceEmbeddingStageState = document.querySelector<HTMLSpanElement>("#faceEm
 const faceEmbeddingStageCounts = document.querySelector<HTMLElement>("#faceEmbeddingStageCounts")!;
 const petStageState = document.querySelector<HTMLSpanElement>("#petStageState")!;
 const petStageCounts = document.querySelector<HTMLElement>("#petStageCounts")!;
+const petFusionStageState = document.querySelector<HTMLSpanElement>("#petFusionStageState")!;
+const petFusionStageCounts = document.querySelector<HTMLElement>("#petFusionStageCounts")!;
 
 let sources: SourceRecord[] = [];
 let currentView: CatalogView = "media";
@@ -71,6 +73,7 @@ let lastMetadataDone = -1;
 let lastFaceDone = -1;
 let lastFaceEmbeddingDone = -1;
 let lastPetDone = -1;
+let lastPetFusionDone = -1;
 let analysisRefreshTimer: number | null = null;
 
 function renderAnalysisStatus(status: AnalysisWorkerStatus): void {
@@ -142,19 +145,22 @@ function renderPipelineStatus(status: PipelineStatus): void {
     status.faceEmbeddings
   );
   renderStage(petStageState, petStageCounts, status.petDetection);
+  renderStage(petFusionStageState, petFusionStageCounts, status.petFusion);
 
   const visualDataChanged =
     status.thumbnails.done !== lastThumbnailDone ||
     status.imageMetadata.done !== lastMetadataDone ||
     status.faces.done !== lastFaceDone ||
     status.faceEmbeddings.done !== lastFaceEmbeddingDone ||
-    status.petDetection.done !== lastPetDone;
+    status.petDetection.done !== lastPetDone ||
+    status.petFusion.done !== lastPetFusionDone;
 
   lastThumbnailDone = status.thumbnails.done;
   lastMetadataDone = status.imageMetadata.done;
   lastFaceDone = status.faces.done;
   lastFaceEmbeddingDone = status.faceEmbeddings.done;
   lastPetDone = status.petDetection.done;
+  lastPetFusionDone = status.petFusion.done;
 
   if (!visualDataChanged) return;
 
@@ -351,7 +357,7 @@ function renderRows(rows: MediaRecord[], emptyText = "Noch keine Medien katalogi
         dogBadge.className = "badge pet";
         dogBadge.textContent =
           `${row.dogCount} ${row.dogCount === 1 ? "Hund" : "Hunde"}`;
-        dogBadge.title = "Automatisch mit NanoDet erkannte Hunde";
+        dogBadge.title = "Aus NanoDet und YOLOX-S fusionierte Hundeerkennung";
         stateCell.appendChild(dogBadge);
       }
 
@@ -360,7 +366,7 @@ function renderRows(rows: MediaRecord[], emptyText = "Noch keine Medien katalogi
         catBadge.className = "badge pet";
         catBadge.textContent =
           `${row.catCount} ${row.catCount === 1 ? "Katze" : "Katzen"}`;
-        catBadge.title = "Automatisch mit NanoDet erkannte Katzen";
+        catBadge.title = "Aus NanoDet und YOLOX-S fusionierte Katzenerkennung";
         stateCell.appendChild(catBadge);
       }
     }
@@ -1115,7 +1121,8 @@ void window.imageSorter.analysis
       imageMetadata: { pending: 0, running: 0, done: 0, failed: 0 },
       faces: { pending: 0, running: 0, done: 0, failed: 0 },
       faceEmbeddings: { pending: 0, running: 0, done: 0, failed: 0 },
-      petDetection: { pending: 0, running: 0, done: 0, failed: 0 }
+      petDetection: { pending: 0, running: 0, done: 0, failed: 0 },
+      petFusion: { pending: 0, running: 0, done: 0, failed: 0 }
     });
   });
 
