@@ -270,9 +270,19 @@ export class AnalysisService {
   private applyWorkerResult(result: Record<string, unknown>): void {
     this.publish({
       cpuBudgetPercent: Number(result.cpu_budget_percent ?? this.status.cpuBudgetPercent),
-      maxConcurrentJobs: Number(result.max_concurrent_jobs ?? this.status.maxConcurrentJobs),
-      queuedJobs: Number(result.queued_jobs ?? this.status.queuedJobs),
-      activeJobs: Number(result.active_jobs ?? this.status.activeJobs)
+      maxConcurrentJobs: Number(result.max_concurrent_jobs ?? this.status.maxConcurrentJobs)
+    });
+  }
+
+  setQueueState(
+    queuedJobs: number,
+    activeJobs: number,
+    message?: string
+  ): void {
+    this.publish({
+      queuedJobs: Math.max(0, Math.trunc(queuedJobs)),
+      activeJobs: Math.max(0, Math.trunc(activeJobs)),
+      ...(message ? { message } : {})
     });
   }
 
