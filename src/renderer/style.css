@@ -316,6 +316,11 @@ td .badge + .badge {
   color: #6542a6;
 }
 
+.badge.embedding {
+  background: #edf5fb;
+  color: #32658a;
+}
+
 .status-pill {
   padding: 7px 10px;
   background: #eceff2;
