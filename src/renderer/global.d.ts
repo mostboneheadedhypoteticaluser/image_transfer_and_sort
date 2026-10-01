@@ -1,4 +1,5 @@
 import type {
+  AnalysisWorkerStatus,
   CatalogStats,
   DuplicateGroup,
   MediaRecord,
@@ -13,6 +14,10 @@ declare global {
   interface Window {
     imageSorter: {
       pickSource(): Promise<string | null>;
+      analysis: {
+        getStatus(): Promise<AnalysisWorkerStatus>;
+        onStatus(listener: (status: AnalysisWorkerStatus) => void): () => void;
+      };
       catalog: {
         listSources(): Promise<SourceRecord[]>;
         addSource(sourcePath: string): Promise<SourceRecord>;
