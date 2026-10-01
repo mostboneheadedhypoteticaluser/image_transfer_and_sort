@@ -25,6 +25,7 @@ export type PipelineStatus = {
   faceEmbeddings: AnalysisQueueStats;
   petDetection: AnalysisQueueStats;
   petFusion: AnalysisQueueStats;
+  petEmbeddings: AnalysisQueueStats;
 };
 
 export type AnalysisJob = {
@@ -35,6 +36,88 @@ export type AnalysisJob = {
   extension: string;
   sizeBytes: number;
   sha256: string;
+};
+
+export type PetDetectionForEmbedding = {
+  id: number;
+  petClass: "dog" | "cat";
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  score: number;
+};
+
+export type PetEmbeddingForClustering = {
+  petDetectionId: number;
+  mediaId: number;
+  contentKey: string;
+  petClass: "dog" | "cat";
+  vector: number[];
+};
+
+export type PetEmbeddingSet = {
+  revision: string;
+  needsRebuild: boolean;
+  pets: PetEmbeddingForClustering[];
+};
+
+export type PetClusterInput = {
+  representativePetId: number;
+  averageSimilarity: number;
+  minSimilarity: number;
+  members: Array<{
+    petDetectionId: number;
+    similarity: number;
+  }>;
+};
+
+export type PetCandidateItem = {
+  petDetectionId: number;
+  mediaId: number;
+  relativePath: string;
+  similarity: number;
+};
+
+export type PetCandidate = {
+  id: number;
+  petClass: "dog" | "cat";
+  detectionCount: number;
+  representativePetId: number | null;
+  averageSimilarity: number;
+  minSimilarity: number;
+  pets: PetCandidateItem[];
+};
+
+export type PetRecord = {
+  id: number;
+  name: string;
+  petClass: "dog" | "cat";
+  detectionCount: number;
+  representativePetId: number | null;
+};
+
+export type PetOverview = {
+  candidates: PetCandidate[];
+  pets: PetRecord[];
+  clusteringPending: boolean;
+};
+
+export type ConfirmPetResult = {
+  petId: number;
+  name: string;
+  detectionCount: number;
+};
+
+export type PetCropInfo = {
+  petDetectionId: number;
+  absolutePath: string;
+  inputSha256: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  petClass: "dog" | "cat";
 };
 
 export type FaceEmbeddingForClustering = {
@@ -162,6 +245,8 @@ export type CatalogStats = {
   duplicateFiles: number;
   personCandidates: number;
   persons: number;
+  petCandidates: number;
+  pets: number;
   lastScan: string | null;
 };
 
@@ -248,6 +333,14 @@ export type CatalogMethod =
   | "completePetDetectionJob"
   | "getPetDetectionsForFusion"
   | "completePetFusionJob"
+  | "getPetDetectionsForEmbedding"
+  | "completePetEmbeddingJob"
+  | "getPetEmbeddingsForClustering"
+  | "replacePetCandidates"
+  | "listPetCandidates"
+  | "listPets"
+  | "confirmPetCandidate"
+  | "getPetCropInfo"
   | "getFaceEmbeddingsForClustering"
   | "replacePersonCandidates"
   | "listPersonCandidates"
