@@ -10,6 +10,23 @@ export type AnalysisWorkerStatus = {
   message: string;
 };
 
+export type AnalysisQueueStats = {
+  pending: number;
+  running: number;
+  done: number;
+  failed: number;
+};
+
+export type AnalysisJob = {
+  id: number;
+  mediaId: number;
+  module: string;
+  absolutePath: string;
+  extension: string;
+  sizeBytes: number;
+  sha256: string;
+};
+
 export type SourceRecord = {
   id: number;
   path: string;
@@ -86,6 +103,11 @@ export type CatalogMethod =
   | "listMedia"
   | "listDuplicateGroups"
   | "listRecycleMedia"
+  | "enqueueAnalysisJobs"
+  | "getAnalysisQueueStats"
+  | "claimAnalysisJob"
+  | "completeAnalysisJob"
+  | "failAnalysisJob"
   | "scanSource"
   | "restoreMedia"
   | "resetCatalog";
