@@ -240,8 +240,22 @@ th:nth-child(6) { width: 13%; }
 
 .path-cell {
   overflow: hidden;
+}
+
+.path-main {
+  overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.path-meta {
+  display: block;
+  margin-top: 3px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #8a939d;
+  font-size: 10px;
 }
 
 .empty {
@@ -295,6 +309,11 @@ td .badge + .badge {
 .badge.duplicate {
   background: #eef2ff;
   color: #3949a3;
+}
+
+.badge.faces {
+  background: #f3eefc;
+  color: #6542a6;
 }
 
 .status-pill {
@@ -608,7 +627,7 @@ td .badge + .badge {
 
 .pipeline-stages {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
   border-top: 1px solid #eef1f3;
 }
 
