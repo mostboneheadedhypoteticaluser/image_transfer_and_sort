@@ -12,7 +12,8 @@ type PythonStage =
   | "technical"
   | "imageMetadata"
   | "faces"
-  | "faceEmbeddings";
+  | "faceEmbeddings"
+  | "petDetection";
 
 type ModuleSpec = {
   module: string;
@@ -22,7 +23,8 @@ type ModuleSpec = {
     | "completeAnalysisJob"
     | "completeImageMetadataJob"
     | "completeFaceDetectionJob"
-    | "completeFaceEmbeddingJob";
+    | "completeFaceEmbeddingJob"
+    | "completePetDetectionJob";
   label: string;
   timeoutMs: number;
 };
@@ -59,12 +61,20 @@ const MODULES: ModuleSpec[] = [
     completeMethod: "completeFaceEmbeddingJob",
     label: "Gesichtsmerkmale",
     timeoutMs: 60000
+  },
+  {
+    module: "pet-detect-nanodet-v1",
+    stage: "petDetection",
+    workerMethod: "detect_pets",
+    completeMethod: "completePetDetectionJob",
+    label: "Haustiere erkennen",
+    timeoutMs: 60000
   }
 ];
 
 type PythonPipelineStats = Pick<
   PipelineStatus,
-  "technical" | "imageMetadata" | "faces" | "faceEmbeddings"
+  "technical" | "imageMetadata" | "faces" | "faceEmbeddings" | "petDetection"
 >;
 
 function emptyStats(): AnalysisQueueStats {
@@ -127,7 +137,8 @@ export class AnalysisCoordinator {
       technical: emptyStats(),
       imageMetadata: emptyStats(),
       faces: emptyStats(),
-      faceEmbeddings: emptyStats()
+      faceEmbeddings: emptyStats(),
+      petDetection: emptyStats()
     };
 
     for (const spec of MODULES) {
@@ -144,12 +155,14 @@ export class AnalysisCoordinator {
       result.technical.pending +
       result.imageMetadata.pending +
       result.faces.pending +
-      result.faceEmbeddings.pending;
+      result.faceEmbeddings.pending +
+      result.petDetection.pending;
     const active =
       result.technical.running +
       result.imageMetadata.running +
       result.faces.running +
-      result.faceEmbeddings.running;
+      result.faceEmbeddings.running +
+      result.petDetection.running;
 
     this.analysis.setQueueState(
       queued,
@@ -190,7 +203,8 @@ export class AnalysisCoordinator {
         stats.technical.running +
         stats.imageMetadata.running +
         stats.faces.running +
-        stats.faceEmbeddings.running;
+        stats.faceEmbeddings.running +
+        stats.petDetection.running;
 
       if (totalRunning > 0) return;
 
@@ -211,7 +225,8 @@ export class AnalysisCoordinator {
         stats.technical.pending +
         stats.imageMetadata.pending +
         stats.faces.pending +
-        stats.faceEmbeddings.pending - 1;
+        stats.faceEmbeddings.pending +
+        stats.petDetection.pending - 1;
 
       this.analysis.setQueueState(
         Math.max(0, queued),
