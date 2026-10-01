@@ -1,5 +1,6 @@
 import type {
   CatalogStats,
+  DuplicateGroup,
   MediaRecord,
   RestoreResult,
   ResetCatalogResult,
@@ -17,6 +18,8 @@ declare global {
         addSource(sourcePath: string): Promise<SourceRecord>;
         getStats(sourceId: number): Promise<CatalogStats>;
         listMedia(sourceId: number, limit?: number): Promise<MediaRecord[]>;
+        listDuplicateGroups(sourceId: number, limit?: number): Promise<DuplicateGroup[]>;
+        listRecycleMedia(sourceId: number, limit?: number): Promise<MediaRecord[]>;
         scanSource(sourceId: number): Promise<ScanResult>;
         restoreMedia(mediaId: number): Promise<RestoreResult>;
         resetCatalog(): Promise<ResetCatalogResult>;
