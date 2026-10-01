@@ -3,6 +3,7 @@ import { stat } from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";
 import { randomUUID } from "node:crypto";
 import { walkMedia, type DiscoveredDirectory } from "../../catalog/file-scanner";
+import { IMAGE_EXTENSIONS } from "../../catalog/constants";
 import { sha256File } from "../../catalog/hash";
 import {
   findRenamedSibling,
@@ -149,6 +150,19 @@ db.exec(`
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(media_id, module)
   );
+
+  CREATE TABLE IF NOT EXISTS media_thumbnails (
+    media_id INTEGER PRIMARY KEY REFERENCES media_items(id) ON DELETE CASCADE,
+    input_sha256 TEXT NOT NULL,
+    path TEXT NOT NULL,
+    width INTEGER NOT NULL,
+    height INTEGER NOT NULL,
+    format TEXT NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_thumbnail_hash
+    ON media_thumbnails(input_sha256);
 `);
 
 function tableHasColumn(table: string, column: string): boolean {
@@ -1123,6 +1137,12 @@ async function refreshRecycleStatus(sourceId: number): Promise<number> {
 }
 
 function enqueueAnalysisJobs(sourceId: number, module = "file-probe-v1") {
+  const imageExtensions = [...IMAGE_EXTENSIONS];
+  const thumbnailFilter =
+    module === "thumbnail-v1"
+      ? ` AND m.extension IN (${imageExtensions.map(() => "?").join(",")})`
+      : "";
+
   const statement = db.prepare(`
     INSERT INTO analysis_jobs(
       media_id,
@@ -1156,6 +1176,7 @@ function enqueueAnalysisJobs(sourceId: number, module = "file-probe-v1") {
     FROM media_items m
     WHERE m.source_id=?
       AND m.availability='AVAILABLE'
+      ${thumbnailFilter}
     ON CONFLICT(media_id, module) DO UPDATE SET
       status='PENDING',
       attempts=0,
@@ -1170,7 +1191,10 @@ function enqueueAnalysisJobs(sourceId: number, module = "file-probe-v1") {
        OR analysis_jobs.input_sha256<>excluded.input_sha256
   `);
 
-  const result = statement.run(module, sourceId);
+  const args: (string | number)[] = [module, sourceId];
+  if (module === "thumbnail-v1") args.push(...imageExtensions);
+
+  const result = statement.run(...args);
 
   const stats = getAnalysisQueueStats(sourceId, module);
   return {
@@ -1674,7 +1698,8 @@ async function scanSource(sourceId: number): Promise<ScanResult> {
     }
 
     recycleBin = await refreshRecycleStatus(sourceId);
-    enqueueAnalysisJobs(sourceId);
+    enqueueAnalysisJobs(sourceId, "file-probe-v1");
+    enqueueAnalysisJobs(sourceId, "thumbnail-v1");
 
     const result: ScanResult = {
       discovered,
@@ -1759,6 +1784,108 @@ async function scanSource(sourceId: number): Promise<ScanResult> {
   } finally {
     scanRunning = false;
   }
+}
+
+function completeThumbnailJob(jobId: number, result: unknown) {
+  if (!result || typeof result !== "object") {
+    throw new Error("Thumbnail-Ergebnis ist ungültig.");
+  }
+
+  const value = result as Record<string, unknown>;
+  const thumbnailPath = typeof value.path === "string" ? value.path : "";
+  const width = Number(value.width);
+  const height = Number(value.height);
+  const format = typeof value.format === "string" ? value.format : "jpeg";
+
+  if (!thumbnailPath || !Number.isFinite(width) || !Number.isFinite(height)) {
+    throw new Error("Thumbnail-Ergebnis ist unvollständig.");
+  }
+
+  const job = db.prepare(`
+    SELECT id, media_id, input_sha256, status
+    FROM analysis_jobs
+    WHERE id=? AND module='thumbnail-v1'
+  `).get(jobId);
+
+  if (!job) throw new Error("Thumbnail-Job wurde nicht gefunden.");
+  if (String(job.status) !== "RUNNING") {
+    throw new Error("Thumbnail-Job ist nicht im Status RUNNING.");
+  }
+
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    db.prepare(`
+      INSERT INTO media_thumbnails(
+        media_id,
+        input_sha256,
+        path,
+        width,
+        height,
+        format,
+        updated_at
+      )
+      VALUES(?,?,?,?,?,?,CURRENT_TIMESTAMP)
+      ON CONFLICT(media_id) DO UPDATE SET
+        input_sha256=excluded.input_sha256,
+        path=excluded.path,
+        width=excluded.width,
+        height=excluded.height,
+        format=excluded.format,
+        updated_at=CURRENT_TIMESTAMP
+    `).run(
+      Number(job.media_id),
+      String(job.input_sha256 ?? ""),
+      thumbnailPath,
+      Math.trunc(width),
+      Math.trunc(height),
+      format
+    );
+
+    db.prepare(`
+      UPDATE analysis_jobs
+      SET
+        status='DONE',
+        result_json=?,
+        error_message=NULL,
+        finished_at=CURRENT_TIMESTAMP,
+        updated_at=CURRENT_TIMESTAMP
+      WHERE id=?
+    `).run(JSON.stringify(result), jobId);
+
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+
+  return { completed: true };
+}
+
+function getThumbnailInfo(mediaId: number) {
+  const row = db.prepare(`
+    SELECT
+      t.media_id,
+      t.path,
+      t.input_sha256,
+      t.width,
+      t.height,
+      t.format
+    FROM media_thumbnails t
+    JOIN media_items m ON m.id=t.media_id
+    WHERE t.media_id=?
+      AND t.input_sha256=m.sha256
+  `).get(mediaId);
+
+  if (!row) return null;
+
+  return {
+    mediaId: Number(row.media_id),
+    path: String(row.path),
+    inputSha256: String(row.input_sha256),
+    width: Number(row.width),
+    height: Number(row.height),
+    format: String(row.format)
+  };
 }
 
 async function restoreMedia(mediaId: number): Promise<RestoreResult> {
@@ -1849,12 +1976,13 @@ function resetCatalog(): { reset: true } {
   try {
     db.exec(`
       DELETE FROM analysis_jobs;
+      DELETE FROM media_thumbnails;
       DELETE FROM media_items;
       DELETE FROM media_directories;
       DELETE FROM scans;
       DELETE FROM media_sources;
       DELETE FROM sqlite_sequence
-      WHERE name IN ('analysis_jobs', 'media_items', 'media_directories', 'scans', 'media_sources');
+      WHERE name IN ('analysis_jobs', 'media_thumbnails', 'media_items', 'media_directories', 'scans', 'media_sources');
     `);
     db.exec("COMMIT");
   } catch (error) {
@@ -1912,6 +2040,13 @@ async function dispatch(method: CatalogMethod, payload: Record<string, unknown> 
         asNumber(payload.jobId, "jobId"),
         typeof payload.error === "string" ? payload.error : "Unbekannter Analysefehler"
       );
+    case "completeThumbnailJob":
+      return completeThumbnailJob(
+        asNumber(payload.jobId, "jobId"),
+        payload.result
+      );
+    case "getThumbnailInfo":
+      return getThumbnailInfo(asNumber(payload.mediaId, "mediaId"));
     case "scanSource":
       return scanSource(asNumber(payload.sourceId, "sourceId"));
     case "restoreMedia":
