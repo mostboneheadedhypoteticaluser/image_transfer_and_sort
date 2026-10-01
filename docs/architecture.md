@@ -95,3 +95,12 @@ Bestätigte Personen können umbenannt oder zusammengeführt werden. Beim Zusamm
 Die erste Haustierstufe verwendet das CPU-taugliche OpenCV-Zoo-Modell **NanoDet 2022nov**. Aus den COCO-Klassen werden bewusst nur `dog` und `cat` übernommen. Pro Fundstelle speichert `pet_detections` Klasse, Konfidenz, Bounding Box, Eingabe-SHA-256 und Detektorversion.
 
 Diese Stufe erkennt zunächst nur **Tierart und Position**, nicht die Identität eines einzelnen Tieres. Individuelle Tiere (z. B. derselbe Hund auf verschiedenen Bildern) werden in einer separaten nächsten Stufe über Crop-Embeddings und Nutzerbestätigung aufgebaut. So bleiben Detektion und Identität wie bei Personen getrennt.
+
+
+## Haustier-Ensemble
+
+Die Haustierdetektion verwendet jetzt zwei unabhängige OpenCV-DNN-Modelle: **NanoDet 2022nov** und **YOLOX-S 2022nov**. Beide schreiben ihre Rohfundstellen getrennt nach `pet_detections`; dadurch bleiben Modellvergleich und spätere Qualitätsauswertung möglich.
+
+Nach Abschluss beider Detektoren startet `pet-fuse-ensemble-v1`. Gleichartige Boxen werden ab IoU 0,45 zusammengeführt. Bei Übereinstimmung beider Modelle wird die Box konfidenzgewichtet gemittelt und als Mehrmodell-Fund gespeichert. Einzelmodell-Funde bleiben nur oberhalb einer strengeren Mindestkonfidenz erhalten. Das fusionierte Resultat liegt in `pet_fused_detections` und ist die einzige Haustierquelle für die normale Medienanzeige.
+
+Die Modelle laufen absichtlich nacheinander im bestehenden Hintergrund-Worker statt gleichzeitig CPU-Spitzen zu erzeugen. Der Ensemble-Nutzen entsteht durch die Kombination der Ergebnisse, nicht durch zeitgleiche Ausführung.
