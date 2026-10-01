@@ -1787,6 +1787,32 @@ function failAnalysisJob(jobId: number, errorMessage: string) {
           AND module='pet-fuse-ensemble-v1'
           AND status<>'DONE'
       `).run(Number(job.media_id));
+
+      db.prepare(`
+        UPDATE analysis_jobs
+        SET
+          status='FAILED',
+          error_message='Abhängige Haustierfusion ist fehlgeschlagen.',
+          finished_at=CURRENT_TIMESTAMP,
+          updated_at=CURRENT_TIMESTAMP
+        WHERE media_id=?
+          AND module='pet-embed-dogreid-v1'
+          AND status<>'DONE'
+      `).run(Number(job.media_id));
+    }
+
+    if (job && String(job.module) === "pet-fuse-ensemble-v1") {
+      db.prepare(`
+        UPDATE analysis_jobs
+        SET
+          status='FAILED',
+          error_message='Abhängige Haustierfusion ist fehlgeschlagen.',
+          finished_at=CURRENT_TIMESTAMP,
+          updated_at=CURRENT_TIMESTAMP
+        WHERE media_id=?
+          AND module='pet-embed-dogreid-v1'
+          AND status<>'DONE'
+      `).run(Number(job.media_id));
     }
 
     db.exec("COMMIT");
