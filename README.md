@@ -1,54 +1,74 @@
-# Image Sortierer – Neustart 0.1
+# Image Sortierer – Neustart
 
-Komplett neue Codebasis. Der erste Stand macht bewusst nur zwei Dinge:
+Komplett neue Codebasis mit klar getrennten Prozessen.
 
-1. lokale Medienquelle (Festplatte/Ordner) verwalten
-2. Bilder rekursiv in SQLite katalogisieren und Änderungen erkennen
+## Aktueller Stand
 
-**Noch nicht enthalten:** KI, Personen-, Gesichts- oder Haustiererkennung, Videos.
+Der erste Schritt macht bewusst nur:
+
+1. lokale Medienquelle (Festplatte/Ordner) auswählen
+2. Bilder rekursiv katalogisieren
+3. Änderungen erkennen
+4. Katalog lokal in SQLite speichern
+5. fehlende Bilder markieren, aber nicht löschen
+
+**Noch nicht aktiv:** Personen-, Gesichts- oder Haustiererkennung sowie Videos.
 
 ## Architektur
 
-- `db/`: SQLite-Schema und Datenzugriff
-- `services/`: Scanner, Hashing, Bildmetadaten
-- `ui/`: Desktop-Oberfläche
-- `domain/`: gemeinsame Datenmodelle
+- **Electron + TypeScript:** Oberfläche
+- **Catalog Worker:** eigener Utility-Prozess für Dateiscan, Hashing und SQLite
+- **Python-AI-Worker:** bereits als getrennte Schnittstelle vorbereitet, aber noch nicht für KI-Erkennung aktiviert
+- **SQLite:** wird ausschließlich vom Catalog Worker direkt beschrieben
 
-Die Module kennen sich nur über kleine Schnittstellen. Spätere KI-Worker können an den Katalog angehängt werden, ohne Scanner oder UI neu zu bauen.
+Dadurch können Scanner und spätere KI unter Last laufen, ohne die Renderer-Oberfläche zu blockieren.
+
+Details: `docs/architecture.md`
 
 ## Windows – erster Start
 
-PowerShell im Projektordner öffnen und ausführen:
+Voraussetzung: Node.js 24.
+
+Im Projektordner:
 
 ```powershell
-Set-ExecutionPolicy -Scope Process Bypass
-.\setup_windows.ps1
+npm install
+npm start
 ```
 
-Das Skript installiert bei Bedarf Python 3.12 über `winget`, legt `.venv` an, installiert die Abhängigkeiten und startet das Tool.
-
-Spätere Starts:
+Danach genügt für normale Starts ebenfalls:
 
 ```powershell
-.\start.ps1
+npm start
 ```
 
-## Verhalten des Scanners
+Für Entwicklung mit Vite:
 
-- rekursiv ab der gewählten Quelle
+```powershell
+npm run dev
+```
+
+Typprüfung:
+
+```powershell
+npm run check
+```
+
+## Scanner-Verhalten
+
+- rekursiver Scan
 - Bildtypen: JPG/JPEG, PNG, WEBP, BMP, GIF, TIFF, HEIC/HEIF, AVIF
-- neue oder tatsächlich geänderte Dateien werden per SHA-256 erkannt
+- neue und tatsächlich geänderte Dateien werden per SHA-256 katalogisiert
 - unveränderte Dateien werden nicht erneut gehasht
-- verschwundene Dateien werden **nicht gelöscht**, sondern als `MISSING` markiert
-- wieder auftauchende Dateien werden automatisch wieder `AVAILABLE`
-- Fehler bei einzelnen Dateien brechen den Gesamtscan nicht ab
+- verschwundene Dateien werden als `MISSING` markiert
+- wieder auftauchende Dateien werden automatisch wieder verfügbar
+- Dateifehler brechen nicht den Gesamtscan ab
+- im Renderer werden maximal 500 Einträge gleichzeitig geladen
 
-Die Datenbank liegt unter Windows in:
+Die Datenbank liegt im Electron-`userData`-Verzeichnis als `catalog.sqlite3`.
 
-`%LOCALAPPDATA%\ImageSortierer\catalog.sqlite3`
+## Branch
 
-## Tests
+Aktueller Architektur-Neustart:
 
-```powershell
-.\.venv\Scripts\python.exe -m unittest discover -s tests -v
-```
+`2026-10-01-electron-worker-neustart`
