@@ -18,7 +18,10 @@ Electron Main
     │       ├── SHA-256
     │       └── SQLite (einziger Besitzer der Katalog-DB)
     │
-    └── später: separater Python-AI-Worker
+    └── Python-AI-Worker (eigener Hintergrundprozess)
+            ├── eigener Prozess, keine sichtbare zweite App
+            ├── niedrige Prozesspriorität
+            ├── 1 gleichzeitiger Analysejob
             ├── Personen
             ├── Haustiere
             ├── Embeddings
@@ -42,12 +45,21 @@ Electron Main
 
 ## Ressourcensteuerung für KI
 
-Die KI bekommt später eine eigene Queue. Startwert ist ein gleichzeitiger Analysejob. Parallelität kann unabhängig von der Oberfläche geändert werden.
+Der Python-AI-Worker wird beim Start des Image Sortierers automatisch als eigener Prozess gestartet und beim Beenden der App wieder beendet. Für den Nutzer bleibt es eine einzige Anwendung.
 
-Zusätzlich kann der Python-Prozess unter Windows mit niedrigerer Prozesspriorität gestartet werden. Eine echte harte CPU-Prozentgrenze ist davon zu unterscheiden und müsste betriebssystemspezifisch umgesetzt werden. Entscheidend für die Reaktionsfähigkeit sind Prozessisolation, kleine Queues, begrenzte Parallelität und kein Laden großer Originalbilder im Renderer.
+Aktive Startkonfiguration:
+
+- Prozesspriorität: **Below Normal**
+- maximale Parallelität: **1 Analysejob**
+- CPU-Zielbudget: **50 %**
+- Profil: **background**
+
+Das CPU-Zielbudget ist bewusst keine behauptete harte Betriebssystemgrenze. Eine echte feste CPU-Prozentbegrenzung wäre plattformspezifisch. Für die Reaktionsfähigkeit der App sind bereits wirksam: Prozessisolation, niedrige Priorität, begrenzte Parallelität und eine später separat geführte Job-Queue.
+
+Die Oberfläche zeigt den Zustand des Analyse-Workers unabhängig vom Katalog-Worker an. Ein Ausfall des Python-Prozesses soll daher nicht die Medienansicht blockieren.
 
 ## SQLite
 
 Die Datenbank verwendet WAL-Modus und liegt im Electron-`userData`-Verzeichnis. Der Catalog Worker ist der einzige Prozess, der direkt auf sie zugreift. Andere Module kommunizieren über definierte Nachrichten.
 
-Die Tabelle `analysis_jobs` ist bereits als Anschlussstelle für spätere Analyse-Module vorgesehen, wird im ersten Schritt aber noch nicht aktiv verwendet.
+Die Tabelle `analysis_jobs` ist als Anschlussstelle für die nächsten Analyse-Module vorgesehen. Der Python-Prozess läuft bereits, die eigentlichen KI-Jobs für Personen, Haustiere, Embeddings und Motive werden im nächsten Schritt daran angeschlossen.
