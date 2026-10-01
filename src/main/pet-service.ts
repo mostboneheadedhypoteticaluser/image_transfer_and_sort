@@ -3,7 +3,9 @@ import type {
   ConfirmPetResult,
   PetCandidate,
   PetClusterInput,
+  PetCorrectionResult,
   PetEmbeddingSet,
+  MergePetsResult,
   PetOverview,
   PetRecord,
   SourceRecord
@@ -106,4 +108,45 @@ export class PetService {
       { candidateId, name }
     );
   }
+
+  async removeCandidatePet(
+    candidateId: number,
+    petDetectionId: number
+  ): Promise<PetCorrectionResult> {
+    return this.catalog.request<PetCorrectionResult>(
+      "removePetFromCandidate",
+      { candidateId, petDetectionId }
+    );
+  }
+
+  async removePetDetection(
+    petId: number,
+    petDetectionId: number
+  ): Promise<PetCorrectionResult> {
+    return this.catalog.request<PetCorrectionResult>(
+      "removePetFromPet",
+      { petId, petDetectionId }
+    );
+  }
+
+  async mergePets(
+    targetPetId: number,
+    sourcePetId: number
+  ): Promise<MergePetsResult> {
+    return this.catalog.request<MergePetsResult>(
+      "mergePets",
+      { targetPetId, sourcePetId }
+    );
+  }
+
+  async renamePet(
+    petId: number,
+    name: string
+  ): Promise<PetCorrectionResult> {
+    return this.catalog.request<PetCorrectionResult>(
+      "renamePet",
+      { petId, name }
+    );
+  }
+
 }
