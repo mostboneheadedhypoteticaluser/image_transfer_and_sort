@@ -22,6 +22,7 @@ export type PipelineStatus = {
   thumbnails: AnalysisQueueStats;
   imageMetadata: AnalysisQueueStats;
   faces: AnalysisQueueStats;
+  faceEmbeddings: AnalysisQueueStats;
 };
 
 export type AnalysisJob = {
@@ -32,6 +33,16 @@ export type AnalysisJob = {
   extension: string;
   sizeBytes: number;
   sha256: string;
+};
+
+export type FaceDetectionForEmbedding = {
+  id: number;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  score: number;
+  landmarks: Array<{ x: number; y: number }>;
 };
 
 export type ThumbnailInfo = {
@@ -72,6 +83,7 @@ export type MediaRecord = {
   thumbnailVersion: string | null;
   capturedAt: string | null;
   faceCount: number;
+  faceEmbeddingCount: number;
   lastSeenAt: string;
 };
 
@@ -131,6 +143,8 @@ export type CatalogMethod =
   | "completeThumbnailJob"
   | "completeImageMetadataJob"
   | "completeFaceDetectionJob"
+  | "getFaceDetectionsForEmbedding"
+  | "completeFaceEmbeddingJob"
   | "getThumbnailInfo"
   | "scanSource"
   | "restoreMedia"
