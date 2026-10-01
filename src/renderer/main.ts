@@ -1,5 +1,7 @@
 import "./style.css";
-import type { MediaRecord, SourceRecord } from "../shared/protocol";
+import type { DuplicateGroup, MediaRecord, SourceRecord } from "../shared/protocol";
+
+type CatalogView = "media" | "duplicates" | "recycle";
 
 const sourceSelect = document.querySelector<HTMLSelectElement>("#sourceSelect")!;
 const addSourceButton = document.querySelector<HTMLButtonElement>("#addSource")!;
@@ -7,6 +9,15 @@ const scanButton = document.querySelector<HTMLButtonElement>("#scanSource")!;
 const resetButton = document.querySelector<HTMLButtonElement>("#resetCatalog")!;
 const refreshButton = document.querySelector<HTMLButtonElement>("#refresh")!;
 const mediaRows = document.querySelector<HTMLTableSectionElement>("#mediaRows")!;
+const duplicateGroups = document.querySelector<HTMLDivElement>("#duplicateGroups")!;
+const mediaView = document.querySelector<HTMLDivElement>("#mediaView")!;
+const duplicateView = document.querySelector<HTMLDivElement>("#duplicateView")!;
+const mediaTab = document.querySelector<HTMLButtonElement>("#mediaTab")!;
+const duplicateTab = document.querySelector<HTMLButtonElement>("#duplicateTab")!;
+const recycleTab = document.querySelector<HTMLButtonElement>("#recycleTab")!;
+const mediaTabCount = document.querySelector<HTMLSpanElement>("#mediaTabCount")!;
+const duplicateTabCount = document.querySelector<HTMLSpanElement>("#duplicateTabCount")!;
+const recycleTabCount = document.querySelector<HTMLSpanElement>("#recycleTabCount")!;
 const progressText = document.querySelector<HTMLSpanElement>("#progressText")!;
 const progressBar = document.querySelector<HTMLDivElement>("#progressBar")!;
 const workerState = document.querySelector<HTMLSpanElement>("#workerState")!;
@@ -17,6 +28,7 @@ const recycleCount = document.querySelector<HTMLSpanElement>("#recycleCount")!;
 const lastScan = document.querySelector<HTMLSpanElement>("#lastScan")!;
 
 let sources: SourceRecord[] = [];
+let currentView: CatalogView = "media";
 let scanning = false;
 let restoring = false;
 let resetting = false;
@@ -50,7 +62,20 @@ function statusFor(row: MediaRecord): { text: string; className: string } {
   return { text: "Fehlt", className: "badge missing" };
 }
 
-function renderRows(rows: MediaRecord[]): void {
+function setView(view: CatalogView): void {
+  currentView = view;
+
+  mediaTab.classList.toggle("active", view === "media");
+  duplicateTab.classList.toggle("active", view === "duplicates");
+  recycleTab.classList.toggle("active", view === "recycle");
+
+  duplicateView.hidden = view !== "duplicates";
+  mediaView.hidden = view === "duplicates";
+
+  void runSafely(refreshCatalog);
+}
+
+function renderRows(rows: MediaRecord[], emptyText = "Noch keine Medien katalogisiert."): void {
   mediaRows.replaceChildren();
 
   if (rows.length === 0) {
@@ -58,7 +83,7 @@ function renderRows(rows: MediaRecord[]): void {
     const td = document.createElement("td");
     td.colSpan = 5;
     td.className = "empty";
-    td.textContent = "Noch keine Medien katalogisiert.";
+    td.textContent = emptyText;
     tr.appendChild(td);
     mediaRows.appendChild(tr);
     return;
@@ -105,6 +130,10 @@ function renderRows(rows: MediaRecord[]): void {
         void restoreRow(row, restoreButton);
       });
       actionCell.appendChild(restoreButton);
+    } else if (row.recycleState === "AMBIGUOUS") {
+      actionCell.textContent = "Keine automatische Aktion";
+      actionCell.className = "muted";
+      actionCell.title = "Mehrere identische Papierkorb-Dateien passen. Die App trifft absichtlich keine unsichere Auswahl.";
     } else {
       actionCell.textContent = "—";
       actionCell.className = "muted";
@@ -115,6 +144,69 @@ function renderRows(rows: MediaRecord[]): void {
   }
 
   mediaRows.appendChild(fragment);
+}
+
+function renderDuplicateGroups(groups: DuplicateGroup[]): void {
+  duplicateGroups.replaceChildren();
+
+  if (groups.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "duplicate-empty";
+    empty.textContent = "Keine exakten Dubletten gefunden.";
+    duplicateGroups.appendChild(empty);
+    return;
+  }
+
+  const fragment = document.createDocumentFragment();
+
+  for (const group of groups) {
+    const card = document.createElement("article");
+    card.className = "duplicate-card";
+
+    const header = document.createElement("div");
+    header.className = "duplicate-card-header";
+
+    const titleBlock = document.createElement("div");
+    const title = document.createElement("h3");
+    title.textContent = `${group.count} identische Dateien`;
+    const meta = document.createElement("p");
+    meta.textContent =
+      `${formatBytes(group.sizeBytes)} je Datei · ` +
+      `${formatBytes(group.wastedBytes)} potenziell mehrfach belegt`;
+    titleBlock.append(title, meta);
+
+    const hash = document.createElement("code");
+    hash.className = "duplicate-hash";
+    hash.textContent = group.sha256.slice(0, 12);
+    hash.title = group.sha256;
+
+    header.append(titleBlock, hash);
+
+    const list = document.createElement("ul");
+    list.className = "duplicate-paths";
+
+    for (const item of group.items) {
+      const li = document.createElement("li");
+      const pathSpan = document.createElement("span");
+      pathSpan.textContent = item.relativePath;
+      pathSpan.title = item.relativePath;
+
+      const typeSpan = document.createElement("small");
+      typeSpan.textContent = item.extension.replace(".", "").toUpperCase();
+
+      li.append(pathSpan, typeSpan);
+      list.appendChild(li);
+    }
+
+    const note = document.createElement("p");
+    note.className = "duplicate-note";
+    note.textContent = "Nur markiert – keine Datei wird automatisch gelöscht oder zusammengeführt.";
+
+    card.append(header, list, note);
+    fragment.appendChild(card);
+  }
+
+  duplicateGroups.appendChild(fragment);
 }
 
 async function refreshCatalog(): Promise<void> {
@@ -128,20 +220,38 @@ async function refreshCatalog(): Promise<void> {
     missingCount.textContent = "0";
     recycleCount.textContent = "0";
     lastScan.textContent = "—";
+    mediaTabCount.textContent = "0";
+    duplicateTabCount.textContent = "0";
+    recycleTabCount.textContent = "0";
     renderRows([]);
+    renderDuplicateGroups([]);
     return;
   }
 
-  const [stats, rows] = await Promise.all([
-    window.imageSorter.catalog.getStats(sourceId),
-    window.imageSorter.catalog.listMedia(sourceId, 500)
-  ]);
+  const stats = await window.imageSorter.catalog.getStats(sourceId);
 
   totalCount.textContent = stats.total.toLocaleString("de-DE");
   availableCount.textContent = stats.available.toLocaleString("de-DE");
   missingCount.textContent = stats.missing.toLocaleString("de-DE");
   recycleCount.textContent = stats.recycleBin.toLocaleString("de-DE");
   lastScan.textContent = stats.lastScan ?? "—";
+  mediaTabCount.textContent = stats.total.toLocaleString("de-DE");
+  duplicateTabCount.textContent = stats.duplicateGroups.toLocaleString("de-DE");
+  recycleTabCount.textContent = stats.recycleBin.toLocaleString("de-DE");
+
+  if (currentView === "duplicates") {
+    const groups = await window.imageSorter.catalog.listDuplicateGroups(sourceId, 100);
+    renderDuplicateGroups(groups);
+    return;
+  }
+
+  if (currentView === "recycle") {
+    const rows = await window.imageSorter.catalog.listRecycleMedia(sourceId, 500);
+    renderRows(rows, "Keine wiederherstellbaren oder mehrdeutigen Papierkorb-Einträge.");
+    return;
+  }
+
+  const rows = await window.imageSorter.catalog.listMedia(sourceId, 500);
   renderRows(rows);
 }
 
@@ -267,6 +377,12 @@ resetButton.addEventListener("click", () => {
 
     try {
       await window.imageSorter.catalog.resetCatalog();
+      currentView = "media";
+      mediaTab.classList.add("active");
+      duplicateTab.classList.remove("active");
+      recycleTab.classList.remove("active");
+      mediaView.hidden = false;
+      duplicateView.hidden = true;
       await loadSources();
       progressText.textContent = "Katalog zurückgesetzt. Du kannst jetzt eine Medienquelle neu hinzufügen und sauber neu scannen.";
     } finally {
@@ -279,6 +395,9 @@ resetButton.addEventListener("click", () => {
   });
 });
 
+mediaTab.addEventListener("click", () => setView("media"));
+duplicateTab.addEventListener("click", () => setView("duplicates"));
+recycleTab.addEventListener("click", () => setView("recycle"));
 sourceSelect.addEventListener("change", () => void runSafely(refreshCatalog));
 refreshButton.addEventListener("click", () => void runSafely(refreshCatalog));
 
