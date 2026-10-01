@@ -37,7 +37,12 @@ const api = {
       candidateId: number,
       name: string
     ): Promise<ConfirmPersonResult> =>
-      ipcRenderer.invoke("people:confirmCandidate", candidateId, name)
+      ipcRenderer.invoke("people:confirmCandidate", candidateId, name),
+    onUpdated: (listener: () => void) => {
+      const handler = () => listener();
+      ipcRenderer.on("people:updated", handler);
+      return () => ipcRenderer.removeListener("people:updated", handler);
+    }
   },
   catalog: {
     listSources: (): Promise<SourceRecord[]> => ipcRenderer.invoke("catalog:listSources"),
