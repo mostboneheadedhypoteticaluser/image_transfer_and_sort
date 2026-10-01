@@ -1,7 +1,13 @@
 import path from "node:path";
 import { app, BrowserWindow, dialog, ipcMain } from "electron";
 import { CatalogService } from "./catalog-service";
-import type { CatalogStats, MediaRecord, ScanResult, SourceRecord } from "../shared/protocol";
+import type {
+  CatalogStats,
+  MediaRecord,
+  RestoreResult,
+  ScanResult,
+  SourceRecord
+} from "../shared/protocol";
 
 let windowRef: BrowserWindow | null = null;
 let catalog: CatalogService | null = null;
@@ -58,6 +64,10 @@ function registerIpc(): void {
 
   ipcMain.handle("catalog:scanSource", (_event, sourceId: number) =>
     catalog!.request<ScanResult>("scanSource", { sourceId })
+  );
+
+  ipcMain.handle("catalog:restoreMedia", (_event, mediaId: number) =>
+    catalog!.request<RestoreResult>("restoreMedia", { mediaId })
   );
 }
 
