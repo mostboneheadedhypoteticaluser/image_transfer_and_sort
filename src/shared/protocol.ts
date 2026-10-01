@@ -35,6 +35,74 @@ export type AnalysisJob = {
   sha256: string;
 };
 
+export type FaceEmbeddingForClustering = {
+  faceDetectionId: number;
+  mediaId: number;
+  contentKey: string;
+  vector: number[];
+};
+
+export type FaceEmbeddingSet = {
+  revision: string;
+  needsRebuild: boolean;
+  faces: FaceEmbeddingForClustering[];
+};
+
+export type PersonClusterInput = {
+  representativeFaceId: number;
+  averageSimilarity: number;
+  minSimilarity: number;
+  members: Array<{
+    faceDetectionId: number;
+    similarity: number;
+  }>;
+};
+
+export type PersonCandidateFace = {
+  faceDetectionId: number;
+  mediaId: number;
+  relativePath: string;
+  similarity: number;
+};
+
+export type PersonCandidate = {
+  id: number;
+  faceCount: number;
+  representativeFaceId: number | null;
+  averageSimilarity: number;
+  minSimilarity: number;
+  faces: PersonCandidateFace[];
+};
+
+export type PersonRecord = {
+  id: number;
+  name: string;
+  faceCount: number;
+  representativeFaceId: number | null;
+};
+
+export type PersonOverview = {
+  candidates: PersonCandidate[];
+  persons: PersonRecord[];
+  clusteringPending: boolean;
+};
+
+export type ConfirmPersonResult = {
+  personId: number;
+  name: string;
+  faceCount: number;
+};
+
+export type FaceCropInfo = {
+  faceDetectionId: number;
+  absolutePath: string;
+  inputSha256: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+};
+
 export type FaceDetectionForEmbedding = {
   id: number;
   x: number;
@@ -67,6 +135,8 @@ export type CatalogStats = {
   recycleBin: number;
   duplicateGroups: number;
   duplicateFiles: number;
+  personCandidates: number;
+  persons: number;
   lastScan: string | null;
 };
 
@@ -145,6 +215,12 @@ export type CatalogMethod =
   | "completeFaceDetectionJob"
   | "getFaceDetectionsForEmbedding"
   | "completeFaceEmbeddingJob"
+  | "getFaceEmbeddingsForClustering"
+  | "replacePersonCandidates"
+  | "listPersonCandidates"
+  | "listPersons"
+  | "confirmPersonCandidate"
+  | "getFaceCropInfo"
   | "getThumbnailInfo"
   | "scanSource"
   | "restoreMedia"
