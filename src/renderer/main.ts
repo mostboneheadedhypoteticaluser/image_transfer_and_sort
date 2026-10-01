@@ -609,12 +609,15 @@ function renderPersonOverview(overview: PersonOverview): void {
       const card = document.createElement("article");
       card.className = "confirmed-person-card";
 
+      const header = document.createElement("div");
+      header.className = "confirmed-person-header";
+
       if (person.representativeFaceId !== null) {
         const img = document.createElement("img");
         img.src = faceCropUrl(person.representativeFaceId);
         img.alt = "";
         img.loading = "lazy";
-        card.appendChild(img);
+        header.appendChild(img);
       }
 
       const text = document.createElement("div");
@@ -622,10 +625,178 @@ function renderPersonOverview(overview: PersonOverview): void {
       name.textContent = person.name;
       const count = document.createElement("small");
       count.textContent =
-        `${person.faceCount.toLocaleString("de-DE")} ` +
-        `${person.faceCount === 1 ? "bestätigtes Gesicht" : "bestätigte Gesichter"}`;
+        person.faceCount.toLocaleString("de-DE") + " " +
+        (person.faceCount === 1 ? "bestätigtes Gesicht" : "bestätigte Gesichter");
       text.append(name, count);
-      card.appendChild(text);
+      header.appendChild(text);
+      card.appendChild(header);
+
+      const faceStrip = document.createElement("div");
+      faceStrip.className = "confirmed-face-strip";
+
+      for (const face of person.faces) {
+        const figure = document.createElement("figure");
+        figure.className = "person-face confirmed-face";
+
+        const img = document.createElement("img");
+        img.src = faceCropUrl(face.faceDetectionId);
+        img.alt = "";
+        img.loading = "lazy";
+        img.title = face.relativePath;
+
+        const fallback = document.createElement("span");
+        fallback.className = "face-fallback";
+        fallback.textContent = "Gesicht";
+        fallback.hidden = true;
+
+        img.addEventListener("error", () => {
+          img.hidden = true;
+          fallback.hidden = false;
+        });
+
+        const removeButton = document.createElement("button");
+        removeButton.type = "button";
+        removeButton.className = "face-correction-button";
+        removeButton.textContent = "×";
+        removeButton.title = "Dieses Gesicht aus „" + person.name + "“ entfernen";
+        removeButton.addEventListener("click", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+
+          const confirmed = window.confirm(
+            "Dieses Gesicht wirklich aus „" + person.name + "“ entfernen? " +
+            "Die Korrektur wird gespeichert und bei späteren Gruppierungen berücksichtigt."
+          );
+          if (!confirmed) return;
+
+          void runSafely(async () => {
+            removeButton.disabled = true;
+            const result = await window.imageSorter.people.removePersonFace(
+              person.id,
+              face.faceDetectionId
+            );
+
+            const sourceId = selectedSourceId();
+            if (sourceId !== null) {
+              await loadPersonOverview(sourceId, true);
+            }
+
+            progressText.textContent =
+              result.affectedFaces.toLocaleString("de-DE") + " " +
+              (result.affectedFaces === 1 ? "Gesicht wurde" : "Gesichter wurden") +
+              " aus „" + person.name + "“ entfernt.";
+          });
+        });
+
+        figure.append(img, fallback, removeButton);
+        faceStrip.appendChild(figure);
+      }
+
+      card.appendChild(faceStrip);
+
+      if (person.faceCount > person.faces.length) {
+        const hiddenNote = document.createElement("small");
+        hiddenNote.className = "person-hidden-note confirmed-note";
+        hiddenNote.textContent =
+          "Es werden " + person.faces.length + " von " +
+          person.faceCount + " Gesichtern angezeigt.";
+        card.appendChild(hiddenNote);
+      }
+
+      const controls = document.createElement("div");
+      controls.className = "confirmed-person-controls";
+
+      const renameGroup = document.createElement("div");
+      renameGroup.className = "person-control-group";
+
+      const renameInput = document.createElement("input");
+      renameInput.type = "text";
+      renameInput.maxLength = 120;
+      renameInput.value = person.name;
+      renameInput.setAttribute("aria-label", "Name von " + person.name);
+
+      const renameButton = document.createElement("button");
+      renameButton.type = "button";
+      renameButton.className = "ghost";
+      renameButton.textContent = "Umbenennen";
+      renameButton.addEventListener("click", () => {
+        const newName = renameInput.value.trim();
+        if (!newName || newName === person.name) return;
+
+        void runSafely(async () => {
+          renameButton.disabled = true;
+          await window.imageSorter.people.renamePerson(person.id, newName);
+          const sourceId = selectedSourceId();
+          if (sourceId !== null) await loadPersonOverview(sourceId);
+          progressText.textContent = "Person wurde in „" + newName + "“ umbenannt.";
+        });
+      });
+
+      renameGroup.append(renameInput, renameButton);
+      controls.appendChild(renameGroup);
+
+      const mergeTargets = overview.persons.filter((item) => item.id !== person.id);
+      if (mergeTargets.length > 0) {
+        const mergeGroup = document.createElement("div");
+        mergeGroup.className = "person-control-group";
+
+        const select = document.createElement("select");
+        select.setAttribute(
+          "aria-label",
+          person.name + " mit anderer Person zusammenführen"
+        );
+
+        const placeholder = document.createElement("option");
+        placeholder.value = "";
+        placeholder.textContent = "Zusammenführen mit …";
+        select.appendChild(placeholder);
+
+        for (const target of mergeTargets) {
+          const option = document.createElement("option");
+          option.value = String(target.id);
+          option.textContent = target.name;
+          select.appendChild(option);
+        }
+
+        const mergeButton = document.createElement("button");
+        mergeButton.type = "button";
+        mergeButton.className = "ghost";
+        mergeButton.textContent = "Zusammenführen";
+        mergeButton.addEventListener("click", () => {
+          const targetId = Number(select.value);
+          if (!Number.isInteger(targetId) || targetId <= 0) return;
+
+          const target = overview.persons.find((item) => item.id === targetId);
+          if (!target) return;
+
+          const confirmed = window.confirm(
+            "„" + person.name + "“ vollständig mit „" + target.name +
+            "“ zusammenführen? Danach bleibt „" + target.name + "“ als Person bestehen."
+          );
+          if (!confirmed) return;
+
+          void runSafely(async () => {
+            mergeButton.disabled = true;
+            const result = await window.imageSorter.people.mergePersons(
+              target.id,
+              person.id
+            );
+
+            const sourceId = selectedSourceId();
+            if (sourceId !== null) await loadPersonOverview(sourceId, true);
+
+            progressText.textContent =
+              "Zusammengeführt: „" + result.name + "“ hat jetzt " +
+              result.faceCount.toLocaleString("de-DE") +
+              " bestätigte Gesichter.";
+          });
+        });
+
+        mergeGroup.append(select, mergeButton);
+        controls.appendChild(mergeGroup);
+      }
+
+      card.appendChild(controls);
       fragment.appendChild(card);
     }
 
