@@ -11,3 +11,6 @@ Thumbs.db
 __pycache__/
 *.py[cod]
 workers/python-ai/.venv/
+
+.ai-venv/
+workers/python-ai/models/*.onnx
