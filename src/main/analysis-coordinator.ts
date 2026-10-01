@@ -2,6 +2,7 @@ import type {
   AnalysisJob,
   AnalysisQueueStats,
   FaceDetectionForEmbedding,
+  PetDetectionForEmbedding,
   PipelineStatus,
   SourceRecord
 } from "../shared/protocol";
@@ -14,7 +15,8 @@ type PythonStage =
   | "faces"
   | "faceEmbeddings"
   | "petDetection"
-  | "petFusion";
+  | "petFusion"
+  | "petEmbeddings";
 
 type ModuleSpec = {
   module: string;
@@ -26,7 +28,8 @@ type ModuleSpec = {
     | "completeFaceDetectionJob"
     | "completeFaceEmbeddingJob"
     | "completePetDetectionJob"
-    | "completePetFusionJob";
+    | "completePetFusionJob"
+    | "completePetEmbeddingJob";
   label: string;
   timeoutMs: number;
 };
@@ -87,6 +90,14 @@ const MODULES: ModuleSpec[] = [
     completeMethod: "completePetFusionJob",
     label: "Haustier-Ergebnisse fusionieren",
     timeoutMs: 30000
+  },
+  {
+    module: "pet-embed-dogreid-v1",
+    stage: "petEmbeddings",
+    workerMethod: "extract_dog_embeddings",
+    completeMethod: "completePetEmbeddingJob",
+    label: "Individuelle Hundemerkmale",
+    timeoutMs: 120000
   }
 ];
 
@@ -98,6 +109,7 @@ type PythonPipelineStats = Pick<
   | "faceEmbeddings"
   | "petDetection"
   | "petFusion"
+  | "petEmbeddings"
 >;
 
 function emptyStats(): AnalysisQueueStats {
@@ -174,7 +186,8 @@ export class AnalysisCoordinator {
       faces: emptyStats(),
       faceEmbeddings: emptyStats(),
       petDetection: emptyStats(),
-      petFusion: emptyStats()
+      petFusion: emptyStats(),
+      petEmbeddings: emptyStats()
     };
 
     for (const spec of MODULES) {
@@ -196,14 +209,16 @@ export class AnalysisCoordinator {
       result.faces.pending +
       result.faceEmbeddings.pending +
       result.petDetection.pending +
-      result.petFusion.pending;
+      result.petFusion.pending +
+      result.petEmbeddings.pending;
     const active =
       result.technical.running +
       result.imageMetadata.running +
       result.faces.running +
       result.faceEmbeddings.running +
       result.petDetection.running +
-      result.petFusion.running;
+      result.petFusion.running +
+      result.petEmbeddings.running;
 
     this.analysis.setQueueState(
       queued,
@@ -248,7 +263,8 @@ export class AnalysisCoordinator {
         stats.faces.running +
         stats.faceEmbeddings.running +
         stats.petDetection.running +
-        stats.petFusion.running;
+        stats.petFusion.running +
+        stats.petEmbeddings.running;
 
       if (totalRunning > 0) return;
 
@@ -273,7 +289,8 @@ export class AnalysisCoordinator {
         stats.faces.pending +
         stats.faceEmbeddings.pending +
         stats.petDetection.pending +
-        stats.petFusion.pending - 1;
+        stats.petFusion.pending +
+        stats.petEmbeddings.pending - 1;
 
       this.analysis.setQueueState(
         Math.max(0, queued),
@@ -305,6 +322,18 @@ export class AnalysisCoordinator {
           });
 
           extraPayload = { detections };
+        }
+
+        if (spec.module === "pet-embed-dogreid-v1") {
+          const pets = await this.catalog.request<PetDetectionForEmbedding[]>(
+            "getPetDetectionsForEmbedding",
+            {
+              mediaId: job.mediaId,
+              inputSha256: job.sha256
+            }
+          );
+
+          extraPayload = { pets };
         }
 
         const result = await this.analysis.request<Record<string, unknown>>(
