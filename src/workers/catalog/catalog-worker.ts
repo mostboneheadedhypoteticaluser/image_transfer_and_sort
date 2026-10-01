@@ -1420,15 +1420,43 @@ function completeAnalysisJob(jobId: number, result: unknown) {
 }
 
 function failAnalysisJob(jobId: number, errorMessage: string) {
-  db.prepare(`
-    UPDATE analysis_jobs
-    SET
-      status='FAILED',
-      error_message=?,
-      finished_at=CURRENT_TIMESTAMP,
-      updated_at=CURRENT_TIMESTAMP
+  const job = db.prepare(`
+    SELECT media_id, module
+    FROM analysis_jobs
     WHERE id=?
-  `).run(errorMessage.slice(0, 4000), jobId);
+  `).get(jobId);
+
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    db.prepare(`
+      UPDATE analysis_jobs
+      SET
+        status='FAILED',
+        error_message=?,
+        finished_at=CURRENT_TIMESTAMP,
+        updated_at=CURRENT_TIMESTAMP
+      WHERE id=?
+    `).run(errorMessage.slice(0, 4000), jobId);
+
+    if (job && String(job.module) === "face-detect-yunet-v1") {
+      db.prepare(`
+        UPDATE analysis_jobs
+        SET
+          status='FAILED',
+          error_message='Abhängige Gesichtsdetektion ist fehlgeschlagen.',
+          finished_at=CURRENT_TIMESTAMP,
+          updated_at=CURRENT_TIMESTAMP
+        WHERE media_id=?
+          AND module='face-embed-sface-v1'
+          AND status<>'DONE'
+      `).run(Number(job.media_id));
+    }
+
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
 
   return { failed: true };
 }
@@ -2097,6 +2125,25 @@ function completeFaceDetectionJob(jobId: number, result: unknown) {
     `).run(Number(job.media_id), detectorVersion);
 
     db.prepare(`
+      DELETE FROM face_embeddings
+      WHERE media_id=?
+    `).run(Number(job.media_id));
+
+    db.prepare(`
+      UPDATE analysis_jobs
+      SET
+        status='PENDING',
+        attempts=0,
+        result_json=NULL,
+        error_message=NULL,
+        started_at=NULL,
+        finished_at=NULL,
+        updated_at=CURRENT_TIMESTAMP
+      WHERE media_id=?
+        AND module='face-embed-sface-v1'
+    `).run(Number(job.media_id));
+
+    db.prepare(`
       UPDATE analysis_jobs
       SET status='DONE', result_json=?, error_message=NULL,
           finished_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP
@@ -2110,6 +2157,165 @@ function completeFaceDetectionJob(jobId: number, result: unknown) {
   }
 
   return { completed: true };
+}
+
+function getFaceDetectionsForEmbedding(
+  mediaId: number,
+  inputSha256: string
+) {
+  const rows = db.prepare(`
+    SELECT id, x, y, width, height, score, landmarks_json
+    FROM face_detections
+    WHERE media_id=?
+      AND input_sha256=?
+    ORDER BY detection_index ASC
+  `).all(mediaId, inputSha256);
+
+  return rows.map((row) => {
+    let landmarks: Array<{ x: number; y: number }> = [];
+
+    try {
+      const parsed = JSON.parse(String(row.landmarks_json ?? "[]"));
+      if (Array.isArray(parsed)) {
+        landmarks = parsed
+          .filter((value) => value && typeof value === "object")
+          .map((value) => ({
+            x: Number((value as Record<string, unknown>).x),
+            y: Number((value as Record<string, unknown>).y)
+          }))
+          .filter((value) => Number.isFinite(value.x) && Number.isFinite(value.y));
+      }
+    } catch {
+      landmarks = [];
+    }
+
+    return {
+      id: Number(row.id),
+      x: Number(row.x),
+      y: Number(row.y),
+      width: Number(row.width),
+      height: Number(row.height),
+      score: Number(row.score),
+      landmarks
+    };
+  });
+}
+
+function embeddingToBlob(values: unknown): Buffer {
+  if (!Array.isArray(values) || values.length === 0 || values.length > 4096) {
+    throw new Error("Gesichtsmerkmal-Vektor ist ungültig.");
+  }
+
+  const buffer = Buffer.allocUnsafe(values.length * 4);
+
+  for (let index = 0; index < values.length; index += 1) {
+    const number = Number(values[index]);
+    if (!Number.isFinite(number)) {
+      throw new Error("Gesichtsmerkmal enthält einen ungültigen Zahlenwert.");
+    }
+    buffer.writeFloatLE(number, index * 4);
+  }
+
+  return buffer;
+}
+
+function completeFaceEmbeddingJob(jobId: number, result: unknown) {
+  if (!result || typeof result !== "object") {
+    throw new Error("Gesichtsmerkmal-Ergebnis ist ungültig.");
+  }
+
+  const value = result as Record<string, unknown>;
+  const rawEmbeddings = Array.isArray(value.embeddings) ? value.embeddings : [];
+  const modelVersion =
+    typeof value.model === "string" && value.model.trim()
+      ? value.model.trim()
+      : "SFace 2021dec";
+
+  const job = jobForModule(jobId, "face-embed-sface-v1");
+  const mediaId = Number(job.media_id);
+  const inputSha256 = String(job.input_sha256 ?? "");
+
+  const insert = db.prepare(`
+    INSERT INTO face_embeddings(
+      face_detection_id,
+      media_id,
+      model_version,
+      input_sha256,
+      dimension,
+      vector_blob,
+      updated_at
+    )
+    VALUES(?,?,?,?,?,?,CURRENT_TIMESTAMP)
+    ON CONFLICT(face_detection_id, model_version) DO UPDATE SET
+      media_id=excluded.media_id,
+      input_sha256=excluded.input_sha256,
+      dimension=excluded.dimension,
+      vector_blob=excluded.vector_blob,
+      updated_at=CURRENT_TIMESTAMP
+  `);
+
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    db.prepare(`
+      DELETE FROM face_embeddings
+      WHERE media_id=?
+        AND model_version=?
+    `).run(mediaId, modelVersion);
+
+    let written = 0;
+
+    for (const raw of rawEmbeddings) {
+      if (!raw || typeof raw !== "object") continue;
+
+      const item = raw as Record<string, unknown>;
+      const faceDetectionId = Number(item.faceDetectionId);
+      if (!Number.isInteger(faceDetectionId) || faceDetectionId <= 0) continue;
+
+      const belongsToMedia = db.prepare(`
+        SELECT 1
+        FROM face_detections
+        WHERE id=?
+          AND media_id=?
+          AND input_sha256=?
+      `).get(faceDetectionId, mediaId, inputSha256);
+
+      if (!belongsToMedia) continue;
+
+      const vector = Array.isArray(item.vector) ? item.vector : [];
+      const blob = embeddingToBlob(vector);
+
+      insert.run(
+        faceDetectionId,
+        mediaId,
+        modelVersion,
+        inputSha256,
+        vector.length,
+        blob
+      );
+      written += 1;
+    }
+
+    db.prepare(`
+      UPDATE analysis_jobs
+      SET
+        status='DONE',
+        result_json=?,
+        error_message=NULL,
+        finished_at=CURRENT_TIMESTAMP,
+        updated_at=CURRENT_TIMESTAMP
+      WHERE id=?
+    `).run(
+      JSON.stringify({ model: modelVersion, embeddingCount: written }),
+      jobId
+    );
+
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+
+  return { completed: true, embeddingCount: written };
 }
 
 function completeThumbnailJob(jobId: number, result: unknown) {
