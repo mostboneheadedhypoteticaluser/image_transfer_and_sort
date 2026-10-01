@@ -92,6 +92,11 @@ export class AnalysisService {
   }
 
   private candidates(): PythonCandidate[] {
+    const projectRoot = path.resolve(this.workerPath, "..", "..", "..");
+    const venvPython = process.platform === "win32"
+      ? path.join(projectRoot, ".ai-venv", "Scripts", "python.exe")
+      : path.join(projectRoot, ".ai-venv", "bin", "python");
+
     if (process.platform === "win32") {
       const installed = installedWindowsPythonExecutables().map((command) => ({
         command,
@@ -100,6 +105,9 @@ export class AnalysisService {
       }));
 
       return [
+        ...(existsSync(venvPython)
+          ? [{ command: venvPython, args: ["-u", this.workerPath], label: "Projekt-AI-Python (.ai-venv)" }]
+          : []),
         ...installed,
         { command: "py", args: ["-3.12", "-u", this.workerPath], label: "Python 3.12 (py)" },
         { command: "py", args: ["-3", "-u", this.workerPath], label: "Python 3 (py)" },
@@ -109,6 +117,9 @@ export class AnalysisService {
     }
 
     return [
+      ...(existsSync(venvPython)
+        ? [{ command: venvPython, args: ["-u", this.workerPath], label: "Projekt-AI-Python (.ai-venv)" }]
+        : []),
       { command: "python3", args: ["-u", this.workerPath], label: "Python 3" },
       { command: "python", args: ["-u", this.workerPath], label: "Python" }
     ];
