@@ -24,6 +24,7 @@ export type PipelineStatus = {
   faces: AnalysisQueueStats;
   faceEmbeddings: AnalysisQueueStats;
   petDetection: AnalysisQueueStats;
+  petFusion: AnalysisQueueStats;
 };
 
 export type AnalysisJob = {
@@ -243,6 +244,8 @@ export type CatalogMethod =
   | "getFaceDetectionsForEmbedding"
   | "completeFaceEmbeddingJob"
   | "completePetDetectionJob"
+  | "getPetDetectionsForFusion"
+  | "completePetFusionJob"
   | "getFaceEmbeddingsForClustering"
   | "replacePersonCandidates"
   | "listPersonCandidates"
