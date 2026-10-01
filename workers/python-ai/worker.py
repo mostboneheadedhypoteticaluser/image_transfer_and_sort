@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import mimetypes
+import os
 import sys
 from dataclasses import asdict, dataclass
 
@@ -63,6 +65,46 @@ def handle(message: dict) -> bool:
         config.profile = profile if profile in {"background", "balanced", "full"} else "background"
 
         respond(request_id, result=snapshot())
+        return True
+
+    if method == "probe_media":
+        file_path = os.path.abspath(str(payload.get("path", "")))
+        if not file_path:
+            respond(request_id, error="Dateipfad fehlt.")
+            return True
+
+        if not os.path.isfile(file_path):
+            respond(request_id, error=f"Datei ist nicht erreichbar: {file_path}")
+            return True
+
+        info = os.stat(file_path)
+        expected_size = payload.get("expectedSizeBytes")
+
+        if expected_size is not None and int(expected_size) != int(info.st_size):
+            respond(
+                request_id,
+                error=(
+                    f"Dateigröße hat sich seit dem Katalogscan geändert: "
+                    f"{info.st_size} statt {expected_size} Byte."
+                ),
+            )
+            return True
+
+        mime_type, _encoding = mimetypes.guess_type(file_path)
+
+        respond(
+            request_id,
+            result={
+                "module": "file-probe-v1",
+                "path": file_path,
+                "exists": True,
+                "sizeBytes": int(info.st_size),
+                "mtimeNs": int(info.st_mtime_ns),
+                "mimeType": mime_type,
+                "extension": str(payload.get("extension", "")),
+                "expectedSha256": str(payload.get("expectedSha256", "")),
+            },
+        )
         return True
 
     if method == "shutdown":
