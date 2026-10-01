@@ -2684,7 +2684,7 @@ function listPersonCandidates(sourceId: number, requestedLimit: number) {
       CASE WHEN pcf.face_detection_id=? THEN 0 ELSE 1 END,
       pcf.similarity DESC,
       pcf.face_detection_id ASC
-    LIMIT 12
+    LIMIT 48
   `);
 
   return candidates.map((candidate) => {
@@ -2712,7 +2712,7 @@ function listPersonCandidates(sourceId: number, requestedLimit: number) {
 }
 
 function listPersons(sourceId: number) {
-  return db.prepare(`
+  const persons = db.prepare(`
     SELECT
       p.id,
       p.name,
@@ -2725,13 +2725,368 @@ function listPersons(sourceId: number) {
     WHERE m.source_id=?
     GROUP BY p.id, p.name
     ORDER BY p.name COLLATE NOCASE, p.id
-  `).all(sourceId).map((row) => ({
+  `).all(sourceId);
+
+  const faceQuery = db.prepare(`
+    SELECT
+      pfa.face_detection_id,
+      fd.media_id,
+      m.relative_path,
+      pfa.confidence
+    FROM person_face_assignments pfa
+    JOIN face_detections fd ON fd.id=pfa.face_detection_id
+    JOIN media_items m ON m.id=fd.media_id
+    WHERE pfa.person_id=?
+      AND m.source_id=?
+    ORDER BY pfa.face_detection_id ASC
+    LIMIT 48
+  `);
+
+  return persons.map((row) => ({
     id: Number(row.id),
     name: String(row.name),
     faceCount: Number(row.face_count),
     representativeFaceId:
-      row.representative_face_id === null ? null : Number(row.representative_face_id)
+      row.representative_face_id === null ? null : Number(row.representative_face_id),
+    faces: faceQuery.all(Number(row.id), sourceId).map((face) => ({
+      faceDetectionId: Number(face.face_detection_id),
+      mediaId: Number(face.media_id),
+      relativePath: String(face.relative_path),
+      confidence:
+        face.confidence === null || face.confidence === undefined
+          ? null
+          : Number(face.confidence)
+    }))
   }));
+}
+
+function equivalentFaceIds(faceDetectionId: number, sourceId: number): number[] {
+  const face = db.prepare(`
+    SELECT
+      fd.detection_index,
+      fd.detector_version,
+      m.sha256
+    FROM face_detections fd
+    JOIN media_items m ON m.id=fd.media_id
+    WHERE fd.id=?
+      AND m.source_id=?
+  `).get(faceDetectionId, sourceId);
+
+  if (!face) return [];
+
+  return db.prepare(`
+    SELECT fd.id
+    FROM face_detections fd
+    JOIN media_items m ON m.id=fd.media_id
+    WHERE m.source_id=?
+      AND m.sha256=?
+      AND fd.input_sha256=m.sha256
+      AND fd.detection_index=?
+      AND fd.detector_version=?
+    ORDER BY fd.id
+  `).all(
+    sourceId,
+    String(face.sha256),
+    Number(face.detection_index),
+    String(face.detector_version)
+  ).map((row) => Number(row.id));
+}
+
+function insertCannotLinks(
+  leftFaceIds: number[],
+  rightFaceIds: number[],
+  reason: string
+): number {
+  const insert = db.prepare(`
+    INSERT OR IGNORE INTO person_cluster_exclusions(
+      face_a_id,
+      face_b_id,
+      reason
+    )
+    VALUES(?,?,?)
+  `);
+
+  let changes = 0;
+
+  for (const left of leftFaceIds) {
+    for (const right of rightFaceIds) {
+      if (left === right) continue;
+      const faceAId = Math.min(left, right);
+      const faceBId = Math.max(left, right);
+      changes += Number(insert.run(faceAId, faceBId, reason).changes);
+    }
+  }
+
+  return changes;
+}
+
+function removeFaceFromPersonCandidate(
+  candidateId: number,
+  faceDetectionId: number
+) {
+  const candidate = db.prepare(`
+    SELECT source_id
+    FROM person_candidates
+    WHERE id=?
+  `).get(candidateId);
+
+  if (!candidate) throw new Error("Der Personenvorschlag wurde nicht gefunden.");
+
+  const sourceId = Number(candidate.source_id);
+
+  const membership = db.prepare(`
+    SELECT 1
+    FROM person_candidate_faces
+    WHERE candidate_id=?
+      AND face_detection_id=?
+  `).get(candidateId, faceDetectionId);
+
+  if (!membership) {
+    throw new Error("Das Gesicht gehört nicht mehr zu diesem Personenvorschlag.");
+  }
+
+  const equivalentIds = equivalentFaceIds(faceDetectionId, sourceId);
+  const equivalentSet = new Set(equivalentIds);
+
+  const members = db.prepare(`
+    SELECT face_detection_id
+    FROM person_candidate_faces
+    WHERE candidate_id=?
+  `).all(candidateId).map((row) => Number(row.face_detection_id));
+
+  const removedIds = members.filter((id) => equivalentSet.has(id));
+  const remainingIds = members.filter((id) => !equivalentSet.has(id));
+
+  if (removedIds.length === 0) {
+    throw new Error("Das Gesicht konnte im Vorschlag nicht mehr gefunden werden.");
+  }
+
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    insertCannotLinks(removedIds, remainingIds, "USER_SPLIT");
+
+    const deleteMember = db.prepare(`
+      DELETE FROM person_candidate_faces
+      WHERE candidate_id=?
+        AND face_detection_id=?
+    `);
+
+    for (const id of removedIds) deleteMember.run(candidateId, id);
+
+    if (remainingIds.length === 0) {
+      db.prepare("DELETE FROM person_candidates WHERE id=?").run(candidateId);
+    } else {
+      const representative = db.prepare(`
+        SELECT 1
+        FROM person_candidate_faces
+        WHERE candidate_id=?
+          AND face_detection_id=(
+            SELECT representative_face_id
+            FROM person_candidates
+            WHERE id=?
+          )
+      `).get(candidateId, candidateId);
+
+      if (!representative) {
+        db.prepare(`
+          UPDATE person_candidates
+          SET representative_face_id=?
+          WHERE id=?
+        `).run(remainingIds[0], candidateId);
+      }
+    }
+
+    db.prepare("DELETE FROM person_cluster_runs WHERE source_id=?").run(sourceId);
+
+    db.exec("COMMIT");
+    return { changed: true, affectedFaces: removedIds.length };
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+}
+
+function removeFaceFromPerson(personId: number, faceDetectionId: number) {
+  const assignment = db.prepare(`
+    SELECT m.source_id
+    FROM person_face_assignments pfa
+    JOIN face_detections fd ON fd.id=pfa.face_detection_id
+    JOIN media_items m ON m.id=fd.media_id
+    WHERE pfa.person_id=?
+      AND pfa.face_detection_id=?
+  `).get(personId, faceDetectionId);
+
+  if (!assignment) {
+    throw new Error("Das Gesicht ist dieser Person nicht mehr zugeordnet.");
+  }
+
+  const sourceId = Number(assignment.source_id);
+  const equivalentIds = equivalentFaceIds(faceDetectionId, sourceId);
+  const equivalentSet = new Set(equivalentIds);
+
+  const assignedEquivalentIds = db.prepare(`
+    SELECT pfa.face_detection_id
+    FROM person_face_assignments pfa
+    JOIN face_detections fd ON fd.id=pfa.face_detection_id
+    JOIN media_items m ON m.id=fd.media_id
+    WHERE pfa.person_id=?
+      AND m.source_id=?
+  `).all(personId, sourceId)
+    .map((row) => Number(row.face_detection_id))
+    .filter((id) => equivalentSet.has(id));
+
+  const remainingSourceFaceIds = db.prepare(`
+    SELECT pfa.face_detection_id
+    FROM person_face_assignments pfa
+    JOIN face_detections fd ON fd.id=pfa.face_detection_id
+    JOIN media_items m ON m.id=fd.media_id
+    WHERE pfa.person_id=?
+      AND m.source_id=?
+  `).all(personId, sourceId)
+    .map((row) => Number(row.face_detection_id))
+    .filter((id) => !equivalentSet.has(id));
+
+  if (assignedEquivalentIds.length === 0) {
+    throw new Error("Die korrigierbare Gesichtszuordnung wurde nicht gefunden.");
+  }
+
+  const insertPersonExclusion = db.prepare(`
+    INSERT OR IGNORE INTO person_face_exclusions(
+      person_id,
+      face_detection_id,
+      reason
+    )
+    VALUES(?,?,'USER_REMOVED')
+  `);
+
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    insertCannotLinks(
+      assignedEquivalentIds,
+      remainingSourceFaceIds,
+      "USER_REMOVED_FROM_PERSON"
+    );
+
+    for (const id of assignedEquivalentIds) {
+      insertPersonExclusion.run(personId, id);
+      db.prepare(`
+        DELETE FROM person_face_assignments
+        WHERE person_id=?
+          AND face_detection_id=?
+      `).run(personId, id);
+    }
+
+    db.prepare(`
+      UPDATE persons
+      SET updated_at=CURRENT_TIMESTAMP
+      WHERE id=?
+    `).run(personId);
+
+    db.prepare("DELETE FROM person_cluster_runs WHERE source_id=?").run(sourceId);
+
+    db.exec("COMMIT");
+    return { changed: true, affectedFaces: assignedEquivalentIds.length };
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+}
+
+function renamePerson(personId: number, rawName: unknown) {
+  const name = typeof rawName === "string" ? rawName.trim() : "";
+  if (!name) throw new Error("Bitte einen Namen für die Person eingeben.");
+  if (name.length > 120) throw new Error("Der Personenname ist zu lang.");
+
+  const person = db.prepare("SELECT id FROM persons WHERE id=?").get(personId);
+  if (!person) throw new Error("Die Person wurde nicht gefunden.");
+
+  db.prepare(`
+    UPDATE persons
+    SET name=?, updated_at=CURRENT_TIMESTAMP
+    WHERE id=?
+  `).run(name, personId);
+
+  return { changed: true, affectedFaces: 0 };
+}
+
+function mergePersons(targetPersonId: number, sourcePersonId: number) {
+  if (targetPersonId === sourcePersonId) {
+    throw new Error("Eine Person kann nicht mit sich selbst zusammengeführt werden.");
+  }
+
+  const target = db.prepare("SELECT id, name FROM persons WHERE id=?")
+    .get(targetPersonId);
+  const source = db.prepare("SELECT id, name FROM persons WHERE id=?")
+    .get(sourcePersonId);
+
+  if (!target || !source) {
+    throw new Error("Eine der beiden Personen wurde nicht gefunden.");
+  }
+
+  const sourceFaces = db.prepare(`
+    SELECT face_detection_id
+    FROM person_face_assignments
+    WHERE person_id=?
+  `).all(sourcePersonId).map((row) => Number(row.face_detection_id));
+
+  const copyExclusions = db.prepare(`
+    INSERT OR IGNORE INTO person_face_exclusions(
+      person_id,
+      face_detection_id,
+      reason
+    )
+    SELECT ?, face_detection_id, reason
+    FROM person_face_exclusions
+    WHERE person_id=?
+  `);
+
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    copyExclusions.run(targetPersonId, sourcePersonId);
+
+    const clearContradictingExclusion = db.prepare(`
+      DELETE FROM person_face_exclusions
+      WHERE person_id=?
+        AND face_detection_id=?
+    `);
+
+    for (const faceId of sourceFaces) {
+      clearContradictingExclusion.run(targetPersonId, faceId);
+    }
+
+    db.prepare(`
+      UPDATE person_face_assignments
+      SET
+        person_id=?,
+        assignment_source='CONFIRMED',
+        updated_at=CURRENT_TIMESTAMP
+      WHERE person_id=?
+    `).run(targetPersonId, sourcePersonId);
+
+    db.prepare("DELETE FROM persons WHERE id=?").run(sourcePersonId);
+    db.prepare(`
+      UPDATE persons
+      SET updated_at=CURRENT_TIMESTAMP
+      WHERE id=?
+    `).run(targetPersonId);
+
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+
+  const count = db.prepare(`
+    SELECT COUNT(*) AS count
+    FROM person_face_assignments
+    WHERE person_id=?
+  `).get(targetPersonId);
+
+  return {
+    personId: targetPersonId,
+    name: String(target.name),
+    faceCount: Number(count?.count ?? 0)
+  };
 }
 
 function confirmPersonCandidate(candidateId: number, rawName: unknown) {
