@@ -144,7 +144,8 @@ function updatePipelineStage(
     stage === "technical" ||
     stage === "imageMetadata" ||
     stage === "faces" ||
-    stage === "faceEmbeddings"
+    stage === "faceEmbeddings" ||
+    stage === "petDetection"
   ) {
     schedulePersonRefresh();
   }
