@@ -64,7 +64,7 @@ main {
 
 .source-row {
   display: grid;
-  grid-template-columns: minmax(360px, 1fr) auto auto;
+  grid-template-columns: minmax(320px, 1fr) auto auto auto;
   gap: 10px;
 }
 
@@ -97,6 +97,12 @@ button.primary {
   background: #17202a;
   color: #fff;
   border-color: #17202a;
+}
+
+button.danger {
+  background: #fff;
+  color: #8d302d;
+  border-color: #e4b8b5;
 }
 
 button.secondary,
