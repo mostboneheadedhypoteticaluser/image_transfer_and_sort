@@ -738,3 +738,242 @@ td .badge + .badge {
     border-bottom: 0;
   }
 }
+
+
+.person-view {
+  padding: 0 18px 22px;
+}
+
+.person-view-header,
+.person-section-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.person-view-header {
+  padding: 16px 0;
+  border-bottom: 1px solid #eef1f3;
+}
+
+.person-view-header h3,
+.person-section-heading h3 {
+  margin: 0 0 4px;
+  font-size: 15px;
+}
+
+.person-view-header p,
+.person-section-heading p {
+  margin: 0;
+  color: #68717d;
+  font-size: 12px;
+}
+
+.person-section {
+  padding-top: 16px;
+}
+
+.person-section + .person-section {
+  margin-top: 20px;
+  border-top: 1px solid #eef1f3;
+}
+
+.person-section-heading {
+  margin-bottom: 11px;
+}
+
+.person-section-heading p {
+  max-width: 700px;
+  text-align: right;
+}
+
+.person-candidates {
+  display: grid;
+  gap: 12px;
+}
+
+.person-candidate-card {
+  display: grid;
+  grid-template-columns: minmax(260px, 420px) minmax(300px, 1fr);
+  border: 1px solid #e3e7eb;
+  border-radius: 10px;
+  background: #fff;
+  overflow: hidden;
+}
+
+.person-face-strip {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 2px;
+  padding: 2px;
+  align-content: start;
+  background: #eef1f3;
+}
+
+.person-face {
+  position: relative;
+  aspect-ratio: 1;
+  margin: 0;
+  overflow: hidden;
+  background: #e6eaee;
+}
+
+.person-face.representative::after {
+  content: "Referenz";
+  position: absolute;
+  left: 4px;
+  bottom: 4px;
+  padding: 2px 5px;
+  border-radius: 999px;
+  background: rgba(23, 32, 42, .78);
+  color: #fff;
+  font-size: 8px;
+  font-weight: 800;
+}
+
+.person-face img,
+.face-fallback {
+  width: 100%;
+  height: 100%;
+}
+
+.person-face img {
+  display: block;
+  object-fit: cover;
+}
+
+.face-fallback {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #7a8490;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.person-candidate-body {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px;
+}
+
+.person-candidate-heading h4 {
+  margin: 0 0 4px;
+  font-size: 16px;
+}
+
+.person-candidate-heading p {
+  margin: 0;
+  color: #68717d;
+  font-size: 12px;
+}
+
+.person-confirm-row {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) auto;
+  gap: 8px;
+}
+
+.person-confirm-row input {
+  min-width: 0;
+  height: 40px;
+  padding: 0 12px;
+  border: 1px solid #d6dce2;
+  border-radius: 8px;
+  background: #fff;
+  color: #17202a;
+  font: inherit;
+}
+
+.person-confirm-row input:focus {
+  outline: 2px solid rgba(23, 32, 42, .14);
+  border-color: #9ca6b0;
+}
+
+.person-confirm {
+  white-space: nowrap;
+}
+
+.confirmed-persons {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 10px;
+}
+
+.confirmed-person-card {
+  display: grid;
+  grid-template-columns: 58px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  min-height: 66px;
+  padding: 8px;
+  border: 1px solid #e3e7eb;
+  border-radius: 9px;
+  background: #fafbfc;
+}
+
+.confirmed-person-card img {
+  width: 58px;
+  height: 58px;
+  border-radius: 7px;
+  object-fit: cover;
+  background: #e9edf0;
+}
+
+.confirmed-person-card div {
+  min-width: 0;
+}
+
+.confirmed-person-card strong,
+.confirmed-person-card small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.confirmed-person-card strong {
+  font-size: 13px;
+}
+
+.confirmed-person-card small {
+  margin-top: 3px;
+  color: #7a8490;
+  font-size: 10px;
+}
+
+.person-empty {
+  padding: 34px 18px;
+  border: 1px dashed #d8dde2;
+  border-radius: 9px;
+  text-align: center;
+  color: #7a8490;
+  font-size: 12px;
+  background: #fafbfc;
+}
+
+.person-empty.compact {
+  padding: 22px 16px;
+}
+
+@media (max-width: 1120px) {
+  .person-candidate-card {
+    grid-template-columns: 1fr;
+  }
+
+  .person-face-strip {
+    grid-template-columns: repeat(6, 1fr);
+  }
+
+  .person-section-heading {
+    display: block;
+  }
+
+  .person-section-heading p {
+    margin-top: 4px;
+    text-align: left;
+  }
+}
