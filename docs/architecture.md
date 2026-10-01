@@ -18,13 +18,17 @@ Electron Main
     │       ├── SHA-256
     │       └── SQLite (einziger Besitzer der Katalog-DB)
     │
+    ├── Utility Process: Thumbnail Worker
+    │       └── Sharp + SHA-256-Cache
+    │
     └── Python-AI-Worker (eigener Hintergrundprozess)
             ├── eigener Prozess, keine sichtbare zweite App
             ├── niedrige Prozesspriorität
             ├── 1 gleichzeitiger Analysejob
-            ├── Personen
-            ├── Haustiere
-            ├── Embeddings
+            ├── technische Prüfung
+            ├── EXIF-Metadaten
+            ├── YuNet-Gesichtsdetektion
+            ├── später Personen-/Haustier-Embeddings
             └── weitere Analyse-Module
 ```
 
@@ -62,4 +66,4 @@ Die Oberfläche zeigt den Zustand des Analyse-Workers unabhängig vom Katalog-Wo
 
 Die Datenbank verwendet WAL-Modus und liegt im Electron-`userData`-Verzeichnis. Der Catalog Worker ist der einzige Prozess, der direkt auf sie zugreift. Andere Module kommunizieren über definierte Nachrichten.
 
-Die Tabelle `analysis_jobs` ist als Anschlussstelle für die nächsten Analyse-Module vorgesehen. Der Python-Prozess läuft bereits, die eigentlichen KI-Jobs für Personen, Haustiere, Embeddings und Motive werden im nächsten Schritt daran angeschlossen.
+Die Tabelle `analysis_jobs` steuert inzwischen technische Prüfung, Thumbnails, EXIF-Metadaten und YuNet-Gesichtsdetektion persistent. Ergebnisse landen getrennt in `media_thumbnails`, `media_image_metadata` und `face_detections`. Personenidentität bleibt bewusst noch getrennt; sie wird später über Embeddings und Bestätigung aufgebaut.
