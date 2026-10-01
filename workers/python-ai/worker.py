@@ -79,6 +79,19 @@ def require_file(payload: dict) -> str:
     return file_path
 
 
+def verify_expected_size(file_path: str, payload: dict) -> None:
+    expected_size = payload.get("expectedSizeBytes")
+    if expected_size is None:
+        return
+
+    actual_size = os.path.getsize(file_path)
+    if int(expected_size) != int(actual_size):
+        raise RuntimeError(
+            f"Dateigröße hat sich seit dem Katalogscan geändert: "
+            f"{actual_size} statt {expected_size} Byte."
+        )
+
+
 def rational_to_float(value: Any) -> float | None:
     try:
         result = float(value)
@@ -317,11 +330,13 @@ def handle(message: dict) -> bool:
 
     if method == "extract_image_metadata":
         file_path = require_file(payload)
+        verify_expected_size(file_path, payload)
         respond(request_id, result=extract_image_metadata(file_path))
         return True
 
     if method == "detect_faces":
         file_path = require_file(payload)
+        verify_expected_size(file_path, payload)
         respond(request_id, result=detect_faces(file_path))
         return True
 
