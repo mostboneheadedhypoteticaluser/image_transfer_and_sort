@@ -312,3 +312,144 @@ td .badge + .badge {
   .topbar, main { padding-left: 22px; padding-right: 22px; }
   .stats-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
+
+
+.view-tabs {
+  display: flex;
+  gap: 8px;
+  padding: 12px 18px;
+  border-bottom: 1px solid #e8ecef;
+  background: #fafbfc;
+}
+
+.view-tab {
+  height: 34px;
+  padding: 0 12px;
+  background: transparent;
+  border-color: transparent;
+  color: #68717d;
+  font-weight: 700;
+}
+
+.view-tab:hover {
+  background: #f0f3f5;
+}
+
+.view-tab.active {
+  background: #17202a;
+  border-color: #17202a;
+  color: #fff;
+}
+
+.tab-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  height: 20px;
+  margin-left: 5px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: rgba(104, 113, 125, .12);
+  font-size: 11px;
+}
+
+.view-tab.active .tab-count {
+  background: rgba(255, 255, 255, .18);
+}
+
+.catalog-view[hidden] {
+  display: none;
+}
+
+.duplicate-view {
+  max-height: 520px;
+  overflow: auto;
+  padding: 16px 18px 20px;
+}
+
+.duplicate-groups {
+  display: grid;
+  gap: 12px;
+}
+
+.duplicate-card {
+  border: 1px solid #e3e7eb;
+  border-radius: 10px;
+  background: #fff;
+  overflow: hidden;
+}
+
+.duplicate-card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 14px 15px;
+  border-bottom: 1px solid #eef1f3;
+  background: #fafbfc;
+}
+
+.duplicate-card h3 {
+  margin: 0 0 4px;
+  font-size: 15px;
+}
+
+.duplicate-card p {
+  margin: 0;
+  color: #68717d;
+  font-size: 12px;
+}
+
+.duplicate-hash {
+  flex: 0 0 auto;
+  padding: 4px 7px;
+  border-radius: 6px;
+  background: #eef1f3;
+  color: #59636f;
+  font-size: 11px;
+}
+
+.duplicate-paths {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.duplicate-paths li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  padding: 10px 15px;
+  border-bottom: 1px solid #f1f3f5;
+}
+
+.duplicate-paths li:last-child {
+  border-bottom: 0;
+}
+
+.duplicate-paths span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+
+.duplicate-paths small {
+  color: #7a8490;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.duplicate-note {
+  padding: 10px 15px 12px;
+  border-top: 1px solid #eef1f3;
+  background: #fcfcfd;
+}
+
+.duplicate-empty {
+  padding: 48px 20px;
+  text-align: center;
+  color: #7a8490;
+}
