@@ -41,8 +41,11 @@ function statusFor(row: MediaRecord): { text: string; className: string } {
   if (row.availability === "AVAILABLE") {
     return { text: "Verfügbar", className: "badge ok" };
   }
-  if (row.inRecycleBin) {
+  if (row.recycleState === "RESTORABLE") {
     return { text: "Papierkorb – wiederherstellbar", className: "badge recycle" };
+  }
+  if (row.recycleState === "AMBIGUOUS") {
+    return { text: "Papierkorb – Zuordnung mehrdeutig", className: "badge recycle ambiguous" };
   }
   return { text: "Fehlt", className: "badge missing" };
 }
@@ -84,8 +87,16 @@ function renderRows(rows: MediaRecord[]): void {
     badge.textContent = status.text;
     stateCell.appendChild(badge);
 
+    if (row.availability === "AVAILABLE" && row.duplicateCount > 0) {
+      const duplicateBadge = document.createElement("span");
+      duplicateBadge.className = "badge duplicate";
+      duplicateBadge.textContent = `Dubletten ×${row.duplicateCount + 1}`;
+      duplicateBadge.title = "Dateien mit identischem SHA-256-Inhalt";
+      stateCell.appendChild(duplicateBadge);
+    }
+
     const actionCell = document.createElement("td");
-    if (row.availability === "MISSING" && row.inRecycleBin) {
+    if (row.availability === "MISSING" && row.recycleState === "RESTORABLE") {
       const restoreButton = document.createElement("button");
       restoreButton.className = "table-action";
       restoreButton.textContent = "Wiederherstellen";
