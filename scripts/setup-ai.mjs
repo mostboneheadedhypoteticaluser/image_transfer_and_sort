@@ -8,10 +8,23 @@ const root = process.cwd();
 const venv = path.join(root, ".ai-venv");
 const requirements = path.join(root, "workers", "python-ai", "requirements.txt");
 const modelDir = path.join(root, "workers", "python-ai", "models");
-const modelPath = path.join(modelDir, "face_detection_yunet_2023mar.onnx");
-const modelUrl =
-  "https://huggingface.co/opencv/opencv_zoo/resolve/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx";
-const modelSha256 = "8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4";
+
+const models = [
+  {
+    name: "YuNet",
+    path: path.join(modelDir, "face_detection_yunet_2023mar.onnx"),
+    url:
+      "https://huggingface.co/opencv/opencv_zoo/resolve/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx",
+    sha256: "8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4"
+  },
+  {
+    name: "SFace",
+    path: path.join(modelDir, "face_recognition_sface_2021dec.onnx"),
+    url:
+      "https://huggingface.co/opencv/opencv_zoo/resolve/main/models/face_recognition_sface/face_recognition_sface_2021dec.onnx",
+    sha256: "0ba9fbfa01b5270c96627c4ef784da859931e02f04419c829e83484087c34e79"
+  }
+];
 
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, {
@@ -72,35 +85,35 @@ function venvPython() {
     : path.join(venv, "bin", "python");
 }
 
-async function ensureModel() {
+async function ensureModel(model) {
   mkdirSync(modelDir, { recursive: true });
 
-  if (existsSync(modelPath)) {
-    const digest = createHash("sha256").update(readFileSync(modelPath)).digest("hex");
-    if (digest === modelSha256) {
-      console.log("YuNet-Modell bereits vorhanden.");
+  if (existsSync(model.path)) {
+    const digest = createHash("sha256").update(readFileSync(model.path)).digest("hex");
+    if (digest === model.sha256) {
+      console.log(`${model.name}-Modell bereits vorhanden.`);
       return;
     }
-    console.log("Vorhandenes YuNet-Modell hat einen anderen Hash und wird ersetzt.");
+    console.log(`Vorhandenes ${model.name}-Modell hat einen anderen Hash und wird ersetzt.`);
   }
 
-  console.log("Lade offizielles YuNet-Modell aus dem OpenCV Zoo …");
-  const response = await fetch(modelUrl);
+  console.log(`Lade offizielles ${model.name}-Modell aus dem OpenCV Zoo …`);
+  const response = await fetch(model.url);
   if (!response.ok) {
-    throw new Error(`Modelldownload fehlgeschlagen: HTTP ${response.status}`);
+    throw new Error(`${model.name}-Download fehlgeschlagen: HTTP ${response.status}`);
   }
 
   const bytes = Buffer.from(await response.arrayBuffer());
   const digest = createHash("sha256").update(bytes).digest("hex");
 
-  if (digest !== modelSha256) {
+  if (digest !== model.sha256) {
     throw new Error(
-      `YuNet-Modellprüfung fehlgeschlagen. Erwartet ${modelSha256}, erhalten ${digest}.`
+      `${model.name}-Modellprüfung fehlgeschlagen. Erwartet ${model.sha256}, erhalten ${digest}.`
     );
   }
 
-  writeFileSync(modelPath, bytes);
-  console.log("YuNet-Modell geprüft und gespeichert.");
+  writeFileSync(model.path, bytes);
+  console.log(`${model.name}-Modell geprüft und gespeichert.`);
 }
 
 const python = detectPython();
@@ -116,9 +129,13 @@ run(venvPython(), ["-m", "pip", "install", "--upgrade", "pip"]);
 console.log("Installiere AI-Abhängigkeiten …");
 run(venvPython(), ["-m", "pip", "install", "-r", requirements]);
 
-await ensureModel();
+for (const model of models) {
+  await ensureModel(model);
+}
 
 console.log("");
 console.log("AI-Umgebung ist bereit.");
 console.log(`Python: ${venvPython()}`);
-console.log(`Modell: ${modelPath}`);
+for (const model of models) {
+  console.log(`${model.name}: ${model.path}`);
+}
