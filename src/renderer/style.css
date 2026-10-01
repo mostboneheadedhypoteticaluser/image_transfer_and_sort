@@ -1,0 +1,272 @@
+:root {
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: #17202a;
+  background: #f4f6f8;
+  font-synthesis: none;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  min-width: 980px;
+  background: #f4f6f8;
+}
+
+button, select { font: inherit; }
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 28px 36px 18px;
+}
+
+.topbar h1 {
+  margin: 0 0 5px;
+  font-size: 28px;
+  letter-spacing: -0.02em;
+}
+
+.topbar p,
+.panel-heading p {
+  margin: 0;
+  color: #68717d;
+  font-size: 14px;
+}
+
+main {
+  padding: 0 36px 36px;
+  display: grid;
+  gap: 16px;
+}
+
+.panel,
+.stat {
+  background: #fff;
+  border: 1px solid #e3e7eb;
+  border-radius: 12px;
+  box-shadow: 0 2px 7px rgba(20, 30, 40, 0.035);
+}
+
+.source-panel { padding: 18px; }
+
+.source-panel > label {
+  display: block;
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+  color: #68717d;
+  margin-bottom: 8px;
+}
+
+.source-row {
+  display: grid;
+  grid-template-columns: minmax(360px, 1fr) auto auto;
+  gap: 10px;
+}
+
+select,
+button {
+  height: 40px;
+  border-radius: 8px;
+  border: 1px solid #d6dce2;
+}
+
+select {
+  width: 100%;
+  padding: 0 12px;
+  background: #fff;
+  color: #17202a;
+}
+
+button {
+  padding: 0 15px;
+  cursor: pointer;
+  font-weight: 650;
+}
+
+button:disabled {
+  cursor: default;
+  opacity: .5;
+}
+
+button.primary {
+  background: #17202a;
+  color: #fff;
+  border-color: #17202a;
+}
+
+button.secondary,
+button.ghost {
+  background: #fff;
+  color: #26323f;
+}
+
+button.ghost {
+  height: 34px;
+  font-weight: 600;
+}
+
+.progress-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 13px;
+  color: #68717d;
+  font-size: 13px;
+}
+
+.progress-track {
+  height: 5px;
+  width: 170px;
+  border-radius: 99px;
+  overflow: hidden;
+  background: #e8ecef;
+}
+
+.progress-bar {
+  height: 100%;
+  width: 0;
+  border-radius: inherit;
+  background: #17202a;
+}
+
+.progress-bar.active {
+  width: 40%;
+  animation: scan 1.1s ease-in-out infinite alternate;
+}
+
+@keyframes scan {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(250%); }
+}
+
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+}
+
+.stat {
+  padding: 18px;
+  display: grid;
+  gap: 4px;
+}
+
+.stat span {
+  font-size: 22px;
+  font-weight: 760;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.stat small {
+  color: #68717d;
+  font-size: 12px;
+}
+
+.media-panel {
+  min-height: 420px;
+  overflow: hidden;
+}
+
+.panel-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 17px 18px;
+  border-bottom: 1px solid #e8ecef;
+}
+
+.panel-heading h2 {
+  margin: 0 0 4px;
+  font-size: 17px;
+}
+
+.table-wrap {
+  max-height: 490px;
+  overflow: auto;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+
+th, td {
+  text-align: left;
+  padding: 11px 14px;
+  border-bottom: 1px solid #eef1f3;
+  font-size: 13px;
+}
+
+th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: #fafbfc;
+  color: #68717d;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+}
+
+th:first-child { width: 67%; }
+th:nth-child(2) { width: 10%; }
+th:nth-child(3) { width: 11%; }
+th:nth-child(4) { width: 12%; }
+
+.path-cell {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.empty {
+  text-align: center;
+  color: #7a8490;
+  padding: 48px;
+}
+
+.badge,
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.badge { padding: 4px 8px; }
+
+.badge.ok {
+  background: #eef7f1;
+  color: #25653c;
+}
+
+.badge.missing {
+  background: #fff1f0;
+  color: #8d302d;
+}
+
+.status-pill {
+  padding: 7px 10px;
+  background: #eceff2;
+  color: #59636f;
+  white-space: nowrap;
+}
+
+.status-pill.ready {
+  background: #eef7f1;
+  color: #25653c;
+}
+
+@media (max-width: 1050px) {
+  .topbar, main { padding-left: 22px; padding-right: 22px; }
+  .stats-grid { grid-template-columns: repeat(2, 1fr); }
+}
