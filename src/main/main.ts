@@ -16,6 +16,21 @@ import type {
 let windowRef: BrowserWindow | null = null;
 let catalog: CatalogService | null = null;
 let analysis: AnalysisService | null = null;
+let isQuitting = false;
+
+function sendToRenderer(channel: string, payload: unknown): void {
+  const win = windowRef;
+  if (
+    isQuitting ||
+    !win ||
+    win.isDestroyed() ||
+    win.webContents.isDestroyed()
+  ) {
+    return;
+  }
+
+  win.webContents.send(channel, payload);
+}
 
 function createWindow(): BrowserWindow {
   const win = new BrowserWindow({
@@ -38,6 +53,10 @@ function createWindow(): BrowserWindow {
   } else {
     void win.loadFile(path.join(__dirname, "..", "renderer", "index.html"));
   }
+
+  win.on("closed", () => {
+    if (windowRef === win) windowRef = null;
+  });
 
   return win;
 }
@@ -103,11 +122,11 @@ app.whenReady().then(() => {
   );
 
   catalog = new CatalogService(workerPath, dbPath, (progress) => {
-    windowRef?.webContents.send("catalog:progress", progress);
+    sendToRenderer("catalog:progress", progress);
   });
 
   analysis = new AnalysisService(analysisWorkerPath, (status) => {
-    windowRef?.webContents.send("analysis:status", status);
+    sendToRenderer("analysis:status", status);
   });
 
   catalog.start();
@@ -126,6 +145,7 @@ app.on("window-all-closed", () => {
 });
 
 app.on("before-quit", () => {
+  isQuitting = true;
   analysis?.stop();
   catalog?.stop();
 });
