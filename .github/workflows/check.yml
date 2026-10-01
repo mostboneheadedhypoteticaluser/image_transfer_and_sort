@@ -5,6 +5,7 @@ on:
     branches:
       - "2026-10-01-electron-worker-neustart"
       - "2026-10-01-verschieben-papierkorb"
+      - "2026-10-01-videos-datenbank-reset"
   pull_request:
 
 jobs:
