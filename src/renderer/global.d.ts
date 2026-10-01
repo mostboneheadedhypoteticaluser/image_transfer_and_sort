@@ -7,7 +7,9 @@ import type {
   DuplicateGroup,
   MediaRecord,
   MergePersonsResult,
+  MergePetsResult,
   PersonCorrectionResult,
+  PetCorrectionResult,
   PersonOverview,
   PetOverview,
   RestoreResult,
@@ -57,6 +59,22 @@ declare global {
           candidateId: number,
           name: string
         ): Promise<ConfirmPetResult>;
+        removeCandidatePet(
+          candidateId: number,
+          petDetectionId: number
+        ): Promise<PetCorrectionResult>;
+        removePetDetection(
+          petId: number,
+          petDetectionId: number
+        ): Promise<PetCorrectionResult>;
+        mergePets(
+          targetPetId: number,
+          sourcePetId: number
+        ): Promise<MergePetsResult>;
+        renamePet(
+          petId: number,
+          name: string
+        ): Promise<PetCorrectionResult>;
         onUpdated(listener: () => void): () => void;
       };
       catalog: {
