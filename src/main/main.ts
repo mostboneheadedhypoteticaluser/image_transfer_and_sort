@@ -3,6 +3,7 @@ import { app, BrowserWindow, dialog, ipcMain } from "electron";
 import { CatalogService } from "./catalog-service";
 import type {
   CatalogStats,
+  DuplicateGroup,
   MediaRecord,
   RestoreResult,
   ResetCatalogResult,
@@ -61,6 +62,14 @@ function registerIpc(): void {
 
   ipcMain.handle("catalog:listMedia", (_event, sourceId: number, limit: number) =>
     catalog!.request<MediaRecord[]>("listMedia", { sourceId, limit })
+  );
+
+  ipcMain.handle("catalog:listDuplicateGroups", (_event, sourceId: number, limit: number) =>
+    catalog!.request<DuplicateGroup[]>("listDuplicateGroups", { sourceId, limit })
+  );
+
+  ipcMain.handle("catalog:listRecycleMedia", (_event, sourceId: number, limit: number) =>
+    catalog!.request<MediaRecord[]>("listRecycleMedia", { sourceId, limit })
   );
 
   ipcMain.handle("catalog:scanSource", (_event, sourceId: number) =>
