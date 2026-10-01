@@ -3539,10 +3539,18 @@ function confirmPetCandidate(candidateId: number, rawName: unknown) {
       VALUES(?,?,'CONFIRMED',?,CURRENT_TIMESTAMP)
     `);
 
+    const clearExplicitExclusion = db.prepare(`
+      DELETE FROM pet_assignment_exclusions
+      WHERE pet_id=?
+        AND pet_detection_id=?
+    `);
+
     let detectionCount = 0;
     for (const member of members) {
+      const petDetectionId = Number(member.pet_detection_id);
+      clearExplicitExclusion.run(petId, petDetectionId);
       assign.run(
-        Number(member.pet_detection_id),
+        petDetectionId,
         petId,
         Number(member.similarity)
       );
@@ -3560,6 +3568,332 @@ function confirmPetCandidate(candidateId: number, rawName: unknown) {
     db.exec("ROLLBACK");
     throw error;
   }
+}
+
+function equivalentPetDetectionIds(
+  petDetectionId: number,
+  sourceId: number
+): number[] {
+  const pet = db.prepare(`
+    SELECT
+      pd.detection_index,
+      pd.fusion_version,
+      m.sha256
+    FROM pet_fused_detections pd
+    JOIN media_items m ON m.id=pd.media_id
+    WHERE pd.id=?
+      AND m.source_id=?
+  `).get(petDetectionId, sourceId);
+
+  if (!pet) return [];
+
+  return db.prepare(`
+    SELECT pd.id
+    FROM pet_fused_detections pd
+    JOIN media_items m ON m.id=pd.media_id
+    WHERE m.source_id=?
+      AND m.sha256=?
+      AND pd.input_sha256=m.sha256
+      AND pd.detection_index=?
+      AND pd.fusion_version=?
+    ORDER BY pd.id
+  `).all(
+    sourceId,
+    String(pet.sha256),
+    Number(pet.detection_index),
+    String(pet.fusion_version)
+  ).map((row) => Number(row.id));
+}
+
+function insertPetCannotLinks(
+  leftPetIds: number[],
+  rightPetIds: number[],
+  reason: string
+): number {
+  const insert = db.prepare(`
+    INSERT OR IGNORE INTO pet_cluster_exclusions(
+      pet_a_id,
+      pet_b_id,
+      reason
+    )
+    VALUES(?,?,?)
+  `);
+
+  let changes = 0;
+
+  for (const left of leftPetIds) {
+    for (const right of rightPetIds) {
+      if (left === right) continue;
+      const petAId = Math.min(left, right);
+      const petBId = Math.max(left, right);
+      changes += Number(insert.run(petAId, petBId, reason).changes);
+    }
+  }
+
+  return changes;
+}
+
+function removePetFromCandidate(
+  candidateId: number,
+  petDetectionId: number
+) {
+  const candidate = db.prepare(`
+    SELECT source_id
+    FROM pet_candidates
+    WHERE id=?
+  `).get(candidateId);
+
+  if (!candidate) throw new Error("Der Haustiervorschlag wurde nicht gefunden.");
+
+  const sourceId = Number(candidate.source_id);
+
+  const membership = db.prepare(`
+    SELECT 1
+    FROM pet_candidate_items
+    WHERE candidate_id=?
+      AND pet_detection_id=?
+  `).get(candidateId, petDetectionId);
+
+  if (!membership) {
+    throw new Error("Diese Hundefundstelle gehört nicht mehr zu diesem Vorschlag.");
+  }
+
+  const equivalentIds = equivalentPetDetectionIds(petDetectionId, sourceId);
+  const equivalentSet = new Set(equivalentIds);
+
+  const members = db.prepare(`
+    SELECT pet_detection_id
+    FROM pet_candidate_items
+    WHERE candidate_id=?
+  `).all(candidateId).map((row) => Number(row.pet_detection_id));
+
+  const removedIds = members.filter((id) => equivalentSet.has(id));
+  const remainingIds = members.filter((id) => !equivalentSet.has(id));
+
+  if (removedIds.length === 0) {
+    throw new Error("Die Hundefundstelle konnte im Vorschlag nicht mehr gefunden werden.");
+  }
+
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    insertPetCannotLinks(removedIds, remainingIds, "USER_SPLIT");
+
+    const remove = db.prepare(`
+      DELETE FROM pet_candidate_items
+      WHERE candidate_id=?
+        AND pet_detection_id=?
+    `);
+
+    for (const id of removedIds) remove.run(candidateId, id);
+
+    if (remainingIds.length < 2) {
+      db.prepare("DELETE FROM pet_candidates WHERE id=?").run(candidateId);
+    } else {
+      const representative = db.prepare(`
+        SELECT 1
+        FROM pet_candidate_items
+        WHERE candidate_id=?
+          AND pet_detection_id=(
+            SELECT representative_pet_id
+            FROM pet_candidates
+            WHERE id=?
+          )
+      `).get(candidateId, candidateId);
+
+      if (!representative) {
+        db.prepare(`
+          UPDATE pet_candidates
+          SET representative_pet_id=?
+          WHERE id=?
+        `).run(remainingIds[0], candidateId);
+      }
+    }
+
+    db.prepare("DELETE FROM pet_cluster_runs WHERE source_id=?").run(sourceId);
+
+    db.exec("COMMIT");
+    return { changed: true, affectedPets: removedIds.length };
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+}
+
+function removePetFromPet(petId: number, petDetectionId: number) {
+  const assignment = db.prepare(`
+    SELECT m.source_id
+    FROM pet_assignments pa
+    JOIN pet_fused_detections pd ON pd.id=pa.pet_detection_id
+    JOIN media_items m ON m.id=pd.media_id
+    WHERE pa.pet_id=?
+      AND pa.pet_detection_id=?
+  `).get(petId, petDetectionId);
+
+  if (!assignment) {
+    throw new Error("Diese Hundefundstelle ist dem Haustier nicht mehr zugeordnet.");
+  }
+
+  const sourceId = Number(assignment.source_id);
+  const equivalentIds = equivalentPetDetectionIds(petDetectionId, sourceId);
+  const equivalentSet = new Set(equivalentIds);
+
+  const assignedIds = db.prepare(`
+    SELECT pa.pet_detection_id
+    FROM pet_assignments pa
+    JOIN pet_fused_detections pd ON pd.id=pa.pet_detection_id
+    JOIN media_items m ON m.id=pd.media_id
+    WHERE pa.pet_id=?
+      AND m.source_id=?
+  `).all(petId, sourceId).map((row) => Number(row.pet_detection_id));
+
+  const removedIds = assignedIds.filter((id) => equivalentSet.has(id));
+  const remainingIds = assignedIds.filter((id) => !equivalentSet.has(id));
+
+  if (removedIds.length === 0) {
+    throw new Error("Die korrigierbare Haustierzuordnung wurde nicht gefunden.");
+  }
+
+  const insertExclusion = db.prepare(`
+    INSERT OR IGNORE INTO pet_assignment_exclusions(
+      pet_id,
+      pet_detection_id,
+      reason
+    )
+    VALUES(?,?,'USER_REMOVED')
+  `);
+
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    insertPetCannotLinks(
+      removedIds,
+      remainingIds,
+      "USER_REMOVED_FROM_PET"
+    );
+
+    for (const id of removedIds) {
+      insertExclusion.run(petId, id);
+      db.prepare(`
+        DELETE FROM pet_assignments
+        WHERE pet_id=?
+          AND pet_detection_id=?
+      `).run(petId, id);
+    }
+
+    db.prepare(`
+      UPDATE pets
+      SET updated_at=CURRENT_TIMESTAMP
+      WHERE id=?
+    `).run(petId);
+
+    db.prepare("DELETE FROM pet_cluster_runs WHERE source_id=?").run(sourceId);
+
+    db.exec("COMMIT");
+    return { changed: true, affectedPets: removedIds.length };
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+}
+
+function renamePet(petId: number, rawName: unknown) {
+  const name = typeof rawName === "string" ? rawName.trim() : "";
+  if (!name) throw new Error("Bitte einen Namen für das Haustier eingeben.");
+  if (name.length > 120) throw new Error("Der Haustiername ist zu lang.");
+
+  const pet = db.prepare("SELECT id FROM pets WHERE id=?").get(petId);
+  if (!pet) throw new Error("Das Haustier wurde nicht gefunden.");
+
+  db.prepare(`
+    UPDATE pets
+    SET name=?, updated_at=CURRENT_TIMESTAMP
+    WHERE id=?
+  `).run(name, petId);
+
+  return { changed: true, affectedPets: 0 };
+}
+
+function mergePets(targetPetId: number, sourcePetId: number) {
+  if (targetPetId === sourcePetId) {
+    throw new Error("Ein Haustier kann nicht mit sich selbst zusammengeführt werden.");
+  }
+
+  const target = db.prepare(
+    "SELECT id, name, pet_class FROM pets WHERE id=?"
+  ).get(targetPetId);
+  const source = db.prepare(
+    "SELECT id, name, pet_class FROM pets WHERE id=?"
+  ).get(sourcePetId);
+
+  if (!target || !source) {
+    throw new Error("Eines der beiden Haustiere wurde nicht gefunden.");
+  }
+
+  if (String(target.pet_class) !== String(source.pet_class)) {
+    throw new Error("Nur Haustiere derselben Art können zusammengeführt werden.");
+  }
+
+  const sourceDetections = db.prepare(`
+    SELECT pet_detection_id
+    FROM pet_assignments
+    WHERE pet_id=?
+  `).all(sourcePetId).map((row) => Number(row.pet_detection_id));
+
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    db.prepare(`
+      INSERT OR IGNORE INTO pet_assignment_exclusions(
+        pet_id,
+        pet_detection_id,
+        reason
+      )
+      SELECT ?, pet_detection_id, reason
+      FROM pet_assignment_exclusions
+      WHERE pet_id=?
+    `).run(targetPetId, sourcePetId);
+
+    const clearContradictingExclusion = db.prepare(`
+      DELETE FROM pet_assignment_exclusions
+      WHERE pet_id=?
+        AND pet_detection_id=?
+    `);
+
+    for (const id of sourceDetections) {
+      clearContradictingExclusion.run(targetPetId, id);
+    }
+
+    db.prepare(`
+      UPDATE pet_assignments
+      SET
+        pet_id=?,
+        assignment_source='CONFIRMED',
+        updated_at=CURRENT_TIMESTAMP
+      WHERE pet_id=?
+    `).run(targetPetId, sourcePetId);
+
+    db.prepare("DELETE FROM pets WHERE id=?").run(sourcePetId);
+    db.prepare(`
+      UPDATE pets
+      SET updated_at=CURRENT_TIMESTAMP
+      WHERE id=?
+    `).run(targetPetId);
+
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+
+  const count = db.prepare(`
+    SELECT COUNT(*) AS count
+    FROM pet_assignments
+    WHERE pet_id=?
+  `).get(targetPetId);
+
+  return {
+    petId: targetPetId,
+    name: String(target.name),
+    detectionCount: Number(count?.count ?? 0)
+  };
 }
 
 function getPetCropInfo(petDetectionId: number) {
