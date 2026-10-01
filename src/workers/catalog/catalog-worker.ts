@@ -637,6 +637,20 @@ function listMedia(sourceId: number, requestedLimit: number) {
           AND pd.input_sha256=m.sha256
           AND pd.pet_class='cat'
       ) AS cat_count,
+      (
+        SELECT COUNT(*)
+        FROM pet_fused_detections pd
+        WHERE pd.media_id=m.id
+          AND pd.input_sha256=m.sha256
+          AND pd.agreement_count>=2
+      ) AS pet_multi_model_count,
+      (
+        SELECT COUNT(*)
+        FROM pet_fused_detections pd
+        WHERE pd.media_id=m.id
+          AND pd.input_sha256=m.sha256
+          AND pd.agreement_count=1
+      ) AS pet_single_model_count,
       CASE
         WHEN m.availability='AVAILABLE' THEN (
           SELECT COUNT(*) - 1
@@ -682,6 +696,8 @@ function listMedia(sourceId: number, requestedLimit: number) {
     petCount: Number(row.pet_count ?? 0),
     dogCount: Number(row.dog_count ?? 0),
     catCount: Number(row.cat_count ?? 0),
+    petMultiModelCount: Number(row.pet_multi_model_count ?? 0),
+    petSingleModelCount: Number(row.pet_single_model_count ?? 0),
     lastSeenAt: String(row.last_seen_at)
   }));
 }
@@ -733,7 +749,21 @@ function listRecycleMedia(sourceId: number, requestedLimit: number) {
         WHERE pd.media_id=m.id
           AND pd.input_sha256=m.sha256
           AND pd.pet_class='cat'
-      ) AS cat_count
+      ) AS cat_count,
+      (
+        SELECT COUNT(*)
+        FROM pet_fused_detections pd
+        WHERE pd.media_id=m.id
+          AND pd.input_sha256=m.sha256
+          AND pd.agreement_count>=2
+      ) AS pet_multi_model_count,
+      (
+        SELECT COUNT(*)
+        FROM pet_fused_detections pd
+        WHERE pd.media_id=m.id
+          AND pd.input_sha256=m.sha256
+          AND pd.agreement_count=1
+      ) AS pet_single_model_count
     FROM media_items m
     LEFT JOIN media_thumbnails t ON t.media_id=m.id
     LEFT JOIN media_image_metadata md ON md.media_id=m.id
@@ -763,6 +793,8 @@ function listRecycleMedia(sourceId: number, requestedLimit: number) {
     petCount: Number(row.pet_count ?? 0),
     dogCount: Number(row.dog_count ?? 0),
     catCount: Number(row.cat_count ?? 0),
+    petMultiModelCount: Number(row.pet_multi_model_count ?? 0),
+    petSingleModelCount: Number(row.pet_single_model_count ?? 0),
     lastSeenAt: String(row.last_seen_at)
   }));
 }
