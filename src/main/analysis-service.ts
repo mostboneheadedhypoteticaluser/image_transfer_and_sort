@@ -97,6 +97,16 @@ export class AnalysisService {
       ? path.join(projectRoot, ".ai-venv", "Scripts", "python.exe")
       : path.join(projectRoot, ".ai-venv", "bin", "python");
 
+    if (existsSync(venvPython)) {
+      return [
+        {
+          command: venvPython,
+          args: ["-u", this.workerPath],
+          label: "Projekt-AI-Python (.ai-venv)"
+        }
+      ];
+    }
+
     if (process.platform === "win32") {
       const installed = installedWindowsPythonExecutables().map((command) => ({
         command,
@@ -105,9 +115,6 @@ export class AnalysisService {
       }));
 
       return [
-        ...(existsSync(venvPython)
-          ? [{ command: venvPython, args: ["-u", this.workerPath], label: "Projekt-AI-Python (.ai-venv)" }]
-          : []),
         ...installed,
         { command: "py", args: ["-3.12", "-u", this.workerPath], label: "Python 3.12 (py)" },
         { command: "py", args: ["-3", "-u", this.workerPath], label: "Python 3 (py)" },
@@ -117,9 +124,6 @@ export class AnalysisService {
     }
 
     return [
-      ...(existsSync(venvPython)
-        ? [{ command: venvPython, args: ["-u", this.workerPath], label: "Projekt-AI-Python (.ai-venv)" }]
-        : []),
       { command: "python3", args: ["-u", this.workerPath], label: "Python 3" },
       { command: "python", args: ["-u", this.workerPath], label: "Python" }
     ];
@@ -150,27 +154,25 @@ export class AnalysisService {
             ? ping.capabilities as Record<string, unknown>
             : {};
 
-        if (candidate.label.includes(".ai-venv")) {
-          if (capabilities.pillow !== true) {
-            throw new Error(
-              "Projekt-AI-Python wurde gefunden, aber Pillow ist nicht verfügbar. " +
-              "Bitte 'npm.cmd run setup:ai' ausführen."
-            );
-          }
+        if (capabilities.pillow !== true) {
+          throw new Error(
+            "Pillow ist im Analyse-Python nicht verfügbar. " +
+            "Bitte 'npm.cmd run setup:ai' ausführen."
+          );
+        }
 
-          if (capabilities.opencv !== true) {
-            throw new Error(
-              "Projekt-AI-Python wurde gefunden, aber OpenCV ist nicht verfügbar. " +
-              "Bitte 'npm.cmd run setup:ai' ausführen."
-            );
-          }
+        if (capabilities.opencv !== true) {
+          throw new Error(
+            "OpenCV ist im Analyse-Python nicht verfügbar. " +
+            "Bitte 'npm.cmd run setup:ai' ausführen."
+          );
+        }
 
-          if (capabilities.yunetModel !== true) {
-            throw new Error(
-              "Projekt-AI-Python wurde gefunden, aber das YuNet-Modell fehlt. " +
-              "Bitte 'npm.cmd run setup:ai' ausführen."
-            );
-          }
+        if (capabilities.yunetModel !== true) {
+          throw new Error(
+            "Das YuNet-Modell für die Gesichtsdetektion fehlt. " +
+            "Bitte 'npm.cmd run setup:ai' ausführen."
+          );
         }
 
         const configured = await this.request<Record<string, unknown>>(
