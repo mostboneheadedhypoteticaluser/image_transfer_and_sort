@@ -139,7 +139,40 @@ export class AnalysisService {
     for (const candidate of this.candidates()) {
       try {
         await this.launch(candidate);
-        await this.request("ping", {}, 2500);
+        const ping = await this.request<Record<string, unknown>>(
+          "ping",
+          {},
+          20000
+        );
+
+        const capabilities =
+          ping.capabilities && typeof ping.capabilities === "object"
+            ? ping.capabilities as Record<string, unknown>
+            : {};
+
+        if (candidate.label.includes(".ai-venv")) {
+          if (capabilities.pillow !== true) {
+            throw new Error(
+              "Projekt-AI-Python wurde gefunden, aber Pillow ist nicht verfügbar. " +
+              "Bitte 'npm.cmd run setup:ai' ausführen."
+            );
+          }
+
+          if (capabilities.opencv !== true) {
+            throw new Error(
+              "Projekt-AI-Python wurde gefunden, aber OpenCV ist nicht verfügbar. " +
+              "Bitte 'npm.cmd run setup:ai' ausführen."
+            );
+          }
+
+          if (capabilities.yunetModel !== true) {
+            throw new Error(
+              "Projekt-AI-Python wurde gefunden, aber das YuNet-Modell fehlt. " +
+              "Bitte 'npm.cmd run setup:ai' ausführen."
+            );
+          }
+        }
+
         const configured = await this.request<Record<string, unknown>>(
           "configure",
           {
@@ -147,7 +180,7 @@ export class AnalysisService {
             cpuBudgetPercent: 50,
             profile: "background"
           },
-          2500
+          5000
         );
 
         this.applyWorkerResult(configured);
@@ -245,19 +278,28 @@ export class AnalysisService {
       this.publish({ message: `Analyse-Worker: ${message}` });
     });
 
-    child.on("exit", (code) => {
+    child.on("exit", (code, signal) => {
       lines.close();
 
+      const wasCurrentChild = this.child === child;
       const error = new Error(
-        `Analyse-Worker wurde beendet (Code ${code ?? "unbekannt"}).`
+        signal
+          ? `Analyse-Worker wurde beendet (Signal ${signal}).`
+          : `Analyse-Worker wurde beendet (Code ${code ?? "unbekannt"}).`
       );
-      for (const pending of this.pending.values()) {
-        clearTimeout(pending.timeout);
-        pending.reject(error);
-      }
-      this.pending.clear();
 
-      if (this.child === child) this.child = null;
+      if (wasCurrentChild) {
+        for (const pending of this.pending.values()) {
+          clearTimeout(pending.timeout);
+          pending.reject(error);
+        }
+        this.pending.clear();
+        this.child = null;
+      }
+
+      // Ein verworfener Startkandidat darf den Status eines später
+      // erfolgreich gestarteten Workers nicht mehr überschreiben.
+      if (!wasCurrentChild) return;
 
       if (this.stopping) {
         this.publish({
@@ -362,8 +404,15 @@ export class AnalysisService {
 
   private killChild(): void {
     const child = this.child;
-    this.child = null;
     if (!child) return;
+
+    this.child = null;
+
+    for (const pending of this.pending.values()) {
+      clearTimeout(pending.timeout);
+      pending.reject(new Error("Analyse-Worker-Startversuch wurde verworfen."));
+    }
+    this.pending.clear();
 
     try {
       child.kill();
