@@ -7,17 +7,21 @@ import { AnalysisCoordinator } from "./analysis-coordinator";
 import { ThumbnailService } from "./thumbnail-service";
 import { ThumbnailCoordinator } from "./thumbnail-coordinator";
 import { PersonService } from "./person-service";
+import { PetService } from "./pet-service";
 import type {
   AnalysisQueueStats,
   AnalysisWorkerStatus,
   CatalogStats,
   ConfirmPersonResult,
+  ConfirmPetResult,
   DuplicateGroup,
   FaceCropInfo,
   MediaRecord,
   MergePersonsResult,
   PersonCorrectionResult,
   PersonOverview,
+  PetCropInfo,
+  PetOverview,
   RestoreResult,
   ResetCatalogResult,
   ScanResult,
@@ -33,6 +37,7 @@ let analysisCoordinator: AnalysisCoordinator | null = null;
 let thumbnailService: ThumbnailService | null = null;
 let thumbnailCoordinator: ThumbnailCoordinator | null = null;
 let personService: PersonService | null = null;
+let petService: PetService | null = null;
 let thumbnailCacheRoot = "";
 let personRefreshTimer: NodeJS.Timeout | null = null;
 let personRefreshRunning = false;
@@ -52,7 +57,8 @@ let pipelineStatus: PipelineStatus = {
   faces: { ...EMPTY_QUEUE },
   faceEmbeddings: { ...EMPTY_QUEUE },
   petDetection: { ...EMPTY_QUEUE },
-  petFusion: { ...EMPTY_QUEUE }
+  petFusion: { ...EMPTY_QUEUE },
+  petEmbeddings: { ...EMPTY_QUEUE }
 };
 
 protocol.registerSchemesAsPrivileged([
@@ -66,6 +72,14 @@ protocol.registerSchemesAsPrivileged([
   },
   {
     scheme: "image-sorter-face",
+    privileges: {
+      standard: true,
+      secure: true,
+      supportFetchAPI: true
+    }
+  },
+  {
+    scheme: "image-sorter-pet",
     privileges: {
       standard: true,
       secure: true,
@@ -95,14 +109,15 @@ function pythonAnalysisIdle(): boolean {
     pipelineStatus.faces,
     pipelineStatus.faceEmbeddings,
     pipelineStatus.petDetection,
-    pipelineStatus.petFusion
+    pipelineStatus.petFusion,
+    pipelineStatus.petEmbeddings
   ].every((stats) => stats.pending === 0 && stats.running === 0);
 }
 
 function schedulePersonRefresh(): void {
   if (
     isQuitting ||
-    !personService ||
+    (!personService && !petService) ||
     personRefreshRunning ||
     !pythonAnalysisIdle()
   ) {
@@ -113,13 +128,16 @@ function schedulePersonRefresh(): void {
 
   personRefreshTimer = setTimeout(() => {
     personRefreshTimer = null;
-    if (!personService || isQuitting || personRefreshRunning) return;
+    if ((!personService && !petService) || isQuitting || personRefreshRunning) return;
 
     personRefreshRunning = true;
-    void personService
-      .refreshAllSources()
+    void Promise.all([
+      personService?.refreshAllSources() ?? Promise.resolve(),
+      petService?.refreshAllSources() ?? Promise.resolve()
+    ])
       .then(() => {
         sendToRenderer("people:updated", {});
+        sendToRenderer("pets:updated", {});
       })
       .catch(() => {
         // Kandidaten sind Komfortdaten; Analyse- und Medienansicht bleiben unabhängig.
@@ -148,7 +166,8 @@ function updatePipelineStage(
     stage === "faces" ||
     stage === "faceEmbeddings" ||
     stage === "petDetection" ||
-    stage === "petFusion"
+    stage === "petFusion" ||
+    stage === "petEmbeddings"
   ) {
     schedulePersonRefresh();
   }
@@ -245,7 +264,8 @@ function registerIpc(): void {
     faces: { ...pipelineStatus.faces },
     faceEmbeddings: { ...pipelineStatus.faceEmbeddings },
     petDetection: { ...pipelineStatus.petDetection },
-    petFusion: { ...pipelineStatus.petFusion }
+    petFusion: { ...pipelineStatus.petFusion },
+    petEmbeddings: { ...pipelineStatus.petEmbeddings }
   }));
 
   ipcMain.handle(
@@ -303,6 +323,22 @@ function registerIpc(): void {
     ): Promise<PersonCorrectionResult> =>
       personService!.renamePerson(personId, name)
   );
+
+  ipcMain.handle(
+    "pets:getOverview",
+    (_event, sourceId: number, forceRefresh = false): Promise<PetOverview> =>
+      petService!.getOverview(sourceId, Boolean(forceRefresh))
+  );
+
+  ipcMain.handle(
+    "pets:confirmCandidate",
+    (
+      _event,
+      candidateId: number,
+      name: string
+    ): Promise<ConfirmPetResult> =>
+      petService!.confirmCandidate(candidateId, name)
+  );
 }
 
 app.whenReady().then(() => {
@@ -349,6 +385,7 @@ app.whenReady().then(() => {
   );
 
   personService = new PersonService(catalog, analysis);
+  petService = new PetService(catalog, analysis);
 
   catalog.start();
   thumbnailService.start();
@@ -437,6 +474,58 @@ app.whenReady().then(() => {
       });
     } catch {
       return new Response("Gesichtsausschnitt konnte nicht geladen werden.", {
+        status: 404
+      });
+    }
+  });
+
+  protocol.handle("image-sorter-pet", async (request) => {
+    try {
+      const url = new URL(request.url);
+      if (url.hostname !== "pet") {
+        return new Response("Ungültige Haustieradresse.", { status: 400 });
+      }
+
+      const petDetectionId = Number(url.pathname.replace(/^\//, ""));
+      if (!Number.isFinite(petDetectionId)) {
+        return new Response("Ungültige Haustier-ID.", { status: 400 });
+      }
+
+      const info = await catalog!.request<PetCropInfo | null>(
+        "getPetCropInfo",
+        { petDetectionId }
+      );
+
+      if (!info) {
+        return new Response("Haustierausschnitt nicht gefunden.", { status: 404 });
+      }
+
+      const crop = await thumbnailService!.generatePetCrop(
+        info.absolutePath,
+        info.inputSha256,
+        info.petDetectionId,
+        {
+          x: info.x,
+          y: info.y,
+          width: info.width,
+          height: info.height
+        }
+      );
+
+      if (!isInsideDirectory(crop.path, thumbnailCacheRoot)) {
+        return new Response("Haustierausschnitt-Pfad abgelehnt.", { status: 403 });
+      }
+
+      const bytes = await readFile(crop.path);
+      return new Response(bytes, {
+        status: 200,
+        headers: {
+          "Content-Type": "image/jpeg",
+          "Cache-Control": "public, max-age=31536000, immutable"
+        }
+      });
+    } catch {
+      return new Response("Haustierausschnitt konnte nicht geladen werden.", {
         status: 404
       });
     }
