@@ -17,6 +17,11 @@ export type AnalysisQueueStats = {
   failed: number;
 };
 
+export type PipelineStatus = {
+  technical: AnalysisQueueStats;
+  thumbnails: AnalysisQueueStats;
+};
+
 export type AnalysisJob = {
   id: number;
   mediaId: number;
