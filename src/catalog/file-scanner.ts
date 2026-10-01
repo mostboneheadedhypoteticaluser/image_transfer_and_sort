@@ -2,7 +2,17 @@ import { opendir, stat } from "node:fs/promises";
 import path from "node:path";
 import { IGNORED_DIRECTORY_NAMES, MEDIA_EXTENSIONS } from "./constants";
 
-export type DiscoveredFile = {
+export type FileSystemIdentity = {
+  deviceId: string;
+  inode: string;
+};
+
+export type DiscoveredDirectory = FileSystemIdentity & {
+  absolutePath: string;
+  relativePath: string;
+};
+
+export type DiscoveredFile = FileSystemIdentity & {
   absolutePath: string;
   relativePath: string;
   extension: string;
@@ -15,9 +25,21 @@ export type ScanReadError = {
   message: string;
 };
 
+export type WalkMediaOptions = {
+  onError?: (error: ScanReadError) => void;
+  onDirectory?: (directory: DiscoveredDirectory) => void | Promise<void>;
+};
+
+function identityFromStat(info: { dev: bigint; ino: bigint }): FileSystemIdentity {
+  return {
+    deviceId: info.dev.toString(),
+    inode: info.ino.toString()
+  };
+}
+
 export async function* walkMedia(
   root: string,
-  onError?: (error: ScanReadError) => void
+  options: WalkMediaOptions = {}
 ): AsyncGenerator<DiscoveredFile> {
   const stack = [root];
 
@@ -27,8 +49,22 @@ export async function* walkMedia(
 
     try {
       directory = await opendir(current);
+
+      try {
+        const directoryInfo = await stat(current, { bigint: true });
+        await options.onDirectory?.({
+          absolutePath: current,
+          relativePath: path.relative(root, current).split(path.sep).join("/"),
+          ...identityFromStat(directoryInfo)
+        });
+      } catch (error) {
+        options.onError?.({
+          path: current,
+          message: error instanceof Error ? error.message : String(error)
+        });
+      }
     } catch (error) {
-      onError?.({
+      options.onError?.({
         path: current,
         message: error instanceof Error ? error.message : String(error)
       });
@@ -56,16 +92,17 @@ export async function* walkMedia(
       }
 
       try {
-        const info = await stat(absolutePath);
+        const info = await stat(absolutePath, { bigint: true });
         yield {
           absolutePath,
           relativePath: path.relative(root, absolutePath).split(path.sep).join("/"),
           extension,
-          sizeBytes: info.size,
-          mtimeMs: Math.trunc(info.mtimeMs)
+          sizeBytes: Number(info.size),
+          mtimeMs: Number(info.mtimeMs),
+          ...identityFromStat(info)
         };
       } catch (error) {
-        onError?.({
+        options.onError?.({
           path: absolutePath,
           message: error instanceof Error ? error.message : String(error)
         });
