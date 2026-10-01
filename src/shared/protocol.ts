@@ -38,6 +38,10 @@ export type RestoreResult = {
   path: string;
 };
 
+export type ResetCatalogResult = {
+  reset: true;
+};
+
 export type ScanProgress = {
   sourceId: number;
   discovered: number;
@@ -50,7 +54,8 @@ export type CatalogMethod =
   | "getStats"
   | "listMedia"
   | "scanSource"
-  | "restoreMedia";
+  | "restoreMedia"
+  | "resetCatalog";
 
 export type WorkerRequest = {
   kind: "request";
