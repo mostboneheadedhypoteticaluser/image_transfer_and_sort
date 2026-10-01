@@ -15,6 +15,8 @@ import type {
   DuplicateGroup,
   FaceCropInfo,
   MediaRecord,
+  MergePersonsResult,
+  PersonCorrectionResult,
   PersonOverview,
   RestoreResult,
   ResetCatalogResult,
@@ -252,6 +254,46 @@ function registerIpc(): void {
       name: string
     ): Promise<ConfirmPersonResult> =>
       personService!.confirmCandidate(candidateId, name)
+  );
+
+  ipcMain.handle(
+    "people:removeCandidateFace",
+    (
+      _event,
+      candidateId: number,
+      faceDetectionId: number
+    ): Promise<PersonCorrectionResult> =>
+      personService!.removeCandidateFace(candidateId, faceDetectionId)
+  );
+
+  ipcMain.handle(
+    "people:removePersonFace",
+    (
+      _event,
+      personId: number,
+      faceDetectionId: number
+    ): Promise<PersonCorrectionResult> =>
+      personService!.removePersonFace(personId, faceDetectionId)
+  );
+
+  ipcMain.handle(
+    "people:mergePersons",
+    (
+      _event,
+      targetPersonId: number,
+      sourcePersonId: number
+    ): Promise<MergePersonsResult> =>
+      personService!.mergePersons(targetPersonId, sourcePersonId)
+  );
+
+  ipcMain.handle(
+    "people:renamePerson",
+    (
+      _event,
+      personId: number,
+      name: string
+    ): Promise<PersonCorrectionResult> =>
+      personService!.renamePerson(personId, name)
   );
 }
 
