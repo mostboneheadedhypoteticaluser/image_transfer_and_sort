@@ -4,11 +4,12 @@ import type {
   DuplicateGroup,
   MediaRecord,
   PersonOverview,
+  PetOverview,
   PipelineStatus,
   SourceRecord
 } from "../shared/protocol";
 
-type CatalogView = "media" | "duplicates" | "people" | "recycle";
+type CatalogView = "media" | "duplicates" | "people" | "pets" | "recycle";
 
 const sourceSelect = document.querySelector<HTMLSelectElement>("#sourceSelect")!;
 const addSourceButton = document.querySelector<HTMLButtonElement>("#addSource")!;
@@ -20,17 +21,24 @@ const duplicateGroups = document.querySelector<HTMLDivElement>("#duplicateGroups
 const mediaView = document.querySelector<HTMLDivElement>("#mediaView")!;
 const duplicateView = document.querySelector<HTMLDivElement>("#duplicateView")!;
 const personView = document.querySelector<HTMLDivElement>("#personView")!;
+const petView = document.querySelector<HTMLDivElement>("#petView")!;
 const personCandidates = document.querySelector<HTMLDivElement>("#personCandidates")!;
+const petCandidates = document.querySelector<HTMLDivElement>("#petCandidates")!;
+const confirmedPets = document.querySelector<HTMLDivElement>("#confirmedPets")!;
+const petStatus = document.querySelector<HTMLParagraphElement>("#petStatus")!;
+const refreshPetsButton = document.querySelector<HTMLButtonElement>("#refreshPets")!;
 const confirmedPersons = document.querySelector<HTMLDivElement>("#confirmedPersons")!;
 const personStatus = document.querySelector<HTMLParagraphElement>("#personStatus")!;
 const refreshPeopleButton = document.querySelector<HTMLButtonElement>("#refreshPeople")!;
 const mediaTab = document.querySelector<HTMLButtonElement>("#mediaTab")!;
 const duplicateTab = document.querySelector<HTMLButtonElement>("#duplicateTab")!;
 const peopleTab = document.querySelector<HTMLButtonElement>("#peopleTab")!;
+const petsTab = document.querySelector<HTMLButtonElement>("#petsTab")!;
 const recycleTab = document.querySelector<HTMLButtonElement>("#recycleTab")!;
 const mediaTabCount = document.querySelector<HTMLSpanElement>("#mediaTabCount")!;
 const duplicateTabCount = document.querySelector<HTMLSpanElement>("#duplicateTabCount")!;
 const peopleTabCount = document.querySelector<HTMLSpanElement>("#peopleTabCount")!;
+const petsTabCount = document.querySelector<HTMLSpanElement>("#petsTabCount")!;
 const recycleTabCount = document.querySelector<HTMLSpanElement>("#recycleTabCount")!;
 const progressText = document.querySelector<HTMLSpanElement>("#progressText")!;
 const progressBar = document.querySelector<HTMLDivElement>("#progressBar")!;
@@ -62,6 +70,8 @@ const petStageState = document.querySelector<HTMLSpanElement>("#petStageState")!
 const petStageCounts = document.querySelector<HTMLElement>("#petStageCounts")!;
 const petFusionStageState = document.querySelector<HTMLSpanElement>("#petFusionStageState")!;
 const petFusionStageCounts = document.querySelector<HTMLElement>("#petFusionStageCounts")!;
+const petEmbeddingStageState = document.querySelector<HTMLSpanElement>("#petEmbeddingStageState")!;
+const petEmbeddingStageCounts = document.querySelector<HTMLElement>("#petEmbeddingStageCounts")!;
 
 let sources: SourceRecord[] = [];
 let currentView: CatalogView = "media";
@@ -74,6 +84,7 @@ let lastFaceDone = -1;
 let lastFaceEmbeddingDone = -1;
 let lastPetDone = -1;
 let lastPetFusionDone = -1;
+let lastPetEmbeddingDone = -1;
 let analysisRefreshTimer: number | null = null;
 
 function renderAnalysisStatus(status: AnalysisWorkerStatus): void {
@@ -146,6 +157,11 @@ function renderPipelineStatus(status: PipelineStatus): void {
   );
   renderStage(petStageState, petStageCounts, status.petDetection);
   renderStage(petFusionStageState, petFusionStageCounts, status.petFusion);
+  renderStage(
+    petEmbeddingStageState,
+    petEmbeddingStageCounts,
+    status.petEmbeddings
+  );
 
   const visualDataChanged =
     status.thumbnails.done !== lastThumbnailDone ||
@@ -153,7 +169,8 @@ function renderPipelineStatus(status: PipelineStatus): void {
     status.faces.done !== lastFaceDone ||
     status.faceEmbeddings.done !== lastFaceEmbeddingDone ||
     status.petDetection.done !== lastPetDone ||
-    status.petFusion.done !== lastPetFusionDone;
+    status.petFusion.done !== lastPetFusionDone ||
+    status.petEmbeddings.done !== lastPetEmbeddingDone;
 
   lastThumbnailDone = status.thumbnails.done;
   lastMetadataDone = status.imageMetadata.done;
@@ -161,6 +178,7 @@ function renderPipelineStatus(status: PipelineStatus): void {
   lastFaceEmbeddingDone = status.faceEmbeddings.done;
   lastPetDone = status.petDetection.done;
   lastPetFusionDone = status.petFusion.done;
+  lastPetEmbeddingDone = status.petEmbeddings.done;
 
   if (!visualDataChanged) return;
 
@@ -189,11 +207,30 @@ function faceCropUrl(faceDetectionId: number): string {
   return `image-sorter-face://face/${faceDetectionId}`;
 }
 
+function petCropUrl(petDetectionId: number): string {
+  return `image-sorter-pet://pet/${petDetectionId}`;
+}
+
 function isEditingPersonView(): boolean {
   if (currentView !== "people") return false;
 
   const active = document.activeElement;
   if (!(active instanceof HTMLElement) || !personView.contains(active)) {
+    return false;
+  }
+
+  return (
+    active instanceof HTMLInputElement ||
+    active instanceof HTMLSelectElement ||
+    active instanceof HTMLTextAreaElement
+  );
+}
+
+function isEditingPetView(): boolean {
+  if (currentView !== "pets") return false;
+
+  const active = document.activeElement;
+  if (!(active instanceof HTMLElement) || !petView.contains(active)) {
     return false;
   }
 
@@ -239,11 +276,14 @@ function setView(view: CatalogView): void {
   mediaTab.classList.toggle("active", view === "media");
   duplicateTab.classList.toggle("active", view === "duplicates");
   peopleTab.classList.toggle("active", view === "people");
+  petsTab.classList.toggle("active", view === "pets");
   recycleTab.classList.toggle("active", view === "recycle");
 
   duplicateView.hidden = view !== "duplicates";
   personView.hidden = view !== "people";
-  mediaView.hidden = view === "duplicates" || view === "people";
+  petView.hidden = view !== "pets";
+  mediaView.hidden =
+    view === "duplicates" || view === "people" || view === "pets";
 
   void runSafely(refreshCatalog);
 }
