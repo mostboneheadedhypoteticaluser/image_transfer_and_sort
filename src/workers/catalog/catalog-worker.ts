@@ -324,6 +324,26 @@ db.exec(`
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
   );
 
+  CREATE TABLE IF NOT EXISTS pet_cluster_exclusions (
+    pet_a_id INTEGER NOT NULL REFERENCES pet_fused_detections(id) ON DELETE CASCADE,
+    pet_b_id INTEGER NOT NULL REFERENCES pet_fused_detections(id) ON DELETE CASCADE,
+    reason TEXT NOT NULL DEFAULT 'USER_SPLIT',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY(pet_a_id, pet_b_id),
+    CHECK(pet_a_id < pet_b_id)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_pet_cluster_exclusion_b
+    ON pet_cluster_exclusions(pet_b_id);
+
+  CREATE TABLE IF NOT EXISTS pet_assignment_exclusions (
+    pet_id INTEGER NOT NULL REFERENCES pets(id) ON DELETE CASCADE,
+    pet_detection_id INTEGER NOT NULL REFERENCES pet_fused_detections(id) ON DELETE CASCADE,
+    reason TEXT NOT NULL DEFAULT 'USER_REMOVED',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY(pet_id, pet_detection_id)
+  );
+
   CREATE TABLE IF NOT EXISTS persons (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
@@ -4548,6 +4568,8 @@ function resetCatalog(): { reset: true } {
       DELETE FROM pet_candidate_items;
       DELETE FROM pet_candidates;
       DELETE FROM pet_cluster_runs;
+      DELETE FROM pet_cluster_exclusions;
+      DELETE FROM pet_assignment_exclusions;
       DELETE FROM pet_assignments;
       DELETE FROM pets;
       DELETE FROM pet_embeddings;
@@ -4562,7 +4584,7 @@ function resetCatalog(): { reset: true } {
       DELETE FROM scans;
       DELETE FROM media_sources;
       DELETE FROM sqlite_sequence
-      WHERE name IN ('analysis_jobs', 'person_candidate_faces', 'person_candidates', 'person_cluster_runs', 'person_face_assignments', 'persons', 'pet_candidate_items', 'pet_candidates', 'pet_cluster_runs', 'pet_assignments', 'pets', 'pet_embeddings', 'pet_fused_detections', 'pet_detections', 'face_embeddings', 'face_detections', 'media_image_metadata', 'media_thumbnails', 'media_items', 'media_directories', 'scans', 'media_sources');
+      WHERE name IN ('analysis_jobs', 'person_candidate_faces', 'person_candidates', 'person_cluster_runs', 'person_face_assignments', 'persons', 'pet_candidate_items', 'pet_candidates', 'pet_cluster_runs', 'pet_cluster_exclusions', 'pet_assignment_exclusions', 'pet_assignments', 'pets', 'pet_embeddings', 'pet_fused_detections', 'pet_detections', 'face_embeddings', 'face_detections', 'media_image_metadata', 'media_thumbnails', 'media_items', 'media_directories', 'scans', 'media_sources');
     `);
     db.exec("COMMIT");
   } catch (error) {
