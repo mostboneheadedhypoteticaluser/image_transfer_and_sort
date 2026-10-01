@@ -51,7 +51,8 @@ let pipelineStatus: PipelineStatus = {
   imageMetadata: { ...EMPTY_QUEUE },
   faces: { ...EMPTY_QUEUE },
   faceEmbeddings: { ...EMPTY_QUEUE },
-  petDetection: { ...EMPTY_QUEUE }
+  petDetection: { ...EMPTY_QUEUE },
+  petFusion: { ...EMPTY_QUEUE }
 };
 
 protocol.registerSchemesAsPrivileged([
@@ -93,7 +94,8 @@ function pythonAnalysisIdle(): boolean {
     pipelineStatus.imageMetadata,
     pipelineStatus.faces,
     pipelineStatus.faceEmbeddings,
-    pipelineStatus.petDetection
+    pipelineStatus.petDetection,
+    pipelineStatus.petFusion
   ].every((stats) => stats.pending === 0 && stats.running === 0);
 }
 
@@ -145,7 +147,8 @@ function updatePipelineStage(
     stage === "imageMetadata" ||
     stage === "faces" ||
     stage === "faceEmbeddings" ||
-    stage === "petDetection"
+    stage === "petDetection" ||
+    stage === "petFusion"
   ) {
     schedulePersonRefresh();
   }
@@ -241,7 +244,8 @@ function registerIpc(): void {
     imageMetadata: { ...pipelineStatus.imageMetadata },
     faces: { ...pipelineStatus.faces },
     faceEmbeddings: { ...pipelineStatus.faceEmbeddings },
-    petDetection: { ...pipelineStatus.petDetection }
+    petDetection: { ...pipelineStatus.petDetection },
+    petFusion: { ...pipelineStatus.petFusion }
   }));
 
   ipcMain.handle(
