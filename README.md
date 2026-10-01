@@ -1,18 +1,18 @@
 # Image Sortierer – Neustart
 
-Komplett neue Codebasis mit klar getrennten Prozessen.
+Komplett neue Codebasis mit klar getrennten Prozessen für Bilder und Videos.
 
 ## Aktueller Stand
 
 Der erste Schritt macht bewusst nur:
 
 1. lokale Medienquelle (Festplatte/Ordner) auswählen
-2. Bilder rekursiv katalogisieren
+2. Bilder und Videos rekursiv katalogisieren
 3. Änderungen erkennen
 4. Katalog lokal in SQLite speichern
 5. fehlende Bilder markieren, aber nicht löschen
 
-**Noch nicht aktiv:** Personen-, Gesichts- oder Haustiererkennung sowie Videos.
+**Noch nicht aktiv:** Personen-, Gesichts- oder Haustiererkennung. Videos werden bereits katalogisiert, aber noch nicht inhaltlich analysiert oder abgespielt.
 
 ## Architektur
 
@@ -58,12 +58,14 @@ npm run check
 
 - rekursiver Scan
 - Bildtypen: JPG/JPEG, PNG, WEBP, BMP, GIF, TIFF, HEIC/HEIF, AVIF
+- Videotypen: MP4, MOV, M4V, AVI, MKV, WEBM, MPG/MPEG, MTS/M2TS, 3GP, WMV
 - neue und tatsächlich geänderte Dateien werden per SHA-256 katalogisiert
 - unveränderte Dateien werden nicht erneut gehasht
 - verschwundene Dateien werden als `MISSING` markiert
 - wieder auftauchende Dateien werden automatisch wieder verfügbar
 - Dateifehler brechen nicht den Gesamtscan ab
 - im Renderer werden maximal 500 Einträge gleichzeitig geladen
+- Entwicklungsfunktion **„Datenbank zurücksetzen“** löscht Quellen, Katalogeinträge, Scan-Historie und Analysejobs, aber niemals Originaldateien
 
 Die Datenbank liegt im Electron-`userData`-Verzeichnis als `catalog.sqlite3`.
 
@@ -71,4 +73,4 @@ Die Datenbank liegt im Electron-`userData`-Verzeichnis als `catalog.sqlite3`.
 
 Aktueller Architektur-Neustart:
 
-`2026-10-01-electron-worker-neustart`
+`2026-10-01-videos-datenbank-reset`
