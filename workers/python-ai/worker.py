@@ -359,6 +359,7 @@ def extract_face_embeddings(file_path: str, faces: list[dict]) -> dict:
 
 def cluster_face_embeddings(
     faces: list[dict],
+    cannot_links: list[dict] | None = None,
     cluster_threshold: float = 0.50,
     verification_threshold: float = 0.363,
 ) -> dict:
@@ -407,6 +408,26 @@ def cluster_face_embeddings(
         key=lambda item: int(item["faceDetectionId"]),
     )
 
+    face_to_content: dict[int, str] = {}
+    for content_key, duplicates in duplicates_by_content.items():
+        for duplicate in duplicates:
+            face_to_content[int(duplicate["faceDetectionId"])] = content_key
+
+    blocked_content_pairs: set[tuple[str, str]] = set()
+    for raw_link in cannot_links or []:
+        if not isinstance(raw_link, dict):
+            continue
+
+        face_a_id = int(raw_link.get("faceAId", 0))
+        face_b_id = int(raw_link.get("faceBId", 0))
+        content_a = face_to_content.get(face_a_id)
+        content_b = face_to_content.get(face_b_id)
+
+        if not content_a or not content_b or content_a == content_b:
+            continue
+
+        blocked_content_pairs.add(tuple(sorted((content_a, content_b))))
+
     clusters: list[dict] = []
 
     for item in canonical:
@@ -415,6 +436,15 @@ def cluster_face_embeddings(
         best_similarity = -1.0
 
         for index, cluster in enumerate(clusters):
+            item_content = str(item["contentKey"])
+            blocked = any(
+                tuple(sorted((item_content, str(member["contentKey"]))))
+                in blocked_content_pairs
+                for member in cluster["canonicalMembers"]
+            )
+            if blocked:
+                continue
+
             centroid_similarity = float(np.dot(vector, cluster["centroid"]))
             representative_similarity = float(
                 np.dot(vector, cluster["representativeVector"])
@@ -599,6 +629,7 @@ def handle(message: dict) -> bool:
             request_id,
             result=cluster_face_embeddings(
                 faces,
+                payload.get("cannotLinks") or [],
                 float(payload.get("clusterThreshold", 0.50)),
                 float(payload.get("verificationThreshold", 0.363)),
             ),
