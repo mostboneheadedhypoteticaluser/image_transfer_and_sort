@@ -12,7 +12,7 @@ Der erste Schritt macht bewusst nur:
 4. Katalog lokal in SQLite speichern
 5. fehlende Bilder markieren, aber nicht löschen
 
-**Noch nicht aktiv:** Personen-Namenszuordnung und Haustiererkennung. Technische Prüfung, Bild-Thumbnails, EXIF-Metadaten und reine Gesichtsdetektion mit YuNet sind bereits als getrennte Pipeline-Stufen aktiv. Videos werden katalogisiert und technisch geprüft; Video-Thumbnails folgen später.
+**Noch nicht aktiv:** Personen-Namenszuordnung und Haustiererkennung. Technische Prüfung, Bild-Thumbnails, EXIF-Metadaten, YuNet-Gesichtsdetektion und SFace-Gesichtsmerkmale sind bereits als getrennte Pipeline-Stufen aktiv. Videos werden katalogisiert und technisch geprüft; Video-Thumbnails folgen später.
 
 ## Architektur
 
@@ -40,7 +40,7 @@ npm run setup:ai
 npm start
 ```
 
-`setup:ai` erzeugt einmalig die lokale `.ai-venv`, installiert Pillow/OpenCV und lädt das geprüfte YuNet-Modell für die Gesichtsdetektion.
+`setup:ai` erzeugt die lokale `.ai-venv`, installiert Pillow/OpenCV und lädt die geprüften OpenCV-Modelle YuNet (Detektion) und SFace (Gesichtsmerkmale). Das Skript kann bei neuen Modellen erneut ausgeführt werden.
 
 Danach genügt für normale Starts ebenfalls:
 
