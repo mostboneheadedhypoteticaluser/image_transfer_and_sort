@@ -2,6 +2,7 @@ import type {
   CatalogStats,
   MediaRecord,
   RestoreResult,
+  ResetCatalogResult,
   ScanProgress,
   ScanResult,
   SourceRecord
@@ -18,6 +19,7 @@ declare global {
         listMedia(sourceId: number, limit?: number): Promise<MediaRecord[]>;
         scanSource(sourceId: number): Promise<ScanResult>;
         restoreMedia(mediaId: number): Promise<RestoreResult>;
+        resetCatalog(): Promise<ResetCatalogResult>;
         onProgress(listener: (progress: ScanProgress) => void): () => void;
       };
     };
