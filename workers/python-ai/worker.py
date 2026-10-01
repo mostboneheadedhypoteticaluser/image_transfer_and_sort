@@ -16,8 +16,10 @@ except Exception:
 
 try:
     import cv2
+    import numpy as np
 except Exception:
     cv2 = None
+    np = None
 
 
 WORKER_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -25,6 +27,11 @@ YUNET_MODEL = os.path.join(
     WORKER_DIR,
     "models",
     "face_detection_yunet_2023mar.onnx",
+)
+SFACE_MODEL = os.path.join(
+    WORKER_DIR,
+    "models",
+    "face_recognition_sface_2021dec.onnx",
 )
 
 
@@ -55,8 +62,14 @@ def snapshot() -> dict:
             "pillow": Image is not None,
             "opencv": cv2 is not None,
             "yunetModel": os.path.isfile(YUNET_MODEL),
+            "sfaceModel": os.path.isfile(SFACE_MODEL),
             "imageMetadata": Image is not None,
             "faceDetection": cv2 is not None and os.path.isfile(YUNET_MODEL),
+            "faceEmbeddings": (
+                cv2 is not None
+                and np is not None
+                and os.path.isfile(SFACE_MODEL)
+            ),
         },
     }
 
@@ -271,6 +284,81 @@ def detect_faces(file_path: str) -> dict:
     }
 
 
+def extract_face_embeddings(file_path: str, faces: list[dict]) -> dict:
+    if cv2 is None or np is None:
+        raise RuntimeError(
+            "OpenCV/Numpy fehlt. Einmal 'npm.cmd run setup:ai' ausführen."
+        )
+
+    if not os.path.isfile(SFACE_MODEL):
+        raise RuntimeError(
+            "SFace-Modell fehlt. Einmal 'npm.cmd run setup:ai' ausführen."
+        )
+
+    image = cv2.imread(file_path, cv2.IMREAD_COLOR)
+    if image is None:
+        raise RuntimeError("Bild konnte von OpenCV nicht gelesen werden.")
+
+    recognizer = cv2.FaceRecognizerSF.create(SFACE_MODEL, "")
+    embeddings: list[dict] = []
+
+    for face in faces:
+        if not isinstance(face, dict):
+            continue
+
+        landmarks = face.get("landmarks") or []
+        if not isinstance(landmarks, list) or len(landmarks) != 5:
+            continue
+
+        values = [
+            float(face.get("x", 0.0)),
+            float(face.get("y", 0.0)),
+            float(face.get("width", 0.0)),
+            float(face.get("height", 0.0)),
+        ]
+
+        valid_landmarks = True
+        for landmark in landmarks:
+            if not isinstance(landmark, dict):
+                valid_landmarks = False
+                break
+            values.extend([
+                float(landmark.get("x", 0.0)),
+                float(landmark.get("y", 0.0)),
+            ])
+
+        if not valid_landmarks:
+            continue
+
+        values.append(float(face.get("score", 0.0)))
+
+        detection = np.asarray(values, dtype=np.float32)
+
+        try:
+            aligned = recognizer.alignCrop(image, detection)
+            feature = recognizer.feature(aligned)
+        except Exception:
+            continue
+
+        vector = np.asarray(feature, dtype=np.float32).reshape(-1)
+        norm = float(np.linalg.norm(vector))
+        if not math.isfinite(norm) or norm <= 0.0:
+            continue
+
+        vector = vector / norm
+
+        embeddings.append({
+            "faceDetectionId": int(face.get("id", 0)),
+            "vector": [float(value) for value in vector.tolist()],
+        })
+
+    return {
+        "module": "face-embed-sface-v1",
+        "model": "SFace 2021dec",
+        "embeddings": embeddings,
+    }
+
+
 def handle(message: dict) -> bool:
     request_id = message.get("id")
     method = message.get("method")
@@ -338,6 +426,18 @@ def handle(message: dict) -> bool:
         file_path = require_file(payload)
         verify_expected_size(file_path, payload)
         respond(request_id, result=detect_faces(file_path))
+        return True
+
+    if method == "extract_face_embeddings":
+        file_path = require_file(payload)
+        verify_expected_size(file_path, payload)
+        faces = payload.get("faces") or []
+        if not isinstance(faces, list):
+            raise RuntimeError("Gesichtsdetektionen sind ungültig.")
+        respond(
+            request_id,
+            result=extract_face_embeddings(file_path, faces),
+        )
         return True
 
     if method == "shutdown":
