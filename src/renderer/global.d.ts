@@ -2,8 +2,10 @@ import type {
   AnalysisWorkerStatus,
   PipelineStatus,
   CatalogStats,
+  ConfirmPersonResult,
   DuplicateGroup,
   MediaRecord,
+  PersonOverview,
   RestoreResult,
   ResetCatalogResult,
   ScanProgress,
@@ -20,6 +22,13 @@ declare global {
         getPipelineStatus(): Promise<PipelineStatus>;
         onStatus(listener: (status: AnalysisWorkerStatus) => void): () => void;
         onPipelineStatus(listener: (status: PipelineStatus) => void): () => void;
+      };
+      people: {
+        getOverview(sourceId: number, forceRefresh?: boolean): Promise<PersonOverview>;
+        confirmCandidate(
+          candidateId: number,
+          name: string
+        ): Promise<ConfirmPersonResult>;
       };
       catalog: {
         listSources(): Promise<SourceRecord[]>;
