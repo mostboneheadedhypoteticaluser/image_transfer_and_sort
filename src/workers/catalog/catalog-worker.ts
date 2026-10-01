@@ -356,6 +356,20 @@ function getStats(sourceId: number) {
     WHERE source_id=?
   `).get(sourceId);
 
+  const duplicateStats = db.prepare(`
+    SELECT
+      COUNT(*) AS duplicate_groups,
+      COALESCE(SUM(group_count), 0) AS duplicate_files
+    FROM (
+      SELECT COUNT(*) AS group_count
+      FROM media_items
+      WHERE source_id=?
+        AND availability='AVAILABLE'
+      GROUP BY sha256, size_bytes
+      HAVING COUNT(*) > 1
+    )
+  `).get(sourceId);
+
   const lastScan = db.prepare(`
     SELECT finished_at
     FROM scans
@@ -369,6 +383,8 @@ function getStats(sourceId: number) {
     available: Number(row?.available ?? 0),
     missing: Number(row?.missing ?? 0),
     recycleBin: Number(row?.recycle_bin ?? 0),
+    duplicateGroups: Number(duplicateStats?.duplicate_groups ?? 0),
+    duplicateFiles: Number(duplicateStats?.duplicate_files ?? 0),
     lastScan: lastScan?.finished_at ? String(lastScan.finished_at) : null
   };
 }
@@ -391,6 +407,7 @@ function listMedia(sourceId: number, requestedLimit: number) {
           SELECT COUNT(*) - 1
           FROM media_items d
           WHERE d.availability='AVAILABLE'
+            AND d.source_id=m.source_id
             AND d.sha256=m.sha256
             AND d.size_bytes=m.size_bytes
         )
@@ -422,6 +439,86 @@ function listMedia(sourceId: number, requestedLimit: number) {
     duplicateCount: Math.max(0, Number(row.duplicate_count ?? 0)),
     lastSeenAt: String(row.last_seen_at)
   }));
+}
+
+function listRecycleMedia(sourceId: number, requestedLimit: number) {
+  const limit = Math.max(1, Math.min(2000, Math.trunc(requestedLimit || 500)));
+
+  return db.prepare(`
+    SELECT
+      m.id,
+      m.relative_path,
+      m.extension,
+      m.size_bytes,
+      m.availability,
+      m.in_recycle_bin,
+      m.recycle_ambiguous,
+      m.last_seen_at
+    FROM media_items m
+    WHERE m.source_id=?
+      AND m.availability='MISSING'
+      AND (m.in_recycle_bin=1 OR m.recycle_ambiguous=1)
+    ORDER BY
+      CASE WHEN m.in_recycle_bin=1 THEN 0 ELSE 1 END,
+      m.relative_path COLLATE NOCASE
+    LIMIT ?
+  `).all(sourceId, limit).map((row) => ({
+    id: Number(row.id),
+    relativePath: String(row.relative_path),
+    extension: String(row.extension),
+    sizeBytes: Number(row.size_bytes),
+    availability: "MISSING" as const,
+    inRecycleBin: Boolean(row.in_recycle_bin),
+    recycleState: Boolean(row.in_recycle_bin)
+      ? "RESTORABLE" as const
+      : "AMBIGUOUS" as const,
+    duplicateCount: 0,
+    lastSeenAt: String(row.last_seen_at)
+  }));
+}
+
+function listDuplicateGroups(sourceId: number, requestedLimit: number) {
+  const limit = Math.max(1, Math.min(500, Math.trunc(requestedLimit || 100)));
+
+  const groups = db.prepare(`
+    SELECT sha256, size_bytes, COUNT(*) AS group_count
+    FROM media_items
+    WHERE source_id=?
+      AND availability='AVAILABLE'
+    GROUP BY sha256, size_bytes
+    HAVING COUNT(*) > 1
+    ORDER BY (COUNT(*) - 1) * size_bytes DESC, group_count DESC
+    LIMIT ?
+  `).all(sourceId, limit);
+
+  const itemQuery = db.prepare(`
+    SELECT id, relative_path, extension, size_bytes
+    FROM media_items
+    WHERE source_id=?
+      AND availability='AVAILABLE'
+      AND sha256=?
+      AND size_bytes=?
+    ORDER BY relative_path COLLATE NOCASE
+  `);
+
+  return groups.map((group) => {
+    const sha256 = String(group.sha256);
+    const sizeBytes = Number(group.size_bytes);
+    const items = itemQuery.all(sourceId, sha256, sizeBytes).map((row) => ({
+      id: Number(row.id),
+      relativePath: String(row.relative_path),
+      extension: String(row.extension),
+      sizeBytes: Number(row.size_bytes)
+    }));
+
+    return {
+      sha256,
+      sizeBytes,
+      count: items.length,
+      wastedBytes: Math.max(0, items.length - 1) * sizeBytes,
+      items
+    };
+  });
 }
 
 function identityKey(deviceId: string | null | undefined, inode: string | null | undefined): string | null {
@@ -1599,6 +1696,16 @@ async function dispatch(method: CatalogMethod, payload: Record<string, unknown> 
       return getStats(asNumber(payload.sourceId, "sourceId"));
     case "listMedia":
       return listMedia(
+        asNumber(payload.sourceId, "sourceId"),
+        payload.limit === undefined ? 500 : asNumber(payload.limit, "limit")
+      );
+    case "listDuplicateGroups":
+      return listDuplicateGroups(
+        asNumber(payload.sourceId, "sourceId"),
+        payload.limit === undefined ? 100 : asNumber(payload.limit, "limit")
+      );
+    case "listRecycleMedia":
+      return listRecycleMedia(
         asNumber(payload.sourceId, "sourceId"),
         payload.limit === undefined ? 500 : asNumber(payload.limit, "limit")
       );
