@@ -1164,12 +1164,18 @@ async function refreshCatalog(): Promise<void> {
     mediaTabCount.textContent = "0";
     duplicateTabCount.textContent = "0";
     peopleTabCount.textContent = "0";
+    petsTabCount.textContent = "0";
     recycleTabCount.textContent = "0";
     renderRows([]);
     renderDuplicateGroups([]);
     renderPersonOverview({
       candidates: [],
       persons: [],
+      clusteringPending: false
+    });
+    renderPetOverview({
+      candidates: [],
+      pets: [],
       clusteringPending: false
     });
     return;
@@ -1185,6 +1191,7 @@ async function refreshCatalog(): Promise<void> {
   mediaTabCount.textContent = stats.total.toLocaleString("de-DE");
   duplicateTabCount.textContent = stats.duplicateGroups.toLocaleString("de-DE");
   peopleTabCount.textContent = stats.personCandidates.toLocaleString("de-DE");
+  petsTabCount.textContent = stats.petCandidates.toLocaleString("de-DE");
   recycleTabCount.textContent = stats.recycleBin.toLocaleString("de-DE");
 
   if (currentView === "duplicates") {
@@ -1195,6 +1202,11 @@ async function refreshCatalog(): Promise<void> {
 
   if (currentView === "people") {
     await loadPersonOverview(sourceId);
+    return;
+  }
+
+  if (currentView === "pets") {
+    await loadPetOverview(sourceId);
     return;
   }
 
@@ -1334,10 +1346,12 @@ resetButton.addEventListener("click", () => {
       mediaTab.classList.add("active");
       duplicateTab.classList.remove("active");
       peopleTab.classList.remove("active");
+      petsTab.classList.remove("active");
       recycleTab.classList.remove("active");
       mediaView.hidden = false;
       duplicateView.hidden = true;
       personView.hidden = true;
+      petView.hidden = true;
       await loadSources();
       progressText.textContent = "Katalog zurückgesetzt. Du kannst jetzt eine Medienquelle neu hinzufügen und sauber neu scannen.";
     } finally {
@@ -1353,6 +1367,7 @@ resetButton.addEventListener("click", () => {
 mediaTab.addEventListener("click", () => setView("media"));
 duplicateTab.addEventListener("click", () => setView("duplicates"));
 peopleTab.addEventListener("click", () => setView("people"));
+petsTab.addEventListener("click", () => setView("pets"));
 recycleTab.addEventListener("click", () => setView("recycle"));
 
 refreshPeopleButton.addEventListener("click", () => {
@@ -1364,6 +1379,18 @@ refreshPeopleButton.addEventListener("click", () => {
     await loadPersonOverview(sourceId, true);
     const stats = await window.imageSorter.catalog.getStats(sourceId);
     peopleTabCount.textContent = stats.personCandidates.toLocaleString("de-DE");
+  });
+});
+
+refreshPetsButton.addEventListener("click", () => {
+  const sourceId = selectedSourceId();
+  if (sourceId === null) return;
+
+  void runSafely(async () => {
+    petStatus.textContent = "Hundegruppen werden neu berechnet …";
+    await loadPetOverview(sourceId, true);
+    const stats = await window.imageSorter.catalog.getStats(sourceId);
+    petsTabCount.textContent = stats.petCandidates.toLocaleString("de-DE");
   });
 });
 sourceSelect.addEventListener("change", () => void runSafely(refreshCatalog));
@@ -1393,6 +1420,20 @@ window.imageSorter.people.onUpdated(() => {
   });
 });
 
+window.imageSorter.pets.onUpdated(() => {
+  const sourceId = selectedSourceId();
+  if (sourceId === null) return;
+
+  void runSafely(async () => {
+    const stats = await window.imageSorter.catalog.getStats(sourceId);
+    petsTabCount.textContent = stats.petCandidates.toLocaleString("de-DE");
+
+    if (currentView === "pets" && !isEditingPetView()) {
+      await loadPetOverview(sourceId);
+    }
+  });
+});
+
 void window.imageSorter.analysis
   .getPipelineStatus()
   .then(renderPipelineStatus)
@@ -1404,7 +1445,8 @@ void window.imageSorter.analysis
       faces: { pending: 0, running: 0, done: 0, failed: 0 },
       faceEmbeddings: { pending: 0, running: 0, done: 0, failed: 0 },
       petDetection: { pending: 0, running: 0, done: 0, failed: 0 },
-      petFusion: { pending: 0, running: 0, done: 0, failed: 0 }
+      petFusion: { pending: 0, running: 0, done: 0, failed: 0 },
+      petEmbeddings: { pending: 0, running: 0, done: 0, failed: 0 }
     });
   });
 
