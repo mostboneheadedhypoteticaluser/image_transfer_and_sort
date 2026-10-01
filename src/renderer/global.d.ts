@@ -5,6 +5,8 @@ import type {
   ConfirmPersonResult,
   DuplicateGroup,
   MediaRecord,
+  MergePersonsResult,
+  PersonCorrectionResult,
   PersonOverview,
   RestoreResult,
   ResetCatalogResult,
@@ -29,6 +31,22 @@ declare global {
           candidateId: number,
           name: string
         ): Promise<ConfirmPersonResult>;
+        removeCandidateFace(
+          candidateId: number,
+          faceDetectionId: number
+        ): Promise<PersonCorrectionResult>;
+        removePersonFace(
+          personId: number,
+          faceDetectionId: number
+        ): Promise<PersonCorrectionResult>;
+        mergePersons(
+          targetPersonId: number,
+          sourcePersonId: number
+        ): Promise<MergePersonsResult>;
+        renamePerson(
+          personId: number,
+          name: string
+        ): Promise<PersonCorrectionResult>;
         onUpdated(listener: () => void): () => void;
       };
       catalog: {
