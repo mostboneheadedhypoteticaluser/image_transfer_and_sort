@@ -463,6 +463,13 @@ function listMedia(sourceId: number, requestedLimit: number) {
       m.last_seen_at,
       CASE WHEN t.media_id IS NOT NULL AND t.input_sha256=m.sha256 THEN 1 ELSE 0 END AS thumbnail_ready,
       CASE WHEN t.media_id IS NOT NULL AND t.input_sha256=m.sha256 THEN t.input_sha256 ELSE NULL END AS thumbnail_version,
+      CASE WHEN md.input_sha256=m.sha256 THEN md.captured_at ELSE NULL END AS captured_at,
+      (
+        SELECT COUNT(*)
+        FROM face_detections fd
+        WHERE fd.media_id=m.id
+          AND fd.input_sha256=m.sha256
+      ) AS face_count,
       CASE
         WHEN m.availability='AVAILABLE' THEN (
           SELECT COUNT(*) - 1
@@ -476,6 +483,7 @@ function listMedia(sourceId: number, requestedLimit: number) {
       END AS duplicate_count
     FROM media_items m
     LEFT JOIN media_thumbnails t ON t.media_id=m.id
+    LEFT JOIN media_image_metadata md ON md.media_id=m.id
     WHERE m.source_id=?
     ORDER BY
       CASE
@@ -501,6 +509,8 @@ function listMedia(sourceId: number, requestedLimit: number) {
     duplicateCount: Math.max(0, Number(row.duplicate_count ?? 0)),
     thumbnailReady: Boolean(row.thumbnail_ready),
     thumbnailVersion: row.thumbnail_version ? String(row.thumbnail_version) : null,
+    capturedAt: row.captured_at ? String(row.captured_at) : null,
+    faceCount: Number(row.face_count ?? 0),
     lastSeenAt: String(row.last_seen_at)
   }));
 }
@@ -519,9 +529,17 @@ function listRecycleMedia(sourceId: number, requestedLimit: number) {
       m.recycle_ambiguous,
       m.last_seen_at,
       CASE WHEN t.media_id IS NOT NULL AND t.input_sha256=m.sha256 THEN 1 ELSE 0 END AS thumbnail_ready,
-      CASE WHEN t.media_id IS NOT NULL AND t.input_sha256=m.sha256 THEN t.input_sha256 ELSE NULL END AS thumbnail_version
+      CASE WHEN t.media_id IS NOT NULL AND t.input_sha256=m.sha256 THEN t.input_sha256 ELSE NULL END AS thumbnail_version,
+      CASE WHEN md.input_sha256=m.sha256 THEN md.captured_at ELSE NULL END AS captured_at,
+      (
+        SELECT COUNT(*)
+        FROM face_detections fd
+        WHERE fd.media_id=m.id
+          AND fd.input_sha256=m.sha256
+      ) AS face_count
     FROM media_items m
     LEFT JOIN media_thumbnails t ON t.media_id=m.id
+    LEFT JOIN media_image_metadata md ON md.media_id=m.id
     WHERE m.source_id=?
       AND m.availability='MISSING'
       AND (m.in_recycle_bin=1 OR m.recycle_ambiguous=1)
@@ -542,6 +560,8 @@ function listRecycleMedia(sourceId: number, requestedLimit: number) {
     duplicateCount: 0,
     thumbnailReady: Boolean(row.thumbnail_ready),
     thumbnailVersion: row.thumbnail_version ? String(row.thumbnail_version) : null,
+    capturedAt: row.captured_at ? String(row.captured_at) : null,
+    faceCount: Number(row.face_count ?? 0),
     lastSeenAt: String(row.last_seen_at)
   }));
 }
