@@ -163,6 +163,42 @@ db.exec(`
 
   CREATE INDEX IF NOT EXISTS idx_thumbnail_hash
     ON media_thumbnails(input_sha256);
+
+  CREATE TABLE IF NOT EXISTS media_image_metadata (
+    media_id INTEGER PRIMARY KEY REFERENCES media_items(id) ON DELETE CASCADE,
+    input_sha256 TEXT NOT NULL,
+    width INTEGER NOT NULL,
+    height INTEGER NOT NULL,
+    format TEXT,
+    color_mode TEXT,
+    orientation INTEGER,
+    captured_at TEXT,
+    camera_make TEXT,
+    camera_model TEXT,
+    lens_model TEXT,
+    gps_latitude REAL,
+    gps_longitude REAL,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE TABLE IF NOT EXISTS face_detections (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    media_id INTEGER NOT NULL REFERENCES media_items(id) ON DELETE CASCADE,
+    detector_version TEXT NOT NULL,
+    detection_index INTEGER NOT NULL,
+    input_sha256 TEXT NOT NULL,
+    x REAL NOT NULL,
+    y REAL NOT NULL,
+    width REAL NOT NULL,
+    height REAL NOT NULL,
+    score REAL NOT NULL,
+    landmarks_json TEXT,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(media_id, detector_version, detection_index)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_face_media
+    ON face_detections(media_id);
 `);
 
 function tableHasColumn(table: string, column: string): boolean {
@@ -1148,8 +1184,13 @@ async function refreshRecycleStatus(sourceId: number): Promise<number> {
 
 function enqueueAnalysisJobs(sourceId: number, module = "file-probe-v1") {
   const imageExtensions = [...IMAGE_EXTENSIONS];
-  const thumbnailFilter =
-    module === "thumbnail-v1"
+  const imageOnlyModules = new Set([
+    "thumbnail-v1",
+    "image-metadata-v1",
+    "face-detect-yunet-v1"
+  ]);
+  const imageFilter =
+    imageOnlyModules.has(module)
       ? ` AND m.extension IN (${imageExtensions.map(() => "?").join(",")})`
       : "";
 
@@ -1186,7 +1227,7 @@ function enqueueAnalysisJobs(sourceId: number, module = "file-probe-v1") {
     FROM media_items m
     WHERE m.source_id=?
       AND m.availability='AVAILABLE'
-      ${thumbnailFilter}
+      ${imageFilter}
     ON CONFLICT(media_id, module) DO UPDATE SET
       status='PENDING',
       attempts=0,
@@ -1202,7 +1243,7 @@ function enqueueAnalysisJobs(sourceId: number, module = "file-probe-v1") {
   `);
 
   const args: (string | number)[] = [module, sourceId];
-  if (module === "thumbnail-v1") args.push(...imageExtensions);
+  if (imageOnlyModules.has(module)) args.push(...imageExtensions);
 
   const result = statement.run(...args);
 
@@ -1710,6 +1751,8 @@ async function scanSource(sourceId: number): Promise<ScanResult> {
     recycleBin = await refreshRecycleStatus(sourceId);
     enqueueAnalysisJobs(sourceId, "file-probe-v1");
     enqueueAnalysisJobs(sourceId, "thumbnail-v1");
+    enqueueAnalysisJobs(sourceId, "image-metadata-v1");
+    enqueueAnalysisJobs(sourceId, "face-detect-yunet-v1");
 
     const result: ScanResult = {
       discovered,
@@ -1794,6 +1837,203 @@ async function scanSource(sourceId: number): Promise<ScanResult> {
   } finally {
     scanRunning = false;
   }
+}
+
+function jobForModule(jobId: number, module: string) {
+  const job = db.prepare(`
+    SELECT id, media_id, input_sha256, status
+    FROM analysis_jobs
+    WHERE id=? AND module=?
+  `).get(jobId, module);
+
+  if (!job) throw new Error(`Analysejob ${module} wurde nicht gefunden.`);
+  if (String(job.status) !== "RUNNING") {
+    throw new Error(`Analysejob ${module} ist nicht im Status RUNNING.`);
+  }
+
+  return job;
+}
+
+function completeImageMetadataJob(jobId: number, result: unknown) {
+  if (!result || typeof result !== "object") {
+    throw new Error("Metadaten-Ergebnis ist ungültig.");
+  }
+
+  const value = result as Record<string, unknown>;
+  const width = Number(value.width);
+  const height = Number(value.height);
+
+  if (!Number.isFinite(width) || !Number.isFinite(height)) {
+    throw new Error("Metadaten-Ergebnis enthält keine gültigen Bildabmessungen.");
+  }
+
+  const job = jobForModule(jobId, "image-metadata-v1");
+
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    db.prepare(`
+      INSERT INTO media_image_metadata(
+        media_id,
+        input_sha256,
+        width,
+        height,
+        format,
+        color_mode,
+        orientation,
+        captured_at,
+        camera_make,
+        camera_model,
+        lens_model,
+        gps_latitude,
+        gps_longitude,
+        updated_at
+      )
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)
+      ON CONFLICT(media_id) DO UPDATE SET
+        input_sha256=excluded.input_sha256,
+        width=excluded.width,
+        height=excluded.height,
+        format=excluded.format,
+        color_mode=excluded.color_mode,
+        orientation=excluded.orientation,
+        captured_at=excluded.captured_at,
+        camera_make=excluded.camera_make,
+        camera_model=excluded.camera_model,
+        lens_model=excluded.lens_model,
+        gps_latitude=excluded.gps_latitude,
+        gps_longitude=excluded.gps_longitude,
+        updated_at=CURRENT_TIMESTAMP
+    `).run(
+      Number(job.media_id),
+      String(job.input_sha256 ?? ""),
+      Math.trunc(width),
+      Math.trunc(height),
+      typeof value.format === "string" ? value.format : null,
+      typeof value.mode === "string" ? value.mode : null,
+      Number.isFinite(Number(value.orientation)) ? Math.trunc(Number(value.orientation)) : null,
+      typeof value.capturedAt === "string" ? value.capturedAt : null,
+      typeof value.cameraMake === "string" ? value.cameraMake : null,
+      typeof value.cameraModel === "string" ? value.cameraModel : null,
+      typeof value.lensModel === "string" ? value.lensModel : null,
+      Number.isFinite(Number(value.gpsLatitude)) ? Number(value.gpsLatitude) : null,
+      Number.isFinite(Number(value.gpsLongitude)) ? Number(value.gpsLongitude) : null
+    );
+
+    db.prepare(`
+      UPDATE analysis_jobs
+      SET status='DONE', result_json=?, error_message=NULL,
+          finished_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP
+      WHERE id=?
+    `).run(JSON.stringify(result), jobId);
+
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+
+  return { completed: true };
+}
+
+function completeFaceDetectionJob(jobId: number, result: unknown) {
+  if (!result || typeof result !== "object") {
+    throw new Error("Gesichtsdetektions-Ergebnis ist ungültig.");
+  }
+
+  const value = result as Record<string, unknown>;
+  const rawFaces = Array.isArray(value.faces) ? value.faces : [];
+  const detectorVersion =
+    typeof value.detector === "string" && value.detector.trim()
+      ? value.detector.trim()
+      : "YuNet 2023mar";
+
+  const job = jobForModule(jobId, "face-detect-yunet-v1");
+
+  const upsert = db.prepare(`
+    INSERT INTO face_detections(
+      media_id,
+      detector_version,
+      detection_index,
+      input_sha256,
+      x,
+      y,
+      width,
+      height,
+      score,
+      landmarks_json,
+      updated_at
+    )
+    VALUES(?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)
+    ON CONFLICT(media_id, detector_version, detection_index) DO UPDATE SET
+      input_sha256=excluded.input_sha256,
+      x=excluded.x,
+      y=excluded.y,
+      width=excluded.width,
+      height=excluded.height,
+      score=excluded.score,
+      landmarks_json=excluded.landmarks_json,
+      updated_at=CURRENT_TIMESTAMP
+  `);
+
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    let written = 0;
+
+    for (let index = 0; index < rawFaces.length; index += 1) {
+      const face = rawFaces[index];
+      if (!face || typeof face !== "object") continue;
+
+      const item = face as Record<string, unknown>;
+      const x = Number(item.x);
+      const y = Number(item.y);
+      const width = Number(item.width);
+      const height = Number(item.height);
+      const score = Number(item.score);
+
+      if (![x, y, width, height, score].every(Number.isFinite)) continue;
+
+      upsert.run(
+        Number(job.media_id),
+        detectorVersion,
+        written,
+        String(job.input_sha256 ?? ""),
+        x,
+        y,
+        width,
+        height,
+        score,
+        JSON.stringify(Array.isArray(item.landmarks) ? item.landmarks : [])
+      );
+      written += 1;
+    }
+
+    db.prepare(`
+      DELETE FROM face_detections
+      WHERE media_id=?
+        AND detector_version=?
+        AND detection_index>=?
+    `).run(Number(job.media_id), detectorVersion, written);
+
+    db.prepare(`
+      DELETE FROM face_detections
+      WHERE media_id=?
+        AND detector_version<>?
+    `).run(Number(job.media_id), detectorVersion);
+
+    db.prepare(`
+      UPDATE analysis_jobs
+      SET status='DONE', result_json=?, error_message=NULL,
+          finished_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP
+      WHERE id=?
+    `).run(JSON.stringify({ detector: detectorVersion, faceCount: written }), jobId);
+
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+
+  return { completed: true };
 }
 
 function completeThumbnailJob(jobId: number, result: unknown) {
@@ -1986,13 +2226,15 @@ function resetCatalog(): { reset: true } {
   try {
     db.exec(`
       DELETE FROM analysis_jobs;
+      DELETE FROM face_detections;
+      DELETE FROM media_image_metadata;
       DELETE FROM media_thumbnails;
       DELETE FROM media_items;
       DELETE FROM media_directories;
       DELETE FROM scans;
       DELETE FROM media_sources;
       DELETE FROM sqlite_sequence
-      WHERE name IN ('analysis_jobs', 'media_thumbnails', 'media_items', 'media_directories', 'scans', 'media_sources');
+      WHERE name IN ('analysis_jobs', 'face_detections', 'media_image_metadata', 'media_thumbnails', 'media_items', 'media_directories', 'scans', 'media_sources');
     `);
     db.exec("COMMIT");
   } catch (error) {
@@ -2052,6 +2294,16 @@ async function dispatch(method: CatalogMethod, payload: Record<string, unknown> 
       );
     case "completeThumbnailJob":
       return completeThumbnailJob(
+        asNumber(payload.jobId, "jobId"),
+        payload.result
+      );
+    case "completeImageMetadataJob":
+      return completeImageMetadataJob(
+        asNumber(payload.jobId, "jobId"),
+        payload.result
+      );
+    case "completeFaceDetectionJob":
+      return completeFaceDetectionJob(
         asNumber(payload.jobId, "jobId"),
         payload.result
       );
