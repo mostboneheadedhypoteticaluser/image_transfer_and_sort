@@ -1,9 +1,13 @@
 import path from "node:path";
-import { app, BrowserWindow, dialog, ipcMain } from "electron";
+import { readFile } from "node:fs/promises";
+import { app, BrowserWindow, dialog, ipcMain, protocol } from "electron";
 import { CatalogService } from "./catalog-service";
 import { AnalysisService } from "./analysis-service";
 import { AnalysisCoordinator } from "./analysis-coordinator";
+import { ThumbnailService } from "./thumbnail-service";
+import { ThumbnailCoordinator } from "./thumbnail-coordinator";
 import type {
+  AnalysisQueueStats,
   AnalysisWorkerStatus,
   CatalogStats,
   DuplicateGroup,
@@ -11,14 +15,42 @@ import type {
   RestoreResult,
   ResetCatalogResult,
   ScanResult,
-  SourceRecord
+  SourceRecord,
+  ThumbnailInfo,
+  PipelineStatus
 } from "../shared/protocol";
 
 let windowRef: BrowserWindow | null = null;
 let catalog: CatalogService | null = null;
 let analysis: AnalysisService | null = null;
 let analysisCoordinator: AnalysisCoordinator | null = null;
+let thumbnailService: ThumbnailService | null = null;
+let thumbnailCoordinator: ThumbnailCoordinator | null = null;
+let thumbnailCacheRoot = "";
 let isQuitting = false;
+
+const EMPTY_QUEUE: AnalysisQueueStats = {
+  pending: 0,
+  running: 0,
+  done: 0,
+  failed: 0
+};
+
+let pipelineStatus: PipelineStatus = {
+  technical: { ...EMPTY_QUEUE },
+  thumbnails: { ...EMPTY_QUEUE }
+};
+
+protocol.registerSchemesAsPrivileged([
+  {
+    scheme: "image-sorter-thumb",
+    privileges: {
+      standard: true,
+      secure: true,
+      supportFetchAPI: true
+    }
+  }
+]);
 
 function sendToRenderer(channel: string, payload: unknown): void {
   const win = windowRef;
@@ -32,6 +64,24 @@ function sendToRenderer(channel: string, payload: unknown): void {
   }
 
   win.webContents.send(channel, payload);
+}
+
+function updatePipelineStage(
+  stage: "technical" | "thumbnails",
+  stats: AnalysisQueueStats
+): void {
+  pipelineStatus = {
+    ...pipelineStatus,
+    [stage]: { ...stats }
+  };
+
+  sendToRenderer("analysis:pipelineStatus", pipelineStatus);
+}
+
+function isInsideDirectory(candidatePath: string, rootPath: string): boolean {
+  const candidate = path.resolve(candidatePath);
+  const root = path.resolve(rootPath);
+  return candidate === root || candidate.startsWith(root + path.sep);
 }
 
 function createWindow(): BrowserWindow {
@@ -111,6 +161,11 @@ function registerIpc(): void {
   ipcMain.handle("analysis:getStatus", (): Promise<AnalysisWorkerStatus> =>
     analysis!.refreshStatus()
   );
+
+  ipcMain.handle("analysis:getPipelineStatus", (): PipelineStatus => ({
+    technical: { ...pipelineStatus.technical },
+    thumbnails: { ...pipelineStatus.thumbnails }
+  }));
 }
 
 app.whenReady().then(() => {
@@ -122,6 +177,14 @@ app.whenReady().then(() => {
     "python-ai",
     "worker.py"
   );
+  const thumbnailWorkerPath = path.join(
+    __dirname,
+    "..",
+    "workers",
+    "thumbnail",
+    "thumbnail-worker.js"
+  );
+  thumbnailCacheRoot = path.join(app.getPath("userData"), "thumbnails");
 
   catalog = new CatalogService(workerPath, dbPath, (progress) => {
     sendToRenderer("catalog:progress", progress);
@@ -131,12 +194,67 @@ app.whenReady().then(() => {
     sendToRenderer("analysis:status", status);
   });
 
-  analysisCoordinator = new AnalysisCoordinator(catalog, analysis);
+  thumbnailService = new ThumbnailService(
+    thumbnailWorkerPath,
+    thumbnailCacheRoot
+  );
+
+  analysisCoordinator = new AnalysisCoordinator(
+    catalog,
+    analysis,
+    (stats) => updatePipelineStage("technical", stats)
+  );
+
+  thumbnailCoordinator = new ThumbnailCoordinator(
+    catalog,
+    thumbnailService,
+    (stats) => updatePipelineStage("thumbnails", stats)
+  );
 
   catalog.start();
+  thumbnailService.start();
   registerIpc();
 
   windowRef = createWindow();
+
+  protocol.handle("image-sorter-thumb", async (request) => {
+    try {
+      const url = new URL(request.url);
+      if (url.hostname !== "media") {
+        return new Response("Ungültige Thumbnail-Adresse.", { status: 400 });
+      }
+
+      const mediaId = Number(url.pathname.replace(/^\//, ""));
+      if (!Number.isFinite(mediaId)) {
+        return new Response("Ungültige Medien-ID.", { status: 400 });
+      }
+
+      const info = await catalog!.request<ThumbnailInfo | null>(
+        "getThumbnailInfo",
+        { mediaId }
+      );
+
+      if (!info) return new Response("Thumbnail nicht gefunden.", { status: 404 });
+
+      if (!isInsideDirectory(info.path, thumbnailCacheRoot)) {
+        return new Response("Thumbnail-Pfad abgelehnt.", { status: 403 });
+      }
+
+      const bytes = await readFile(info.path);
+      return new Response(bytes, {
+        status: 200,
+        headers: {
+          "Content-Type": "image/jpeg",
+          "Cache-Control": "public, max-age=31536000, immutable"
+        }
+      });
+    } catch {
+      return new Response("Thumbnail konnte nicht geladen werden.", { status: 404 });
+    }
+  });
+
+  void thumbnailCoordinator.start();
+
   void analysis.start().then(() => {
     if (analysis?.getStatus().state === "READY") {
       void analysisCoordinator?.start();
@@ -155,6 +273,8 @@ app.on("window-all-closed", () => {
 app.on("before-quit", () => {
   isQuitting = true;
   analysisCoordinator?.stop();
+  thumbnailCoordinator?.stop();
   analysis?.stop();
+  thumbnailService?.stop();
   catalog?.stop();
 });
