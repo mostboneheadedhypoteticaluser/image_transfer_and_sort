@@ -555,9 +555,9 @@ td .badge + .badge {
 
 .analysis-metric small {
   display: block;
-  margin-bottom: 4px;
-  color: #7a8490;
-  font-size: 11px;
+  margin-bottom: 5px;
+  color: #6f7984;
+  font-size: 12px;
 }
 
 .analysis-metric strong {
@@ -565,22 +565,26 @@ td .badge + .badge {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 13px;
+  font-size: 14px;
 }
 
 .analysis-footer {
   display: flex;
   justify-content: space-between;
-  gap: 16px;
-  padding: 11px 18px;
+  align-items: flex-start;
+  gap: 18px;
+  padding: 12px 18px;
   border-top: 1px solid #eef1f3;
   background: #fafbfc;
   color: #68717d;
   font-size: 12px;
+  line-height: 1.4;
 }
 
 .analysis-note {
-  white-space: nowrap;
+  max-width: 58%;
+  white-space: normal;
+  text-align: right;
   color: #8b939c;
 }
 
@@ -632,22 +636,21 @@ td .badge + .badge {
 
 .pipeline-stages {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
-  border-top: 1px solid #eef1f3;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 1px;
+  border-top: 1px solid #e5e9ed;
+  background: #e5e9ed;
 }
 
 .pipeline-stage {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  justify-content: space-between;
-  gap: 14px;
+  gap: 16px;
   min-width: 0;
-  padding: 13px 18px;
-  border-right: 1px solid #eef1f3;
-}
-
-.pipeline-stage:last-child {
-  border-right: 0;
+  min-height: 88px;
+  padding: 15px 18px;
+  background: #fff;
 }
 
 .pipeline-stage > div:first-child {
@@ -656,19 +659,20 @@ td .badge + .badge {
 
 .pipeline-stage > div:first-child small {
   display: block;
-  margin-bottom: 2px;
-  color: #8b939c;
-  font-size: 10px;
+  margin-bottom: 5px;
+  color: #7f8994;
+  font-size: 11px;
+  font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: .04em;
+  letter-spacing: .05em;
 }
 
 .pipeline-stage > div:first-child strong {
   display: block;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 13px;
+  font-size: 14px;
+  line-height: 1.3;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .pipeline-stage.future {
@@ -678,23 +682,25 @@ td .badge + .badge {
 .pipeline-stage-status {
   display: grid;
   justify-items: end;
-  gap: 4px;
-  flex: 0 0 auto;
+  gap: 6px;
+  min-width: 112px;
 }
 
 .pipeline-stage-status small {
-  color: #7a8490;
-  font-size: 10px;
-  white-space: nowrap;
+  color: #6f7984;
+  font-size: 11px;
+  line-height: 1.25;
+  white-space: normal;
+  text-align: right;
 }
 
 .stage-state {
   display: inline-flex;
   align-items: center;
-  min-height: 22px;
-  padding: 0 8px;
+  min-height: 25px;
+  padding: 0 9px;
   border-radius: 999px;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 800;
   white-space: nowrap;
 }
@@ -724,18 +730,19 @@ td .badge + .badge {
   color: #8b939c;
 }
 
-@media (max-width: 1120px) {
+@media (max-width: 1350px) {
   .pipeline-stages {
-    grid-template-columns: 1fr;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 1080px) {
+  .pipeline-stages {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .pipeline-stage {
-    border-right: 0;
-    border-bottom: 1px solid #eef1f3;
-  }
-
-  .pipeline-stage:last-child {
-    border-bottom: 0;
+    min-height: 82px;
   }
 }
 
