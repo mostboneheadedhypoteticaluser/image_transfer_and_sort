@@ -9,6 +9,8 @@ export type CatalogStats = {
   available: number;
   missing: number;
   recycleBin: number;
+  duplicateGroups: number;
+  duplicateFiles: number;
   lastScan: string | null;
 };
 
@@ -22,6 +24,21 @@ export type MediaRecord = {
   recycleState: "NONE" | "RESTORABLE" | "AMBIGUOUS";
   duplicateCount: number;
   lastSeenAt: string;
+};
+
+export type DuplicateItem = {
+  id: number;
+  relativePath: string;
+  extension: string;
+  sizeBytes: number;
+};
+
+export type DuplicateGroup = {
+  sha256: string;
+  sizeBytes: number;
+  count: number;
+  wastedBytes: number;
+  items: DuplicateItem[];
 };
 
 export type ScanResult = {
@@ -55,6 +72,8 @@ export type CatalogMethod =
   | "addSource"
   | "getStats"
   | "listMedia"
+  | "listDuplicateGroups"
+  | "listRecycleMedia"
   | "scanSource"
   | "restoreMedia"
   | "resetCatalog";
