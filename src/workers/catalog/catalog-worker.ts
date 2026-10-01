@@ -174,6 +174,11 @@ ensureColumn("media_items", "device_id", "TEXT");
 ensureColumn("media_items", "inode", "TEXT");
 ensureColumn("media_items", "recycle_ambiguous", "INTEGER NOT NULL DEFAULT 0");
 ensureColumn("media_items", "recycle_original_path", "TEXT");
+ensureColumn("analysis_jobs", "input_sha256", "TEXT");
+ensureColumn("analysis_jobs", "result_json", "TEXT");
+ensureColumn("analysis_jobs", "error_message", "TEXT");
+ensureColumn("analysis_jobs", "started_at", "TEXT");
+ensureColumn("analysis_jobs", "finished_at", "TEXT");
 
 db.exec(`
   CREATE INDEX IF NOT EXISTS idx_media_recycle
@@ -186,6 +191,10 @@ db.exec(`
      OR lower(relative_path) LIKE '%/$recycle.bin/%'
      OR lower(relative_path) LIKE 'system volume information/%'
      OR lower(relative_path) LIKE '%/system volume information/%';
+
+  UPDATE analysis_jobs
+  SET status='PENDING', started_at=NULL, updated_at=CURRENT_TIMESTAMP
+  WHERE status='RUNNING';
 `);
 
 let scanRunning = false;
@@ -1113,6 +1122,175 @@ async function refreshRecycleStatus(sourceId: number): Promise<number> {
   return count;
 }
 
+function enqueueAnalysisJobs(sourceId: number, module = "file-probe-v1") {
+  const statement = db.prepare(`
+    INSERT INTO analysis_jobs(
+      media_id,
+      module,
+      status,
+      priority,
+      attempts,
+      payload_json,
+      input_sha256,
+      result_json,
+      error_message,
+      started_at,
+      finished_at,
+      created_at,
+      updated_at
+    )
+    SELECT
+      m.id,
+      ?,
+      'PENDING',
+      100,
+      0,
+      NULL,
+      m.sha256,
+      NULL,
+      NULL,
+      NULL,
+      NULL,
+      CURRENT_TIMESTAMP,
+      CURRENT_TIMESTAMP
+    FROM media_items m
+    WHERE m.source_id=?
+      AND m.availability='AVAILABLE'
+    ON CONFLICT(media_id, module) DO UPDATE SET
+      status='PENDING',
+      attempts=0,
+      payload_json=NULL,
+      input_sha256=excluded.input_sha256,
+      result_json=NULL,
+      error_message=NULL,
+      started_at=NULL,
+      finished_at=NULL,
+      updated_at=CURRENT_TIMESTAMP
+    WHERE analysis_jobs.input_sha256 IS NULL
+       OR analysis_jobs.input_sha256<>excluded.input_sha256
+  `);
+
+  const result = statement.run(module, sourceId);
+
+  const stats = getAnalysisQueueStats(sourceId, module);
+  return {
+    queuedOrUpdated: Number(result.changes),
+    ...stats
+  };
+}
+
+function getAnalysisQueueStats(sourceId?: number, module = "file-probe-v1") {
+  const filter = sourceId === undefined
+    ? "j.module=?"
+    : "j.module=? AND m.source_id=?";
+
+  const args = sourceId === undefined ? [module] : [module, sourceId];
+
+  const row = db.prepare(`
+    SELECT
+      SUM(CASE WHEN j.status='PENDING' THEN 1 ELSE 0 END) AS pending,
+      SUM(CASE WHEN j.status='RUNNING' THEN 1 ELSE 0 END) AS running,
+      SUM(CASE WHEN j.status='DONE' THEN 1 ELSE 0 END) AS done,
+      SUM(CASE WHEN j.status='FAILED' THEN 1 ELSE 0 END) AS failed
+    FROM analysis_jobs j
+    JOIN media_items m ON m.id=j.media_id
+    WHERE ${filter}
+  `).get(...args);
+
+  return {
+    pending: Number(row?.pending ?? 0),
+    running: Number(row?.running ?? 0),
+    done: Number(row?.done ?? 0),
+    failed: Number(row?.failed ?? 0)
+  };
+}
+
+function claimAnalysisJob(module = "file-probe-v1") {
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const row = db.prepare(`
+      SELECT
+        j.id,
+        j.media_id,
+        j.module,
+        m.absolute_path,
+        m.extension,
+        m.size_bytes,
+        m.sha256
+      FROM analysis_jobs j
+      JOIN media_items m ON m.id=j.media_id
+      WHERE j.module=?
+        AND j.status='PENDING'
+        AND m.availability='AVAILABLE'
+      ORDER BY j.priority ASC, j.id ASC
+      LIMIT 1
+    `).get(module);
+
+    if (!row) {
+      db.exec("COMMIT");
+      return null;
+    }
+
+    db.prepare(`
+      UPDATE analysis_jobs
+      SET
+        status='RUNNING',
+        attempts=attempts+1,
+        started_at=CURRENT_TIMESTAMP,
+        error_message=NULL,
+        updated_at=CURRENT_TIMESTAMP
+      WHERE id=?
+    `).run(Number(row.id));
+
+    db.exec("COMMIT");
+
+    return {
+      id: Number(row.id),
+      mediaId: Number(row.media_id),
+      module: String(row.module),
+      absolutePath: String(row.absolute_path),
+      extension: String(row.extension),
+      sizeBytes: Number(row.size_bytes),
+      sha256: String(row.sha256)
+    };
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+}
+
+function completeAnalysisJob(jobId: number, result: unknown) {
+  const encoded = JSON.stringify(result ?? null);
+
+  db.prepare(`
+    UPDATE analysis_jobs
+    SET
+      status='DONE',
+      result_json=?,
+      error_message=NULL,
+      finished_at=CURRENT_TIMESTAMP,
+      updated_at=CURRENT_TIMESTAMP
+    WHERE id=?
+      AND status='RUNNING'
+  `).run(encoded, jobId);
+
+  return { completed: true };
+}
+
+function failAnalysisJob(jobId: number, errorMessage: string) {
+  db.prepare(`
+    UPDATE analysis_jobs
+    SET
+      status='FAILED',
+      error_message=?,
+      finished_at=CURRENT_TIMESTAMP,
+      updated_at=CURRENT_TIMESTAMP
+    WHERE id=?
+  `).run(errorMessage.slice(0, 4000), jobId);
+
+  return { failed: true };
+}
+
 async function scanSource(sourceId: number): Promise<ScanResult> {
   if (scanRunning) throw new Error("Es läuft bereits ein Scan.");
   scanRunning = true;
@@ -1496,6 +1674,7 @@ async function scanSource(sourceId: number): Promise<ScanResult> {
     }
 
     recycleBin = await refreshRecycleStatus(sourceId);
+    enqueueAnalysisJobs(sourceId);
 
     const result: ScanResult = {
       discovered,
@@ -1708,6 +1887,30 @@ async function dispatch(method: CatalogMethod, payload: Record<string, unknown> 
       return listRecycleMedia(
         asNumber(payload.sourceId, "sourceId"),
         payload.limit === undefined ? 500 : asNumber(payload.limit, "limit")
+      );
+    case "enqueueAnalysisJobs":
+      return enqueueAnalysisJobs(
+        asNumber(payload.sourceId, "sourceId"),
+        typeof payload.module === "string" ? payload.module : "file-probe-v1"
+      );
+    case "getAnalysisQueueStats":
+      return getAnalysisQueueStats(
+        payload.sourceId === undefined ? undefined : asNumber(payload.sourceId, "sourceId"),
+        typeof payload.module === "string" ? payload.module : "file-probe-v1"
+      );
+    case "claimAnalysisJob":
+      return claimAnalysisJob(
+        typeof payload.module === "string" ? payload.module : "file-probe-v1"
+      );
+    case "completeAnalysisJob":
+      return completeAnalysisJob(
+        asNumber(payload.jobId, "jobId"),
+        payload.result
+      );
+    case "failAnalysisJob":
+      return failAnalysisJob(
+        asNumber(payload.jobId, "jobId"),
+        typeof payload.error === "string" ? payload.error : "Unbekannter Analysefehler"
       );
     case "scanSource":
       return scanSource(asNumber(payload.sourceId, "sourceId"));
