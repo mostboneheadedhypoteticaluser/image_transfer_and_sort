@@ -56,6 +56,7 @@ export class PetService {
           "cluster_pet_embeddings",
           {
             pets: set.pets,
+            cannotLinks: set.cannotLinks,
             clusterThreshold: 0.68,
             verificationThreshold: 0.60,
             minClusterSize: 2
