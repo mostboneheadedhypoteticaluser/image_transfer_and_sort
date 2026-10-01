@@ -3,11 +3,13 @@ import type {
   PipelineStatus,
   CatalogStats,
   ConfirmPersonResult,
+  ConfirmPetResult,
   DuplicateGroup,
   MediaRecord,
   MergePersonsResult,
   PersonCorrectionResult,
   PersonOverview,
+  PetOverview,
   RestoreResult,
   ResetCatalogResult,
   ScanProgress,
@@ -47,6 +49,14 @@ declare global {
           personId: number,
           name: string
         ): Promise<PersonCorrectionResult>;
+        onUpdated(listener: () => void): () => void;
+      };
+      pets: {
+        getOverview(sourceId: number, forceRefresh?: boolean): Promise<PetOverview>;
+        confirmCandidate(
+          candidateId: number,
+          name: string
+        ): Promise<ConfirmPetResult>;
         onUpdated(listener: () => void): () => void;
       };
       catalog: {
