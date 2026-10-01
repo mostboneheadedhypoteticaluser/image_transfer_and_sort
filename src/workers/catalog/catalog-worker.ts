@@ -215,6 +215,28 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_face_embedding_media
     ON face_embeddings(media_id);
 
+  CREATE TABLE IF NOT EXISTS pet_detections (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    media_id INTEGER NOT NULL REFERENCES media_items(id) ON DELETE CASCADE,
+    detector_version TEXT NOT NULL,
+    detection_index INTEGER NOT NULL,
+    input_sha256 TEXT NOT NULL,
+    pet_class TEXT NOT NULL CHECK(pet_class IN ('dog','cat')),
+    class_id INTEGER NOT NULL,
+    x REAL NOT NULL,
+    y REAL NOT NULL,
+    width REAL NOT NULL,
+    height REAL NOT NULL,
+    score REAL NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(media_id, detector_version, detection_index)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_pet_detection_media
+    ON pet_detections(media_id);
+  CREATE INDEX IF NOT EXISTS idx_pet_detection_class
+    ON pet_detections(pet_class);
+
   CREATE TABLE IF NOT EXISTS persons (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
@@ -571,6 +593,26 @@ function listMedia(sourceId: number, requestedLimit: number) {
         WHERE fe.media_id=m.id
           AND fe.input_sha256=m.sha256
       ) AS face_embedding_count,
+      (
+        SELECT COUNT(*)
+        FROM pet_detections pd
+        WHERE pd.media_id=m.id
+          AND pd.input_sha256=m.sha256
+      ) AS pet_count,
+      (
+        SELECT COUNT(*)
+        FROM pet_detections pd
+        WHERE pd.media_id=m.id
+          AND pd.input_sha256=m.sha256
+          AND pd.pet_class='dog'
+      ) AS dog_count,
+      (
+        SELECT COUNT(*)
+        FROM pet_detections pd
+        WHERE pd.media_id=m.id
+          AND pd.input_sha256=m.sha256
+          AND pd.pet_class='cat'
+      ) AS cat_count,
       CASE
         WHEN m.availability='AVAILABLE' THEN (
           SELECT COUNT(*) - 1
@@ -613,6 +655,9 @@ function listMedia(sourceId: number, requestedLimit: number) {
     capturedAt: row.captured_at ? String(row.captured_at) : null,
     faceCount: Number(row.face_count ?? 0),
     faceEmbeddingCount: Number(row.face_embedding_count ?? 0),
+    petCount: Number(row.pet_count ?? 0),
+    dogCount: Number(row.dog_count ?? 0),
+    catCount: Number(row.cat_count ?? 0),
     lastSeenAt: String(row.last_seen_at)
   }));
 }
@@ -644,7 +689,27 @@ function listRecycleMedia(sourceId: number, requestedLimit: number) {
         FROM face_embeddings fe
         WHERE fe.media_id=m.id
           AND fe.input_sha256=m.sha256
-      ) AS face_embedding_count
+      ) AS face_embedding_count,
+      (
+        SELECT COUNT(*)
+        FROM pet_detections pd
+        WHERE pd.media_id=m.id
+          AND pd.input_sha256=m.sha256
+      ) AS pet_count,
+      (
+        SELECT COUNT(*)
+        FROM pet_detections pd
+        WHERE pd.media_id=m.id
+          AND pd.input_sha256=m.sha256
+          AND pd.pet_class='dog'
+      ) AS dog_count,
+      (
+        SELECT COUNT(*)
+        FROM pet_detections pd
+        WHERE pd.media_id=m.id
+          AND pd.input_sha256=m.sha256
+          AND pd.pet_class='cat'
+      ) AS cat_count
     FROM media_items m
     LEFT JOIN media_thumbnails t ON t.media_id=m.id
     LEFT JOIN media_image_metadata md ON md.media_id=m.id
@@ -671,6 +736,9 @@ function listRecycleMedia(sourceId: number, requestedLimit: number) {
     capturedAt: row.captured_at ? String(row.captured_at) : null,
     faceCount: Number(row.face_count ?? 0),
     faceEmbeddingCount: Number(row.face_embedding_count ?? 0),
+    petCount: Number(row.pet_count ?? 0),
+    dogCount: Number(row.dog_count ?? 0),
+    catCount: Number(row.cat_count ?? 0),
     lastSeenAt: String(row.last_seen_at)
   }));
 }
@@ -1317,7 +1385,8 @@ function enqueueAnalysisJobs(sourceId: number, module = "file-probe-v1") {
     "thumbnail-v1",
     "image-metadata-v1",
     "face-detect-yunet-v1",
-    "face-embed-sface-v1"
+    "face-embed-sface-v1",
+    "pet-detect-nanodet-v1"
   ]);
   const imageFilter =
     imageOnlyModules.has(module)
@@ -1929,6 +1998,7 @@ async function scanSource(sourceId: number): Promise<ScanResult> {
     enqueueAnalysisJobs(sourceId, "image-metadata-v1");
     enqueueAnalysisJobs(sourceId, "face-detect-yunet-v1");
     enqueueAnalysisJobs(sourceId, "face-embed-sface-v1");
+    enqueueAnalysisJobs(sourceId, "pet-detect-nanodet-v1");
 
     const result: ScanResult = {
       discovered,
@@ -3413,6 +3483,7 @@ function resetCatalog(): { reset: true } {
       DELETE FROM person_face_exclusions;
       DELETE FROM person_face_assignments;
       DELETE FROM persons;
+      DELETE FROM pet_detections;
       DELETE FROM face_embeddings;
       DELETE FROM face_detections;
       DELETE FROM media_image_metadata;
@@ -3422,7 +3493,7 @@ function resetCatalog(): { reset: true } {
       DELETE FROM scans;
       DELETE FROM media_sources;
       DELETE FROM sqlite_sequence
-      WHERE name IN ('analysis_jobs', 'person_candidate_faces', 'person_candidates', 'person_cluster_runs', 'person_face_assignments', 'persons', 'face_embeddings', 'face_detections', 'media_image_metadata', 'media_thumbnails', 'media_items', 'media_directories', 'scans', 'media_sources');
+      WHERE name IN ('analysis_jobs', 'person_candidate_faces', 'person_candidates', 'person_cluster_runs', 'person_face_assignments', 'persons', 'pet_detections', 'face_embeddings', 'face_detections', 'media_image_metadata', 'media_thumbnails', 'media_items', 'media_directories', 'scans', 'media_sources');
     `);
     db.exec("COMMIT");
   } catch (error) {
