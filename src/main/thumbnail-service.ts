@@ -111,10 +111,66 @@ export class ThumbnailService {
     child.postMessage({
       kind: "request",
       id,
+      mode: "thumbnail",
       inputPath,
       outputPath,
       maxWidth,
       maxHeight
+    });
+
+    return result;
+  }
+
+  async generateFaceCrop(
+    inputPath: string,
+    sha256: string,
+    faceDetectionId: number,
+    box: { x: number; y: number; width: number; height: number },
+    size = 180
+  ): Promise<ThumbnailResult> {
+    if (!this.child) this.start();
+
+    const child = this.child;
+    if (!child) throw new Error("Thumbnail-Worker konnte nicht gestartet werden.");
+
+    const safeHash = sha256.toLowerCase().replace(/[^a-f0-9]/g, "");
+    if (safeHash.length < 16) {
+      throw new Error("Ungültiger SHA-256 für Face-Crop-Cache.");
+    }
+
+    const cropKey = [
+      faceDetectionId,
+      Math.round(box.x),
+      Math.round(box.y),
+      Math.round(box.width),
+      Math.round(box.height)
+    ].join("-");
+
+    const outputPath = path.join(
+      this.cacheRoot,
+      "face-crops",
+      safeHash.slice(0, 2),
+      `${safeHash}-${cropKey}.jpg`
+    );
+
+    const id = randomUUID();
+
+    const result = new Promise<ThumbnailResult>((resolve, reject) => {
+      this.pending.set(id, {
+        resolve: (value) => resolve(value as ThumbnailResult),
+        reject
+      });
+    });
+
+    child.postMessage({
+      kind: "request",
+      id,
+      mode: "face-crop",
+      inputPath,
+      outputPath,
+      maxWidth: size,
+      maxHeight: size,
+      crop: box
     });
 
     return result;
