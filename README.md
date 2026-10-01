@@ -12,7 +12,7 @@ Der erste Schritt macht bewusst nur:
 4. Katalog lokal in SQLite speichern
 5. fehlende Bilder markieren, aber nicht löschen
 
-**Aktiv:** technische Prüfung, Bild-Thumbnails, EXIF-Metadaten, YuNet-Gesichtsdetektion, SFace-Gesichtsmerkmale, konservative Personenvorschläge, Namensbestätigung sowie dauerhafte Korrekturen: Gesichter aus Gruppen lösen, aus bestätigten Personen entfernen, Personen umbenennen und zusammenführen. **Noch nicht aktiv:** Haustiererkennung und Motiverkennung. Videos werden katalogisiert und technisch geprüft; Video-Thumbnails folgen später.
+**Aktiv:** technische Prüfung, Bild-Thumbnails, EXIF-Metadaten, YuNet-Gesichtsdetektion, SFace-Gesichtsmerkmale, konservative Personenvorschläge, Namensbestätigung sowie dauerhafte Korrekturen: Gesichter aus Gruppen lösen, aus bestätigten Personen entfernen, Personen umbenennen und zusammenführen. **Aktiv ist jetzt auch die erste Haustierstufe:** NanoDet erkennt Hunde und Katzen samt Position und Konfidenz. **Noch nicht aktiv:** individuelle Haustier-Embeddings/Namenszuordnung und Motiverkennung. Videos werden katalogisiert und technisch geprüft; Video-Thumbnails folgen später.
 
 ## Architektur
 
@@ -40,7 +40,7 @@ npm run setup:ai
 npm start
 ```
 
-`setup:ai` erzeugt die lokale `.ai-venv`, installiert Pillow/OpenCV und lädt die geprüften OpenCV-Modelle YuNet (Detektion) und SFace (Gesichtsmerkmale). Das Skript kann bei neuen Modellen erneut ausgeführt werden.
+`setup:ai` erzeugt die lokale `.ai-venv`, installiert Pillow/OpenCV und lädt die geprüften OpenCV-Modelle YuNet (Gesichter), SFace (Gesichtsmerkmale) und NanoDet (Hund/Katze). Das Skript kann bei neuen Modellen erneut ausgeführt werden.
 
 Danach genügt für normale Starts ebenfalls:
 
