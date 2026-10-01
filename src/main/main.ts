@@ -40,7 +40,8 @@ let pipelineStatus: PipelineStatus = {
   technical: { ...EMPTY_QUEUE },
   thumbnails: { ...EMPTY_QUEUE },
   imageMetadata: { ...EMPTY_QUEUE },
-  faces: { ...EMPTY_QUEUE }
+  faces: { ...EMPTY_QUEUE },
+  faceEmbeddings: { ...EMPTY_QUEUE }
 };
 
 protocol.registerSchemesAsPrivileged([
@@ -168,7 +169,8 @@ function registerIpc(): void {
     technical: { ...pipelineStatus.technical },
     thumbnails: { ...pipelineStatus.thumbnails },
     imageMetadata: { ...pipelineStatus.imageMetadata },
-    faces: { ...pipelineStatus.faces }
+    faces: { ...pipelineStatus.faces },
+    faceEmbeddings: { ...pipelineStatus.faceEmbeddings }
   }));
 }
 
