@@ -12,13 +12,14 @@ Der erste Schritt macht bewusst nur:
 4. Katalog lokal in SQLite speichern
 5. fehlende Bilder markieren, aber nicht löschen
 
-**Noch nicht aktiv:** Personen-, Gesichts- oder Haustiererkennung. Videos werden bereits katalogisiert, aber noch nicht inhaltlich analysiert oder abgespielt.
+**Noch nicht aktiv:** Personen-, Gesichts- oder Haustiererkennung. Die technische Analyse-Queue und Bild-Thumbnails sind bereits aktiv. Videos werden katalogisiert und technisch geprüft; Video-Thumbnails folgen später.
 
 ## Architektur
 
 - **Electron + TypeScript:** Oberfläche
 - **Catalog Worker:** eigener Utility-Prozess für Dateiscan, Hashing und SQLite
-- **Python-AI-Worker:** startet bereits automatisch als eigener Hintergrundprozess; die eigentlichen KI-Modelle für Personen/Haustiere sind noch nicht angeschlossen
+- **Python-AI-Worker:** startet automatisch als eigener Hintergrundprozess; die technische Analyse-Queue läuft bereits, Personen-/Haustiermodelle folgen später
+- **Thumbnail Worker:** eigener Utility-Prozess erzeugt Bildvorschauen und cached sie nach SHA-256
 - **SQLite:** wird ausschließlich vom Catalog Worker direkt beschrieben
 
 Dadurch können Scanner und spätere KI unter Last laufen, ohne die Renderer-Oberfläche zu blockieren.
