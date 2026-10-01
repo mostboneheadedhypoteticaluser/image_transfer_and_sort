@@ -1,7 +1,9 @@
 import path from "node:path";
 import { app, BrowserWindow, dialog, ipcMain } from "electron";
 import { CatalogService } from "./catalog-service";
+import { AnalysisService } from "./analysis-service";
 import type {
+  AnalysisWorkerStatus,
   CatalogStats,
   DuplicateGroup,
   MediaRecord,
@@ -13,6 +15,7 @@ import type {
 
 let windowRef: BrowserWindow | null = null;
 let catalog: CatalogService | null = null;
+let analysis: AnalysisService | null = null;
 
 function createWindow(): BrowserWindow {
   const win = new BrowserWindow({
@@ -83,19 +86,35 @@ function registerIpc(): void {
   ipcMain.handle("catalog:resetCatalog", () =>
     catalog!.request<ResetCatalogResult>("resetCatalog")
   );
+
+  ipcMain.handle("analysis:getStatus", (): Promise<AnalysisWorkerStatus> =>
+    analysis!.refreshStatus()
+  );
 }
 
 app.whenReady().then(() => {
   const workerPath = path.join(__dirname, "..", "workers", "catalog", "catalog-worker.js");
   const dbPath = path.join(app.getPath("userData"), "catalog.sqlite3");
+  const analysisWorkerPath = path.join(
+    app.getAppPath(),
+    "workers",
+    "python-ai",
+    "worker.py"
+  );
 
   catalog = new CatalogService(workerPath, dbPath, (progress) => {
     windowRef?.webContents.send("catalog:progress", progress);
   });
+
+  analysis = new AnalysisService(analysisWorkerPath, (status) => {
+    windowRef?.webContents.send("analysis:status", status);
+  });
+
   catalog.start();
   registerIpc();
 
   windowRef = createWindow();
+  void analysis.start();
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) windowRef = createWindow();
@@ -107,5 +126,6 @@ app.on("window-all-closed", () => {
 });
 
 app.on("before-quit", () => {
+  analysis?.stop();
   catalog?.stop();
 });
