@@ -260,6 +260,26 @@ db.exec(`
     algorithm_version TEXT NOT NULL,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
   );
+
+  CREATE TABLE IF NOT EXISTS person_cluster_exclusions (
+    face_a_id INTEGER NOT NULL REFERENCES face_detections(id) ON DELETE CASCADE,
+    face_b_id INTEGER NOT NULL REFERENCES face_detections(id) ON DELETE CASCADE,
+    reason TEXT NOT NULL DEFAULT 'USER_SPLIT',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY(face_a_id, face_b_id),
+    CHECK(face_a_id < face_b_id)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_person_cluster_exclusion_b
+    ON person_cluster_exclusions(face_b_id);
+
+  CREATE TABLE IF NOT EXISTS person_face_exclusions (
+    person_id INTEGER NOT NULL REFERENCES persons(id) ON DELETE CASCADE,
+    face_detection_id INTEGER NOT NULL REFERENCES face_detections(id) ON DELETE CASCADE,
+    reason TEXT NOT NULL DEFAULT 'USER_REMOVED',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY(person_id, face_detection_id)
+  );
 `);
 
 function tableHasColumn(table: string, column: string): boolean {
