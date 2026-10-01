@@ -1,0 +1,25 @@
+{
+  "name": "image-transfer-and-sort",
+  "version": "0.2.0",
+  "private": true,
+  "description": "Lokaler, modularer Bildkatalog mit entkoppelter Electron-Oberfläche und Worker-Prozessen.",
+  "main": "dist/main/main.js",
+  "scripts": {
+    "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
+    "build:electron": "tsc -p tsconfig.electron.json",
+    "build:renderer": "vite build",
+    "build": "npm run clean && npm run build:electron && npm run build:renderer",
+    "start": "npm run build && electron .",
+    "dev": "concurrently -k \"tsc -p tsconfig.electron.json -w\" \"vite --host 127.0.0.1\" \"wait-on dist/main/main.js tcp:5173 && cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:5173 electron .\"",
+    "check": "tsc -p tsconfig.electron.json --noEmit && tsc -p tsconfig.renderer.json --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.0",
+    "concurrently": "^9.2.1",
+    "cross-env": "^10.1.0",
+    "electron": "^41.0.0",
+    "typescript": "^5.9.3",
+    "vite": "^7.3.6",
+    "wait-on": "^9.0.1"
+  }
+}
