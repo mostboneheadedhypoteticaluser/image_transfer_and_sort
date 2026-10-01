@@ -15,7 +15,8 @@ export class AnalysisCoordinator {
 
   constructor(
     private readonly catalog: CatalogService,
-    private readonly analysis: AnalysisService
+    private readonly analysis: AnalysisService,
+    private readonly onStats: (stats: AnalysisQueueStats) => void
   ) {}
 
   async start(): Promise<void> {
@@ -56,6 +57,8 @@ export class AnalysisCoordinator {
       "getAnalysisQueueStats",
       { module: MODULE }
     );
+
+    this.onStats(stats);
 
     this.analysis.setQueueState(
       stats.pending,
