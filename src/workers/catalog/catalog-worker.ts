@@ -2590,6 +2590,16 @@ async function dispatch(method: CatalogMethod, payload: Record<string, unknown> 
         asNumber(payload.jobId, "jobId"),
         payload.result
       );
+    case "getFaceDetectionsForEmbedding":
+      return getFaceDetectionsForEmbedding(
+        asNumber(payload.mediaId, "mediaId"),
+        typeof payload.inputSha256 === "string" ? payload.inputSha256 : ""
+      );
+    case "completeFaceEmbeddingJob":
+      return completeFaceEmbeddingJob(
+        asNumber(payload.jobId, "jobId"),
+        payload.result
+      );
     case "getThumbnailInfo":
       return getThumbnailInfo(asNumber(payload.mediaId, "mediaId"));
     case "scanSource":
