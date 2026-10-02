@@ -104,12 +104,12 @@ const MODULES: ModuleSpec[] = [
     timeoutMs: 120000
   },
   {
-    module: "object-detect-verified-v2",
+    module: "object-detect-qwen3vl-v1",
     stage: "objectVerification",
-    workerMethod: "detect_verified_objects",
+    workerMethod: "detect_qwen3vl_objects",
     completeMethod: "completeVerifiedObjectDetectionJob",
-    label: "Motive präzise verifizieren",
-    timeoutMs: 3600000
+    label: "Motive · Qwen3-VL-8B Vollbild/Kacheln",
+    timeoutMs: 7200000
   },
   {
     module: "semantic-embed-siglip2-v1",
@@ -155,7 +155,6 @@ export class AnalysisCoordinator {
   private timer: NodeJS.Timeout | null = null;
   private pumping = false;
   private stopped = true;
-  private cursor = 0;
 
   constructor(
     private readonly catalog: CatalogService,
@@ -261,18 +260,16 @@ export class AnalysisCoordinator {
   }
 
   private async nextPendingSpec(): Promise<ModuleSpec | null> {
-    for (let offset = 0; offset < MODULES.length; offset += 1) {
-      const index = (this.cursor + offset) % MODULES.length;
-      const spec = MODULES[index];
+    // Große Modelle werden bewusst stufenweise abgearbeitet statt im
+    // Round-Robin. So bleibt Qwen3-VL für eine ganze Bildserie im RAM und
+    // wird nicht nach jedem Bild gegen SigLIP2 ausgetauscht.
+    for (const spec of MODULES) {
       const stats = await this.catalog.request<AnalysisQueueStats>(
         "getAnalysisQueueStats",
         { module: spec.module }
       );
 
-      if (stats.pending > 0) {
-        this.cursor = (index + 1) % MODULES.length;
-        return spec;
-      }
+      if (stats.pending > 0) return spec;
     }
 
     return null;
@@ -373,6 +370,20 @@ export class AnalysisCoordinator {
           );
 
           extraPayload = { pets };
+        }
+
+        if (spec.module === "object-detect-qwen3vl-v1") {
+          // Die alten Detektoren sind nur zusätzliche Recall-Hinweise.
+          // Qwen analysiert Gesamtbild und Kacheln unabhängig davon und muss
+          // jeden Hinweis anschließend selbst doppelt bestätigen.
+          const hints = await this.catalog.request<
+            Array<Record<string, unknown>>
+          >("getObjectDetectionsForFusion", {
+            mediaId: job.mediaId,
+            inputSha256: job.sha256
+          });
+
+          extraPayload = { hints };
         }
 
         const result = await this.analysis.request<Record<string, unknown>>(
