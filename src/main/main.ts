@@ -12,6 +12,9 @@ import type {
   AnalysisErrorRecord,
   AnalysisQueueStats,
   AnalysisWorkerStatus,
+  QwenBenchmarkProfile,
+  QwenBenchmarkRunResult,
+  QwenBenchmarkStageResult,
   CatalogStats,
   ConfirmPersonResult,
   ConfirmPetResult,
@@ -392,6 +395,102 @@ function registerIpc(): void {
       characters: text.length
     };
   });
+
+  ipcMain.handle("analysis:pickQwenBenchmarkImage", async () => {
+    const options = {
+      title: "Bild für Qwen-Einzeltest auswählen",
+      properties: ["openFile"] as const,
+      filters: [
+        {
+          name: "Bilder",
+          extensions: ["jpg", "jpeg", "png", "webp", "bmp", "tif", "tiff"]
+        }
+      ]
+    };
+
+    const result = windowRef
+      ? await dialog.showOpenDialog(windowRef, options)
+      : await dialog.showOpenDialog(options);
+
+    if (result.canceled || result.filePaths.length === 0) return null;
+    return result.filePaths[0];
+  });
+
+  ipcMain.handle(
+    "analysis:runQwenBenchmark",
+    async (
+      _event,
+      filePath: string,
+      profiles: QwenBenchmarkProfile[]
+    ): Promise<QwenBenchmarkRunResult> => {
+      const normalizedPath = typeof filePath === "string" ? filePath.trim() : "";
+      if (!normalizedPath) {
+        throw new Error("Bitte zuerst ein Bild für den Qwen-Test auswählen.");
+      }
+
+      const allowed: QwenBenchmarkProfile[] = [
+        "whole",
+        "tiles4",
+        "single-check",
+        "full"
+      ];
+      const selected = [...new Set(profiles)].filter(
+        (profile): profile is QwenBenchmarkProfile =>
+          allowed.includes(profile as QwenBenchmarkProfile)
+      );
+
+      if (selected.length === 0) {
+        throw new Error("Bitte mindestens eine Qwen-Teststufe auswählen.");
+      }
+
+      analysisCoordinator?.stop();
+
+      try {
+        if (!analysis) throw new Error("Analyse-Worker ist nicht initialisiert.");
+        if (analysis.getStatus().state !== "READY") {
+          await analysis.start();
+        }
+        if (analysis.getStatus().state !== "READY") {
+          throw new Error("Analyse-Worker ist für den Qwen-Test nicht bereit.");
+        }
+
+        while (analysis.getStatus().activeJobs > 0) {
+          const status = analysis.getStatus();
+          analysis.setQueueState(
+            status.queuedJobs,
+            status.activeJobs,
+            "Qwen-Einzeltest wartet auf den aktuell laufenden Analysejob …"
+          );
+          await new Promise<void>((resolve) => setTimeout(resolve, 500));
+        }
+
+        const results: QwenBenchmarkStageResult[] = [];
+
+        for (const profile of selected) {
+          const stage = await analysis.request<QwenBenchmarkStageResult>(
+            "benchmark_qwen3vl",
+            {
+              path: normalizedPath,
+              profile
+            },
+            1800000
+          );
+
+          results.push(stage);
+          sendToRenderer("analysis:qwenBenchmarkStage", stage);
+        }
+
+        return {
+          path: normalizedPath,
+          results
+        };
+      } finally {
+        if (!isQuitting) {
+          void analysisCoordinator?.start();
+        }
+      }
+    }
+  );
 
   ipcMain.handle(
     "analysis:listErrors",
