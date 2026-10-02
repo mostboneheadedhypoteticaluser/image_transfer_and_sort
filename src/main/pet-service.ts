@@ -73,6 +73,8 @@ export class PetService {
           clusters: clustered.clusters
         });
       }
+
+      await this.catalog.request("autoAssignKnownPetCandidates", { sourceId });
     }
 
     const [candidates, pets] = await Promise.all([
@@ -101,11 +103,12 @@ export class PetService {
 
   async confirmCandidate(
     candidateId: number,
-    name: string
+    name: string,
+    rejectedPetId?: number
   ): Promise<ConfirmPetResult> {
     return this.catalog.request<ConfirmPetResult>(
       "confirmPetCandidate",
-      { candidateId, name }
+      { candidateId, name, rejectedPetId }
     );
   }
 
