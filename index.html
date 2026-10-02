@@ -220,6 +220,9 @@
             <button id="mediaTab" class="view-tab active" type="button">
               Alle Medien <span id="mediaTabCount" class="tab-count">0</span>
             </button>
+            <button id="searchTab" class="view-tab" type="button">
+              Kombinierte Suche <span id="searchTabCount" class="tab-count">0</span>
+            </button>
             <button id="duplicateTab" class="view-tab" type="button">
               Dubletten <span id="duplicateTabCount" class="tab-count">0</span>
             </button>
@@ -235,6 +238,53 @@
           </div>
 
           <div id="mediaView" class="catalog-view">
+            <section id="searchPanel" class="search-panel" hidden>
+              <div class="search-panel-heading">
+                <div>
+                  <h3>Kombinierte Suche</h3>
+                  <p>Mehrere ausgewählte Kriterien werden mit UND verknüpft. Innerhalb einer Gruppe kannst du mehrere konkrete Personen, Haustiere oder Motive verlangen.</p>
+                </div>
+                <span id="searchSummary" class="search-summary">Noch keine Suche ausgeführt.</span>
+              </div>
+
+              <div class="search-grid">
+                <section class="search-group">
+                  <h4>Personen</h4>
+                  <p>Nur bereits bestätigte Personen.</p>
+                  <div id="searchPersons" class="search-facets"></div>
+                </section>
+
+                <section class="search-group">
+                  <h4>Haustiere</h4>
+                  <p>Bestätigte bzw. sicher automatisch zugeordnete Haustiere.</p>
+                  <div id="searchPets" class="search-facets"></div>
+                </section>
+
+                <section class="search-group search-group-wide">
+                  <h4>Motive</h4>
+                  <p>Nur Motive aus der neuen NanoDet/YOLOX-Ensemble-Erkennung.</p>
+                  <div id="searchObjects" class="search-facets motif-facets"></div>
+                </section>
+
+                <section class="search-group">
+                  <h4>Anzahl Tiere</h4>
+                  <div class="search-count-row">
+                    <label for="searchMinDogs">Mindestens Hunde</label>
+                    <input id="searchMinDogs" type="number" min="0" max="20" step="1" value="0" />
+                  </div>
+                  <div class="search-count-row">
+                    <label for="searchMinCats">Mindestens Katzen</label>
+                    <input id="searchMinCats" type="number" min="0" max="20" step="1" value="0" />
+                  </div>
+                </section>
+              </div>
+
+              <div class="search-actions">
+                <button id="runSearch" class="primary" type="button">Suchen</button>
+                <button id="resetSearch" class="ghost" type="button">Suchkriterien zurücksetzen</button>
+              </div>
+            </section>
+
             <div class="table-wrap">
               <table>
                 <thead>
