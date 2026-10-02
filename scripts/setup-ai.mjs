@@ -106,6 +106,39 @@ function venvPython() {
     : path.join(venv, "bin", "python");
 }
 
+function hasCommand(command) {
+  const result = spawnSync(command, ["--version"], {
+    encoding: "utf8",
+    windowsHide: true
+  });
+  return !result.error && result.status === 0;
+}
+
+function requireLlamaCpp() {
+  const candidates =
+    process.platform === "win32"
+      ? ["llama-server.exe", "llama-server"]
+      : ["llama-server"];
+
+  for (const candidate of candidates) {
+    if (hasCommand(candidate)) {
+      console.log(`llama.cpp gefunden: ${candidate}`);
+      return candidate;
+    }
+  }
+
+  const installHint =
+    process.platform === "win32"
+      ? "winget install llama.cpp"
+      : "Bitte eine aktuelle llama.cpp-Version mit llama-server installieren.";
+
+  throw new Error(
+    "llama.cpp / llama-server wurde nicht gefunden. " +
+    "Installiere es zuerst mit: " + installHint +
+    " Danach dieses Setup erneut ausführen."
+  );
+}
+
 async function ensureModel(model) {
   mkdirSync(modelDir, { recursive: true });
 
@@ -169,10 +202,14 @@ run(venvPython(), [
 ]);
 
 console.log("");
-console.log("Prüfe/lade Qwen3-VL-8B-Thinking für die große Bildanalyse …");
+console.log("Prüfe/lade Qwen3-VL-8B-Thinking GGUF für die große Bildanalyse …");
 run(venvPython(), [
   path.join(root, "workers", "python-ai", "setup_qwen3vl.py")
 ]);
+
+console.log("");
+console.log("Prüfe llama.cpp …");
+const llamaServer = requireLlamaCpp();
 
 console.log("");
 console.log("AI-Umgebung ist bereit.");
@@ -185,6 +222,7 @@ console.log(
   path.join(modelDir, "siglip2-so400m-patch16-naflex")
 );
 console.log(
-  "Qwen3-VL-8B-Thinking: " +
-  path.join(modelDir, "qwen3-vl-8b-thinking")
+  "Qwen3-VL-8B-Thinking GGUF: " +
+  path.join(modelDir, "qwen3-vl-8b-thinking-gguf")
 );
+console.log("llama.cpp Server: " + llamaServer);
