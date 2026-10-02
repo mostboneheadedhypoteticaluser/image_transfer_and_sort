@@ -169,9 +169,9 @@ run(venvPython(), [
 ]);
 
 console.log("");
-console.log("Prüfe/lade Präzisionsmodelle für Motiverkennung …");
+console.log("Prüfe/lade Qwen3-VL-8B-Thinking für die große Bildanalyse …");
 run(venvPython(), [
-  path.join(root, "workers", "python-ai", "setup_object_models.py")
+  path.join(root, "workers", "python-ai", "setup_qwen3vl.py")
 ]);
 
 console.log("");
@@ -184,5 +184,7 @@ console.log(
   "SigLIP2 So400m NaFlex: " +
   path.join(modelDir, "siglip2-so400m-patch16-naflex")
 );
-console.log("Grounding DINO Base: " + path.join(modelDir, "grounding-dino-base"));
-console.log("RF-DETR Large: " + path.join(modelDir, "rfdetr"));
+console.log(
+  "Qwen3-VL-8B-Thinking: " +
+  path.join(modelDir, "qwen3-vl-8b-thinking")
+);
