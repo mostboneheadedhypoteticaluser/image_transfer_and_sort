@@ -230,6 +230,9 @@
               <button id="analysisCopyDevLogButton" class="ghost" type="button">
                 Dev-Protokoll kopieren
               </button>
+              <button id="qwenBenchmarkButton" class="ghost" type="button">
+                Qwen-Einzelbild testen
+              </button>
               <span class="analysis-note">Gesichts- und Haustiererkennung bleiben unverändert und haben Vorrang. Personen- und Haustierbestätigung ist bereits nach den Identitätsstufen möglich. Erst danach folgen die rechenintensiven allgemeinen Analysen: SigLIP2 und als letzte Rechenstufe Qwen3-VL-8B-Thinking Q8_0. Qwen untersucht Gesamtbild und überlappende Kacheln; jeder Kandidat wird danach zweimal am markierten Ausschnitt neu geprüft.</span>
             </div>
           </div>
@@ -408,6 +411,62 @@
         </section>
       </main>
     </div>
+
+    <dialog id="qwenBenchmarkDialog" class="app-dialog qwen-benchmark-dialog">
+      <div class="dialog-header">
+        <div>
+          <h2>Qwen-Einzelbild-Benchmark</h2>
+          <p>Ein Bild stufenweise analysieren, ohne die Ergebnisse in den Katalog zu schreiben.</p>
+        </div>
+        <button id="closeQwenBenchmark" class="dialog-close" type="button" aria-label="Schließen">×</button>
+      </div>
+
+      <div class="qwen-benchmark-body">
+        <div class="qwen-benchmark-file-row">
+          <button id="pickQwenBenchmarkImage" class="secondary" type="button">Bild auswählen</button>
+          <code id="qwenBenchmarkFilePath">Noch kein Bild ausgewählt.</code>
+        </div>
+
+        <fieldset class="qwen-benchmark-profiles">
+          <legend>Teststufen</legend>
+          <label>
+            <input type="checkbox" name="qwenBenchmarkProfile" value="whole" checked />
+            <span><strong>1 · Gesamtbild</strong><small>1 Modellaufruf, keine Kacheln, keine Einzelprüfung.</small></span>
+          </label>
+          <label>
+            <input type="checkbox" name="qwenBenchmarkProfile" value="tiles4" checked />
+            <span><strong>2 · Gesamtbild + 4 Kacheln</strong><small>Mehr Details, noch ohne Crop-Prüfung.</small></span>
+          </label>
+          <label>
+            <input type="checkbox" name="qwenBenchmarkProfile" value="single-check" checked />
+            <span><strong>3 · Bis 6 Kacheln + 1 Prüfung</strong><small>Jeder Kandidat wird einmal am Ausschnitt bestätigt.</small></span>
+          </label>
+          <label>
+            <input type="checkbox" name="qwenBenchmarkProfile" value="full" checked />
+            <span><strong>4 · Vollanalyse</strong><small>Aktuelles Verfahren: bis 12 Kacheln und Doppelprüfung.</small></span>
+          </label>
+        </fieldset>
+
+        <div class="qwen-benchmark-actions">
+          <button id="runQwenBenchmark" class="primary" type="button">Ausgewählte Stufen starten</button>
+          <button id="copyQwenBenchmark" class="ghost" type="button" disabled>Testprotokoll kopieren</button>
+        </div>
+
+        <div id="qwenBenchmarkLive" class="qwen-benchmark-live">
+          Bild auswählen und anschließend den Test starten.
+        </div>
+
+        <div id="qwenBenchmarkResults" class="qwen-benchmark-results">
+          <p class="qwen-benchmark-empty">Noch keine Testergebnisse.</p>
+        </div>
+
+        <p class="qwen-benchmark-note">
+          Der erste Test kann zusätzlich die einmalige Modellladezeit enthalten. Diese wird separat ausgewiesen.
+          Hunde und Katzen können in der Testausgabe sichtbar sein; die Produktivpipeline überlässt ihre endgültige
+          Zuordnung weiterhin der Haustiererkennung.
+        </p>
+      </div>
+    </dialog>
 
     <dialog id="analysisErrorDialog" class="app-dialog error-dialog">
       <div class="dialog-header">
