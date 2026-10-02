@@ -3392,6 +3392,7 @@ function knownPetCentroids(sourceId: number) {
     JOIN pet_embeddings pe ON pe.pet_detection_id=pd.id
     WHERE m.source_id=?
       AND m.availability='AVAILABLE'
+      AND pa.assignment_source='CONFIRMED'
       AND pe.model_version='DogReID DINOv2-B14 0.2.0'
       AND pe.input_sha256=m.sha256
       AND pd.input_sha256=m.sha256
