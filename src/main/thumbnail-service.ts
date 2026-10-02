@@ -121,6 +121,51 @@ export class ThumbnailService {
     return result;
   }
 
+  async generatePreview(
+    inputPath: string,
+    sha256: string,
+    maxWidth = 1920,
+    maxHeight = 1440
+  ): Promise<ThumbnailResult> {
+    if (!this.child) this.start();
+
+    const child = this.child;
+    if (!child) throw new Error("Thumbnail-Worker konnte nicht gestartet werden.");
+
+    const safeHash = sha256.toLowerCase().replace(/[^a-f0-9]/g, "");
+    if (safeHash.length < 16) {
+      throw new Error("Ungültiger SHA-256 für Vorschau-Cache.");
+    }
+
+    const outputPath = path.join(
+      this.cacheRoot,
+      "previews",
+      safeHash.slice(0, 2),
+      `${safeHash}.jpg`
+    );
+
+    const id = randomUUID();
+
+    const result = new Promise<ThumbnailResult>((resolve, reject) => {
+      this.pending.set(id, {
+        resolve: (value) => resolve(value as ThumbnailResult),
+        reject
+      });
+    });
+
+    child.postMessage({
+      kind: "request",
+      id,
+      mode: "preview",
+      inputPath,
+      outputPath,
+      maxWidth,
+      maxHeight
+    });
+
+    return result;
+  }
+
   async generatePetCrop(
     inputPath: string,
     sha256: string,
