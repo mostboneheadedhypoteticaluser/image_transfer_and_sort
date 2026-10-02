@@ -458,6 +458,57 @@ db.exec(`
   WHERE status='RUNNING';
 `);
 
+function normalizeHistoricalUnavailableJobs(): void {
+  const rows = db.prepare(`
+    SELECT DISTINCT j.media_id, m.absolute_path
+    FROM analysis_jobs j
+    JOIN media_items m ON m.id=j.media_id
+    WHERE j.status='FAILED'
+      AND lower(COALESCE(j.error_message,'')) LIKE 'datei ist nicht erreichbar:%'
+  `).all();
+
+  if (rows.length === 0) return;
+
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const markMissing = db.prepare(`
+      UPDATE media_items
+      SET availability='MISSING'
+      WHERE id=?
+    `);
+
+    const markUnavailable = db.prepare(`
+      UPDATE analysis_jobs
+      SET
+        status='UNAVAILABLE',
+        error_message=?,
+        finished_at=COALESCE(finished_at, CURRENT_TIMESTAMP),
+        updated_at=CURRENT_TIMESTAMP
+      WHERE media_id=?
+        AND status<>'DONE'
+    `);
+
+    for (const row of rows) {
+      const mediaId = Number(row.media_id);
+      const absolutePath = String(row.absolute_path);
+      if (existsSync(absolutePath)) continue;
+
+      markMissing.run(mediaId);
+      markUnavailable.run(
+        `Datei aktuell nicht erreichbar: ${absolutePath}`,
+        mediaId
+      );
+    }
+
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+}
+
+normalizeHistoricalUnavailableJobs();
+
 let scanRunning = false;
 
 function post(message: WorkerResponse): void {
