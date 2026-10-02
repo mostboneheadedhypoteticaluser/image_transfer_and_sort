@@ -499,9 +499,12 @@ def detect_pets(file_path: str) -> dict:
     strides = (8, 16, 32, 64)
     reg_max = 7
     project = np.arange(reg_max + 1, dtype=np.float32)
-    boxes: list[list[float]] = []
-    scores: list[float] = []
-    class_ids: list[int] = []
+    candidates_by_class: dict[int, list[tuple[list[float], float]]] = {}
+
+    # Bewusst etwas niedriger Roh-Schwellwert: schwächere echte Treffer dürfen
+    # in die spätere Zwei-Modell-Fusion gelangen. Erst dort wird entschieden,
+    # ob ein Motiv belastbar genug für Anzeige und Suche ist.
+    raw_threshold = 0.25
 
     for stride, cls_score, bbox_pred in zip(
         strides,
@@ -546,8 +549,11 @@ def detect_pets(file_path: str) -> dict:
             class_id = int(class_id)
             confidence = float(confidence)
 
-            # COCO: cat=15, dog=16.
-            if class_id not in (15, 16) or confidence < 0.38:
+            if (
+                class_id < 0
+                or class_id >= len(COCO_CLASS_NAMES)
+                or confidence < raw_threshold
+            ):
                 continue
 
             x1 = max(0.0, float(anchor[0] - distance[0]))
@@ -555,18 +561,23 @@ def detect_pets(file_path: str) -> dict:
             x2 = min(416.0, float(anchor[0] + distance[2]))
             y2 = min(416.0, float(anchor[1] + distance[3]))
 
-            boxes.append([x1, y1, max(0.0, x2 - x1), max(0.0, y2 - y1)])
-            scores.append(confidence)
-            class_ids.append(class_id)
+            box = [x1, y1, max(0.0, x2 - x1), max(0.0, y2 - y1)]
+            candidates_by_class.setdefault(class_id, []).append((box, confidence))
 
     pets: list[dict] = []
+    objects: list[dict] = []
 
-    if boxes:
-        indices = cv2.dnn.NMSBoxes(boxes, scores, 0.38, 0.60)
+    # NMS klassenweise ausführen. So verdrängt z. B. eine Person kein
+    # überlappendes Fahrrad oder einen Hund.
+    for class_id, candidates in candidates_by_class.items():
+        boxes = [box for box, _score in candidates]
+        scores = [score for _box, score in candidates]
+        keep = cv2.dnn.NMSBoxes(boxes, scores, raw_threshold, 0.50)
 
-        for raw_index in indices:
-            index = int(raw_index)
-            x, y, width, height = boxes[index]
+        for raw_index in keep:
+            local_index = int(np.asarray(raw_index).reshape(-1)[0])
+            x, y, width, height = boxes[local_index]
+            confidence = float(scores[local_index])
 
             original_x = max(0.0, (x - left) / scale)
             original_y = max(0.0, (y - top) / scale)
@@ -587,17 +598,31 @@ def detect_pets(file_path: str) -> dict:
             if original_width_box <= 1.0 or original_height_box <= 1.0:
                 continue
 
-            class_id = class_ids[index]
-            pets.append({
-                "class": "cat" if class_id == 15 else "dog",
+            item = {
+                "label": COCO_CLASS_NAMES[class_id],
                 "classId": class_id,
-                "score": float(scores[index]),
+                "score": confidence,
                 "x": original_x,
                 "y": original_y,
                 "width": original_width_box,
                 "height": original_height_box,
-            })
+            }
+            objects.append(item)
 
+            # Für die bestehende Haustier-Fusion bleibt die bisherige
+            # Mindestqualität erhalten.
+            if class_id in (15, 16) and confidence >= 0.38:
+                pets.append({
+                    "class": "cat" if class_id == 15 else "dog",
+                    "classId": class_id,
+                    "score": confidence,
+                    "x": original_x,
+                    "y": original_y,
+                    "width": original_width_box,
+                    "height": original_height_box,
+                })
+
+    objects.sort(key=lambda item: float(item["score"]), reverse=True)
     pets.sort(key=lambda pet: float(pet["score"]), reverse=True)
 
     return {
@@ -606,8 +631,8 @@ def detect_pets(file_path: str) -> dict:
         "imageWidth": int(original_width),
         "imageHeight": int(original_height),
         "pets": pets,
+        "objects": objects,
     }
-
 
 def yolox_letterbox(image, target_size: tuple[int, int] = (640, 640)):
     target_h, target_w = target_size
@@ -715,7 +740,7 @@ def detect_pets_yolox(file_path: str) -> dict:
 
     for class_id in range(class_count):
         scores = class_scores[:, class_id]
-        indices = np.where(scores >= 0.35)[0]
+        indices = np.where(scores >= 0.25)[0]
         if indices.size == 0:
             continue
 
@@ -725,7 +750,7 @@ def detect_pets_yolox(file_path: str) -> dict:
         keep = cv2.dnn.NMSBoxes(
             boxes,
             confidences,
-            0.35,
+            0.25,
             0.50,
         )
 
@@ -817,7 +842,157 @@ def box_iou(a: dict, b: dict) -> float:
     return intersection / union if union > 0.0 else 0.0
 
 
-def fuse_pet_detections(detections: list[dict]) -> dict:
+def fuse_object_detections(detections: list[dict]) -> list[dict]:
+    cleaned: list[dict] = []
+
+    for raw in detections:
+        if not isinstance(raw, dict):
+            continue
+
+        label = str(raw.get("label", "")).strip()
+        detector = str(raw.get("detector", "")).strip()
+        score = float(raw.get("score", 0.0))
+        class_id = int(raw.get("classId", -1))
+
+        if (
+            not label
+            or not detector
+            or class_id < 0
+            or class_id >= len(COCO_CLASS_NAMES)
+            or label != COCO_CLASS_NAMES[class_id]
+        ):
+            continue
+
+        item = {
+            "label": label,
+            "classId": class_id,
+            "detector": detector,
+            "score": score,
+            "x": float(raw.get("x", 0.0)),
+            "y": float(raw.get("y", 0.0)),
+            "width": float(raw.get("width", 0.0)),
+            "height": float(raw.get("height", 0.0)),
+        }
+
+        if (
+            item["width"] <= 1.0
+            or item["height"] <= 1.0
+            or not math.isfinite(item["score"])
+        ):
+            continue
+
+        cleaned.append(item)
+
+    cleaned.sort(key=lambda item: float(item["score"]), reverse=True)
+    groups: list[list[dict]] = []
+
+    for item in cleaned:
+        best_group = None
+        best_iou = 0.0
+
+        for group in groups:
+            if str(group[0]["label"]) != str(item["label"]):
+                continue
+            if any(
+                str(member["detector"]) == str(item["detector"])
+                for member in group
+            ):
+                continue
+
+            weights = np.array(
+                [max(0.01, float(member["score"])) for member in group],
+                dtype=np.float32,
+            )
+            centroid = {
+                key: float(np.average(
+                    [float(member[key]) for member in group],
+                    weights=weights,
+                ))
+                for key in ("x", "y", "width", "height")
+            }
+
+            overlap = box_iou(item, centroid)
+            if overlap >= 0.35 and overlap > best_iou:
+                best_iou = overlap
+                best_group = group
+
+        if best_group is None:
+            groups.append([item])
+        else:
+            best_group.append(item)
+
+    fused: list[dict] = []
+    common_large_classes = {
+        "person", "bicycle", "car", "motorcycle", "bus", "train",
+        "truck", "dog", "cat", "horse",
+    }
+
+    for group in groups:
+        sources = sorted({str(member["detector"]) for member in group})
+        scores = [float(member["score"]) for member in group]
+        agreement_count = len(sources)
+        label = str(group[0]["label"])
+        best_score = max(scores)
+
+        if agreement_count == 1:
+            detector = sources[0]
+            if label in common_large_classes:
+                minimum = 0.58 if detector.startswith("YOLOX") else 0.68
+            else:
+                minimum = 0.64 if detector.startswith("YOLOX") else 0.72
+
+            if best_score < minimum:
+                continue
+        else:
+            # Zwei unabhängige Modelle dürfen schwächere Einzelwerte retten.
+            # Extrem schwache Doppeltreffer werden trotzdem verworfen.
+            if best_score < 0.32 or (sum(scores) / len(scores)) < 0.28:
+                continue
+
+        weights = np.array(
+            [max(0.01, score) for score in scores],
+            dtype=np.float32,
+        )
+        box = {
+            key: float(np.average(
+                [float(member[key]) for member in group],
+                weights=weights,
+            ))
+            for key in ("x", "y", "width", "height")
+        }
+
+        fused_score = (
+            min(0.99, best_score + 0.10 * (1.0 - best_score))
+            if agreement_count >= 2
+            else best_score
+        )
+
+        fused.append({
+            "label": label,
+            "classId": int(group[0]["classId"]),
+            "score": float(fused_score),
+            "x": box["x"],
+            "y": box["y"],
+            "width": box["width"],
+            "height": box["height"],
+            "agreementCount": agreement_count,
+            "sources": sources,
+        })
+
+    fused.sort(
+        key=lambda item: (
+            -int(item["agreementCount"]),
+            -float(item["score"]),
+            str(item["label"]),
+        )
+    )
+    return fused
+
+
+def fuse_pet_detections(
+    detections: list[dict],
+    objects: list[dict] | None = None,
+) -> dict:
     cleaned: list[dict] = []
 
     for raw in detections:
@@ -946,8 +1121,9 @@ def fuse_pet_detections(detections: list[dict]) -> dict:
         "module": "pet-fuse-ensemble-v1",
         "fusion": "NanoDet+YOLOX-S weighted-box-v1",
         "pets": fused,
+        "objectFusion": "NanoDet+YOLOX-S consensus-v1",
+        "objects": fuse_object_detections(objects or []),
     }
-
 
 def dog_reid_session():
     global _dog_reid_session, _onnxruntime_module
@@ -1532,9 +1708,15 @@ def handle(message: dict) -> bool:
 
     if method == "fuse_pet_detections":
         detections = payload.get("detections") or []
+        objects = payload.get("objects") or []
         if not isinstance(detections, list):
             raise RuntimeError("Haustierdetektionen für die Fusion sind ungültig.")
-        respond(request_id, result=fuse_pet_detections(detections))
+        if not isinstance(objects, list):
+            raise RuntimeError("Motivdetektionen für die Fusion sind ungültig.")
+        respond(
+            request_id,
+            result=fuse_pet_detections(detections, objects),
+        )
         return True
 
     if method == "extract_face_embeddings":
