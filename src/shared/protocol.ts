@@ -325,6 +325,25 @@ export type MediaRecord = {
   lastSeenAt: string;
 };
 
+export type SearchFilter = {
+  personIds: number[];
+  petIds: number[];
+  objectLabels: string[];
+  minDogs: number;
+  minCats: number;
+};
+
+export type SearchFacets = {
+  persons: Array<{ id: number; name: string; mediaCount: number }>;
+  pets: Array<{
+    id: number;
+    name: string;
+    petClass: "dog" | "cat";
+    mediaCount: number;
+  }>;
+  objects: Array<{ label: string; mediaCount: number }>;
+};
+
 export type DuplicateItem = {
   id: number;
   relativePath: string;
@@ -371,6 +390,8 @@ export type CatalogMethod =
   | "addSource"
   | "getStats"
   | "listMedia"
+  | "getSearchFacets"
+  | "searchMedia"
   | "listDuplicateGroups"
   | "listRecycleMedia"
   | "enqueueAnalysisJobs"
