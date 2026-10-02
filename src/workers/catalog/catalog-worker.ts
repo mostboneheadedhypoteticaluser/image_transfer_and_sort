@@ -1349,6 +1349,9 @@ function listRecycleMedia(sourceId: number, requestedLimit: number) {
     objectLabels: row.object_labels
       ? String(row.object_labels).split(",").filter(Boolean)
       : [],
+    semanticReady: false,
+    semanticModel: null,
+    semanticScore: null,
     lastSeenAt: String(row.last_seen_at)
   }));
 }
