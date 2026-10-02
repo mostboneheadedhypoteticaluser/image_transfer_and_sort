@@ -10,11 +10,13 @@ TARGET_DIR = WORKER_DIR / "models" / "qwen3-vl-8b-thinking"
 
 REQUIRED = (
     "config.json",
+    "chat_template.json",
     "generation_config.json",
     "model.safetensors.index.json",
     "preprocessor_config.json",
     "tokenizer.json",
     "tokenizer_config.json",
+    "video_preprocessor_config.json",
     "vocab.json",
     "merges.txt",
     "model-00001-of-00004.safetensors",
