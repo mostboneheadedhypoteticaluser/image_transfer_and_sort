@@ -223,8 +223,9 @@ export class AnalysisService {
           capabilities.qwenObjectDetection !== true
         ) {
           throw new Error(
-            "Qwen3-VL-8B-Thinking für die große Motiverkennung fehlt oder ist unvollständig. " +
-            "Bitte 'npm.cmd run setup:ai' ausführen."
+            "Qwen3-VL-8B-Thinking GGUF Q8_0, der FP16-Vision-Projektor oder llama.cpp " +
+            "fehlt. Bitte unter Windows zuerst 'winget install llama.cpp' und danach " +
+            "'npm.cmd run setup:ai' ausführen."
           );
         }
 
