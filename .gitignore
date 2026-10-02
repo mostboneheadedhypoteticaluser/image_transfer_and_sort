@@ -19,3 +19,5 @@ workers/python-ai/models/siglip2-so400m-patch16-naflex/
 
 
 workers/python-ai/models/qwen3-vl-8b-thinking/
+
+workers/python-ai/models/qwen3-vl-8b-thinking-gguf/
