@@ -3739,7 +3739,7 @@ function completeVerifiedObjectDetectionJob(jobId: number, result: unknown) {
   const detectorVersion =
     typeof value.detector === "string" && value.detector.trim()
       ? value.detector.trim()
-      : "Qwen3-VL-8B-Thinking Q8_0 GGUF Q8_0 + mmproj F16 open-vocabulary v2";
+      : "Qwen3-VL-8B-Thinking GGUF Q8_0 + mmproj F16 open-vocabulary v2";
 
   const candidateCount = Math.max(0, Math.trunc(Number(value.candidateCount) || 0));
   const rejectedCount = Math.max(0, Math.trunc(Number(value.rejectedCount) || 0));
@@ -3850,7 +3850,7 @@ function completeVerifiedObjectDetectionJob(jobId: number, result: unknown) {
         candidateCount,
         verifiedCount: written,
         rejectedCount,
-        verificationVersion: "qwen3vl-object-v1"
+        verificationVersion: "qwen3vl-gguf-object-v2"
       }),
       jobId
     );
