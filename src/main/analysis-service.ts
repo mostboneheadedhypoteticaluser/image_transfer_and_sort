@@ -14,9 +14,15 @@ type Pending = {
 
 type WorkerResponse = {
   id?: string | null;
-  ok: boolean;
+  ok?: boolean;
   result?: unknown;
   error?: string;
+  event?: string;
+  requestId?: string | null;
+  message?: string;
+  phase?: string;
+  current?: number;
+  total?: number;
 };
 
 type PythonCandidate = {
@@ -329,6 +335,23 @@ export class AnalysisService {
       try {
         message = JSON.parse(line) as WorkerResponse;
       } catch {
+        return;
+      }
+
+      if (message.event === "progress") {
+        const requestId = message.requestId ?? null;
+
+        // Fortschritt nur anzeigen, solange die zugehörige Anfrage wirklich
+        // noch aktiv ist. So kann ein verspätetes Event keinen neueren Status
+        // überschreiben.
+        if (
+          requestId &&
+          this.pending.has(requestId) &&
+          typeof message.message === "string" &&
+          message.message.trim()
+        ) {
+          this.publish({ message: message.message.trim() });
+        }
         return;
       }
 
