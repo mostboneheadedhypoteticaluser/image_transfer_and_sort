@@ -3824,6 +3824,97 @@ function completePetEmbeddingJob(jobId: number, result: unknown) {
   return { completed: true, embeddingCount: written };
 }
 
+function completeSemanticEmbeddingJob(jobId: number, result: unknown) {
+  if (!result || typeof result !== "object") {
+    throw new Error("Semantik-Ergebnis ist ungültig.");
+  }
+
+  const value = result as Record<string, unknown>;
+  const modelVersion =
+    typeof value.model === "string" && value.model.trim()
+      ? value.model.trim()
+      : "SigLIP2 unbekannt";
+  const dimension = Math.trunc(Number(value.dimension));
+  const maxNumPatches = Math.trunc(Number(value.maxNumPatches));
+  const precision =
+    typeof value.precision === "string" && value.precision.trim()
+      ? value.precision.trim()
+      : "float32";
+  const vector = Array.isArray(value.vector) ? value.vector : [];
+
+  if (
+    dimension <= 0 ||
+    dimension !== vector.length ||
+    maxNumPatches <= 0
+  ) {
+    throw new Error("Semantik-Vektor oder Modellparameter sind ungültig.");
+  }
+
+  const blob = embeddingToBlob(vector);
+  const job = jobForModule(jobId, "semantic-embed-siglip2-v1");
+  const mediaId = Number(job.media_id);
+  const inputSha256 = String(job.input_sha256 ?? "");
+
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    db.prepare(`
+      INSERT INTO semantic_embeddings(
+        media_id,
+        model_version,
+        input_sha256,
+        dimension,
+        vector_blob,
+        max_num_patches,
+        precision,
+        updated_at
+      )
+      VALUES(?,?,?,?,?,?,?,CURRENT_TIMESTAMP)
+      ON CONFLICT(media_id) DO UPDATE SET
+        model_version=excluded.model_version,
+        input_sha256=excluded.input_sha256,
+        dimension=excluded.dimension,
+        vector_blob=excluded.vector_blob,
+        max_num_patches=excluded.max_num_patches,
+        precision=excluded.precision,
+        updated_at=CURRENT_TIMESTAMP
+    `).run(
+      mediaId,
+      modelVersion,
+      inputSha256,
+      dimension,
+      blob,
+      maxNumPatches,
+      precision
+    );
+
+    db.prepare(`
+      UPDATE analysis_jobs
+      SET
+        status='DONE',
+        result_json=?,
+        error_message=NULL,
+        finished_at=CURRENT_TIMESTAMP,
+        updated_at=CURRENT_TIMESTAMP
+      WHERE id=?
+    `).run(
+      JSON.stringify({
+        model: modelVersion,
+        dimension,
+        maxNumPatches,
+        precision
+      }),
+      jobId
+    );
+
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+
+  return { completed: true, dimension, model: modelVersion };
+}
+
 function getPetEmbeddingsForClustering(
   sourceId: number,
   algorithmVersion: string
@@ -6385,6 +6476,11 @@ async function dispatch(method: CatalogMethod, payload: Record<string, unknown> 
       );
     case "completePetEmbeddingJob":
       return completePetEmbeddingJob(
+        asNumber(payload.jobId, "jobId"),
+        payload.result
+      );
+    case "completeSemanticEmbeddingJob":
+      return completeSemanticEmbeddingJob(
         asNumber(payload.jobId, "jobId"),
         payload.result
       );
