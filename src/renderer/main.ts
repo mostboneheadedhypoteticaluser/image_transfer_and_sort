@@ -789,7 +789,7 @@ function renderRows(rows: MediaRecord[], emptyText = "Noch keine Medien katalogi
         "Motive: " + visible.join(" · ") +
         (motifLabels.length > visible.length ? " …" : "");
       motifBadge.title =
-        "Dreifach geprüft: RF-DETR Large + Grounding DINO + SigLIP2: " +
+        "Qwen3-VL-8B: Vollbild/Kachel erkannt und pro Ausschnitt doppelt bestätigt: " +
         motifLabels.join(", ");
       stateCell.appendChild(motifBadge);
     }
@@ -1833,7 +1833,7 @@ const analysisModuleLabels: Record<string, string> = {
   "pet-detect-yolox-v1": "Haustierdetektor YOLOX-S",
   "pet-fuse-ensemble-v1": "Haustier-Ergebnisse fusionieren",
   "pet-embed-dogreid-v1": "Individuelle Hundemerkmale",
-  "object-detect-verified-v2": "Motive präzise prüfen (RF-DETR + Grounding DINO + SigLIP2)",
+  "object-detect-qwen3vl-v1": "Motive · Qwen3-VL-8B Vollbild/Kachel + Doppelprüfung",
   "semantic-embed-siglip2-v1": "Semantikanalyse (SigLIP2 So400m NaFlex)"
 };
 
