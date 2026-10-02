@@ -38,6 +38,28 @@ export type AnalysisJob = {
   sha256: string;
 };
 
+export type AnalysisErrorRecord = {
+  id: number;
+  mediaId: number;
+  module: string;
+  relativePath: string;
+  extension: string;
+  attempts: number;
+  errorMessage: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+};
+
+export type RetryAnalysisResult = {
+  retried: number;
+};
+
+export type MediaPreviewInfo = {
+  mediaId: number;
+  absolutePath: string;
+  inputSha256: string;
+};
+
 export type PetDetectionForEmbedding = {
   id: number;
   petClass: "dog" | "cat";
@@ -346,6 +368,9 @@ export type CatalogMethod =
   | "listRecycleMedia"
   | "enqueueAnalysisJobs"
   | "getAnalysisQueueStats"
+  | "listAnalysisErrors"
+  | "retryAnalysisJob"
+  | "retryFailedAnalysisJobs"
   | "claimAnalysisJob"
   | "completeAnalysisJob"
   | "failAnalysisJob"
@@ -380,6 +405,7 @@ export type CatalogMethod =
   | "renamePerson"
   | "getFaceCropInfo"
   | "getThumbnailInfo"
+  | "getMediaPreviewInfo"
   | "scanSource"
   | "restoreMedia"
   | "resetCatalog";
