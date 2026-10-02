@@ -222,10 +222,25 @@ export class AnalysisService {
           capabilities.qwen3vlRuntime !== true ||
           capabilities.qwenObjectDetection !== true
         ) {
+          const missing: string[] = [];
+
+          if (capabilities.qwen3vlModel !== true) {
+            missing.push("Qwen3-VL GGUF Q8_0 / FP16-Vision-Projektor");
+          }
+          if (capabilities.qwen3vlRuntime !== true) {
+            missing.push("llama-server (llama.cpp)");
+          }
+          if (
+            capabilities.qwenObjectDetection !== true &&
+            missing.length === 0
+          ) {
+            missing.push("Qwen-Motiverkennungs-Laufzeit");
+          }
+
           throw new Error(
-            "Qwen3-VL-8B-Thinking GGUF Q8_0, der FP16-Vision-Projektor oder llama.cpp " +
-            "fehlt. Bitte unter Windows zuerst 'winget install llama.cpp' und danach " +
-            "'npm.cmd run setup:ai' ausführen."
+            "Qwen3-VL-Motiverkennung ist nicht vollständig bereit. Fehlt: " +
+            missing.join(", ") +
+            ". Bitte 'npm.cmd run setup:ai' ausführen."
           );
         }
 
