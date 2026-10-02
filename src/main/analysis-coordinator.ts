@@ -104,11 +104,11 @@ const MODULES: ModuleSpec[] = [
     timeoutMs: 120000
   },
   {
-    module: "object-detect-qwen3vl-v1",
+    module: "object-detect-qwen3vl-gguf-v2",
     stage: "objectVerification",
     workerMethod: "detect_qwen3vl_objects",
     completeMethod: "completeVerifiedObjectDetectionJob",
-    label: "Motive · Qwen3-VL-8B Vollbild/Kacheln",
+    label: "Motive · Qwen3-VL-8B Q8_0 Vollbild/Kacheln",
     timeoutMs: 7200000
   },
   {
@@ -372,7 +372,7 @@ export class AnalysisCoordinator {
           extraPayload = { pets };
         }
 
-        if (spec.module === "object-detect-qwen3vl-v1") {
+        if (spec.module === "object-detect-qwen3vl-gguf-v2") {
           // Die alten Detektoren sind nur zusätzliche Recall-Hinweise.
           // Qwen analysiert Gesamtbild und Kacheln unabhängig davon und muss
           // jeden Hinweis anschließend selbst doppelt bestätigen.
