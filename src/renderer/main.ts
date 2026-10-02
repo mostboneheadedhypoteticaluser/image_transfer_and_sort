@@ -2,6 +2,8 @@ import "./style.css";
 import type {
   AnalysisErrorRecord,
   AnalysisWorkerStatus,
+  QwenBenchmarkProfile,
+  QwenBenchmarkStageResult,
   DuplicateGroup,
   MediaRecord,
   PersonOverview,
@@ -84,6 +86,18 @@ const semanticStageCounts = document.querySelector<HTMLElement>("#semanticStageC
 const analysisErrorsButton = document.querySelector<HTMLButtonElement>("#analysisErrorsButton")!;
 const analysisDevLogButton = document.querySelector<HTMLButtonElement>("#analysisDevLogButton")!;
 const analysisCopyDevLogButton = document.querySelector<HTMLButtonElement>("#analysisCopyDevLogButton")!;
+const qwenBenchmarkButton = document.querySelector<HTMLButtonElement>("#qwenBenchmarkButton")!;
+const qwenBenchmarkDialog = document.querySelector<HTMLDialogElement>("#qwenBenchmarkDialog")!;
+const closeQwenBenchmarkButton = document.querySelector<HTMLButtonElement>("#closeQwenBenchmark")!;
+const pickQwenBenchmarkImageButton = document.querySelector<HTMLButtonElement>("#pickQwenBenchmarkImage")!;
+const runQwenBenchmarkButton = document.querySelector<HTMLButtonElement>("#runQwenBenchmark")!;
+const copyQwenBenchmarkButton = document.querySelector<HTMLButtonElement>("#copyQwenBenchmark")!;
+const qwenBenchmarkFilePath = document.querySelector<HTMLElement>("#qwenBenchmarkFilePath")!;
+const qwenBenchmarkLive = document.querySelector<HTMLDivElement>("#qwenBenchmarkLive")!;
+const qwenBenchmarkResults = document.querySelector<HTMLDivElement>("#qwenBenchmarkResults")!;
+const qwenBenchmarkProfileInputs = Array.from(
+  document.querySelectorAll<HTMLInputElement>('input[name="qwenBenchmarkProfile"]')
+);
 const analysisErrorCount = document.querySelector<HTMLSpanElement>("#analysisErrorCount")!;
 const analysisErrorDialog = document.querySelector<HTMLDialogElement>("#analysisErrorDialog")!;
 const closeAnalysisErrorsButton = document.querySelector<HTMLButtonElement>("#closeAnalysisErrors")!;
@@ -124,6 +138,152 @@ let lastSemanticDone = -1;
 let analysisRefreshTimer: number | null = null;
 let searchFacetsSourceId: number | null = null;
 let latestAnalysisStatus: AnalysisWorkerStatus | null = null;
+let qwenBenchmarkSelectedPath: string | null = null;
+let qwenBenchmarkRunning = false;
+let qwenBenchmarkStages: QwenBenchmarkStageResult[] = [];
+
+function benchmarkDuration(ms: number): string {
+  const totalSeconds = Math.max(0, Math.round(ms / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+
+  if (hours > 0) {
+    return hours.toLocaleString("de-DE") + ":" +
+      minutes.toString().padStart(2, "0") + ":" +
+      seconds.toString().padStart(2, "0") + " h";
+  }
+  if (minutes > 0) {
+    return minutes.toLocaleString("de-DE") + ":" +
+      seconds.toString().padStart(2, "0") + " min";
+  }
+  return seconds.toLocaleString("de-DE") + " s";
+}
+
+function benchmarkObjectSummary(stage: QwenBenchmarkStageResult): string {
+  if (stage.objects.length === 0) return "Keine bestätigten Motive.";
+
+  const counts = new Map<string, number>();
+  for (const object of stage.objects) {
+    counts.set(object.label, (counts.get(object.label) ?? 0) + 1);
+  }
+
+  return [...counts.entries()]
+    .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
+    .map(([label, count]) => count > 1 ? label + " ×" + count : label)
+    .join(" · ");
+}
+
+function renderQwenBenchmarkStage(stage: QwenBenchmarkStageResult): void {
+  const existingIndex = qwenBenchmarkStages.findIndex(
+    (item) => item.profile === stage.profile
+  );
+  if (existingIndex >= 0) {
+    qwenBenchmarkStages[existingIndex] = stage;
+  } else {
+    qwenBenchmarkStages.push(stage);
+  }
+
+  qwenBenchmarkStages.sort((left, right) => {
+    const order: QwenBenchmarkProfile[] = [
+      "whole",
+      "tiles4",
+      "single-check",
+      "full"
+    ];
+    return order.indexOf(left.profile) - order.indexOf(right.profile);
+  });
+
+  qwenBenchmarkResults.replaceChildren();
+
+  for (const result of qwenBenchmarkStages) {
+    const card = document.createElement("article");
+    card.className = "qwen-benchmark-result";
+
+    const header = document.createElement("div");
+    header.className = "qwen-benchmark-result-header";
+    const title = document.createElement("h3");
+    title.textContent = result.label;
+    const total = document.createElement("strong");
+    total.textContent = benchmarkDuration(result.timings.totalMs);
+    header.append(title, total);
+
+    const metrics = document.createElement("div");
+    metrics.className = "qwen-benchmark-metrics";
+
+    const metricValues: Array<[string, string]> = [
+      ["Modell bereit", benchmarkDuration(result.timings.modelReadyMs)],
+      ["Motivsuche", benchmarkDuration(result.timings.discoveryMs)],
+      ["Prüfungen", benchmarkDuration(result.timings.verificationMs)],
+      ["Bildbereiche", result.regionCount.toLocaleString("de-DE")],
+      ["Kandidaten", result.candidateCount.toLocaleString("de-DE")],
+      ["Ergebnis", result.verifiedCount.toLocaleString("de-DE")]
+    ];
+
+    for (const [label, value] of metricValues) {
+      const item = document.createElement("div");
+      item.className = "qwen-benchmark-metric";
+      const small = document.createElement("small");
+      small.textContent = label;
+      const strong = document.createElement("strong");
+      strong.textContent = value;
+      item.append(small, strong);
+      metrics.appendChild(item);
+    }
+
+    const summary = document.createElement("p");
+    summary.textContent = benchmarkObjectSummary(result);
+
+    const details = document.createElement("details");
+    const detailsSummary = document.createElement("summary");
+    detailsSummary.textContent = "Rohdaten anzeigen";
+    const pre = document.createElement("pre");
+    pre.textContent = JSON.stringify(result, null, 2);
+    details.append(detailsSummary, pre);
+
+    card.append(header, metrics, summary, details);
+    qwenBenchmarkResults.appendChild(card);
+  }
+
+  copyQwenBenchmarkButton.disabled = qwenBenchmarkStages.length === 0;
+}
+
+function renderQwenBenchmarkProgress(status: AnalysisWorkerStatus): void {
+  if (!qwenBenchmarkRunning) return;
+
+  const progress = status.progress;
+  if (progress?.kind === "qwen3vl" && progress.message) {
+    qwenBenchmarkLive.textContent = progress.message;
+  } else if (status.message) {
+    qwenBenchmarkLive.textContent = status.message;
+  }
+}
+
+function qwenBenchmarkCopyText(): string {
+  const lines = [
+    "Qwen-Einzelbild-Benchmark",
+    "Datei: " + (qwenBenchmarkSelectedPath ?? "—"),
+    ""
+  ];
+
+  for (const stage of qwenBenchmarkStages) {
+    lines.push(
+      stage.label,
+      stage.description,
+      "Gesamt: " + benchmarkDuration(stage.timings.totalMs),
+      "Modell bereit: " + benchmarkDuration(stage.timings.modelReadyMs),
+      "Motivsuche: " + benchmarkDuration(stage.timings.discoveryMs),
+      "Prüfungen: " + benchmarkDuration(stage.timings.verificationMs),
+      "Bildbereiche: " + stage.regionCount.toLocaleString("de-DE"),
+      "Kandidaten: " + stage.candidateCount.toLocaleString("de-DE"),
+      "Ergebnis: " + stage.verifiedCount.toLocaleString("de-DE"),
+      "Motive: " + benchmarkObjectSummary(stage),
+      ""
+    );
+  }
+
+  return lines.join("\n").trim();
+}
 
 function renderQwenLiveProgress(): void {
   const progress = latestAnalysisStatus?.progress;
@@ -2312,6 +2472,93 @@ analysisCopyDevLogButton.addEventListener("click", () => {
   });
 });
 
+qwenBenchmarkButton.addEventListener("click", () => {
+  if (!qwenBenchmarkDialog.open) qwenBenchmarkDialog.showModal();
+});
+
+closeQwenBenchmarkButton.addEventListener("click", () => {
+  if (qwenBenchmarkRunning) {
+    qwenBenchmarkLive.textContent =
+      "Der Test läuft noch. Nach Abschluss kann das Fenster geschlossen werden.";
+    return;
+  }
+  qwenBenchmarkDialog.close();
+});
+
+pickQwenBenchmarkImageButton.addEventListener("click", () => {
+  void runSafely(async () => {
+    const selected = await window.imageSorter.analysis.pickQwenBenchmarkImage();
+    if (!selected) return;
+
+    qwenBenchmarkSelectedPath = selected;
+    qwenBenchmarkFilePath.textContent = selected;
+    qwenBenchmarkFilePath.title = selected;
+    qwenBenchmarkLive.textContent =
+      "Bild ausgewählt. Jetzt eine oder mehrere Teststufen starten.";
+  });
+});
+
+runQwenBenchmarkButton.addEventListener("click", () => {
+  void runSafely(async () => {
+    if (!qwenBenchmarkSelectedPath) {
+      qwenBenchmarkLive.textContent = "Bitte zuerst ein Bild auswählen.";
+      return;
+    }
+
+    const profiles = qwenBenchmarkProfileInputs
+      .filter((input) => input.checked)
+      .map((input) => input.value as QwenBenchmarkProfile);
+
+    if (profiles.length === 0) {
+      qwenBenchmarkLive.textContent = "Bitte mindestens eine Teststufe auswählen.";
+      return;
+    }
+
+    qwenBenchmarkRunning = true;
+    qwenBenchmarkStages = [];
+    qwenBenchmarkResults.innerHTML =
+      '<p class="qwen-benchmark-empty">Test läuft …</p>';
+    runQwenBenchmarkButton.disabled = true;
+    pickQwenBenchmarkImageButton.disabled = true;
+    copyQwenBenchmarkButton.disabled = true;
+    closeQwenBenchmarkButton.disabled = true;
+    qwenBenchmarkLive.textContent =
+      "Normale Analyse wird für den Einzeltest pausiert. Qwen wird vorbereitet …";
+
+    try {
+      const result = await window.imageSorter.analysis.runQwenBenchmark(
+        qwenBenchmarkSelectedPath,
+        profiles
+      );
+
+      for (const stage of result.results) {
+        if (!qwenBenchmarkStages.some((item) => item.profile === stage.profile)) {
+          renderQwenBenchmarkStage(stage);
+        }
+      }
+
+      qwenBenchmarkLive.textContent =
+        "Test abgeschlossen · " +
+        result.results.length.toLocaleString("de-DE") +
+        (result.results.length === 1 ? " Stufe." : " Stufen.");
+    } finally {
+      qwenBenchmarkRunning = false;
+      runQwenBenchmarkButton.disabled = false;
+      pickQwenBenchmarkImageButton.disabled = false;
+      closeQwenBenchmarkButton.disabled = false;
+      copyQwenBenchmarkButton.disabled = qwenBenchmarkStages.length === 0;
+    }
+  });
+});
+
+copyQwenBenchmarkButton.addEventListener("click", () => {
+  void runSafely(async () => {
+    if (qwenBenchmarkStages.length === 0) return;
+    await copyText(qwenBenchmarkCopyText());
+    qwenBenchmarkLive.textContent = "Testprotokoll in die Zwischenablage kopiert.";
+  });
+});
+
 analysisErrorsButton.addEventListener("click", () => {
   void runSafely(async () => {
     await loadAnalysisErrors();
@@ -2423,7 +2670,15 @@ window.imageSorter.catalog.onProgress((progress) => {
   progressText.textContent = progress.message;
 });
 
-window.imageSorter.analysis.onStatus(renderAnalysisStatus);
+window.imageSorter.analysis.onStatus((status) => {
+  renderAnalysisStatus(status);
+  renderQwenBenchmarkProgress(status);
+});
+window.imageSorter.analysis.onQwenBenchmarkStage((stage) => {
+  if (qwenBenchmarkDialog.open || qwenBenchmarkRunning) {
+    renderQwenBenchmarkStage(stage);
+  }
+});
 window.imageSorter.analysis.onPipelineStatus(renderPipelineStatus);
 
 window.imageSorter.people.onUpdated(() => {
