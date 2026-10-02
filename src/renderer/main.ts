@@ -197,18 +197,24 @@ function renderPipelineStatus(status: PipelineStatus): void {
   lastPetFusionDone = status.petFusion.done;
   lastPetEmbeddingDone = status.petEmbeddings.done;
 
-  const totalFailed =
-    status.technical.failed +
-    status.thumbnails.failed +
-    status.imageMetadata.failed +
-    status.faces.failed +
-    status.faceEmbeddings.failed +
-    status.petDetection.failed +
-    status.petFusion.failed +
-    status.petEmbeddings.failed;
+  const stages = [
+    status.technical,
+    status.thumbnails,
+    status.imageMetadata,
+    status.faces,
+    status.faceEmbeddings,
+    status.petDetection,
+    status.petFusion,
+    status.petEmbeddings
+  ];
 
-  analysisErrorCount.textContent = totalFailed.toLocaleString("de-DE");
-  analysisErrorsButton.hidden = totalFailed === 0;
+  const totalIssues = stages.reduce(
+    (sum, stats) => sum + stats.failed + stats.unavailable,
+    0
+  );
+
+  analysisErrorCount.textContent = totalIssues.toLocaleString("de-DE");
+  analysisErrorsButton.hidden = totalIssues === 0;
 
   if (!visualDataChanged) return;
 
@@ -1526,6 +1532,7 @@ function analysisErrorCopyText(error: AnalysisErrorRecord): string {
     "Image Sortierer – Analysefehler",
     "Stufe: " + analysisModuleLabel(error.module),
     "Modul: " + error.module,
+    "Status: " + (error.status === "UNAVAILABLE" ? "Datei nicht erreichbar" : "Analysefehler"),
     "Datei: " + error.relativePath,
     "Dateityp: " + error.extension,
     "Versuche: " + error.attempts.toLocaleString("de-DE"),
@@ -1573,7 +1580,8 @@ function renderAnalysisErrors(errors: AnalysisErrorRecord[]): void {
       ? error.finishedAt.replace("T", " ")
       : "Zeitpunkt unbekannt";
     meta.textContent =
-      "Versuche: " + error.attempts.toLocaleString("de-DE") +
+      (error.status === "UNAVAILABLE" ? "Datei nicht erreichbar" : "Analysefehler") +
+      " · Versuche: " + error.attempts.toLocaleString("de-DE") +
       " · " + finished;
 
     heading.append(title, meta);
@@ -1593,6 +1601,32 @@ function renderAnalysisErrors(errors: AnalysisErrorRecord[]): void {
       });
     });
 
+    if (error.status === "UNAVAILABLE") {
+      const openFileButton = document.createElement("button");
+      openFileButton.type = "button";
+      openFileButton.className = "ghost";
+      openFileButton.textContent = "Datei öffnen";
+      openFileButton.addEventListener("click", () => {
+        void runSafely(async () => {
+          await window.imageSorter.analysis.openFile(error.mediaId);
+          progressText.textContent = "Datei wurde an Windows zum Öffnen übergeben.";
+        });
+      });
+
+      const openFolderButton = document.createElement("button");
+      openFolderButton.type = "button";
+      openFolderButton.className = "ghost";
+      openFolderButton.textContent = "Ordner öffnen";
+      openFolderButton.addEventListener("click", () => {
+        void runSafely(async () => {
+          await window.imageSorter.analysis.openFolder(error.mediaId);
+          progressText.textContent = "Ordner wurde geöffnet.";
+        });
+      });
+
+      actions.append(openFileButton, openFolderButton);
+    }
+
     const retryButton = document.createElement("button");
     retryButton.type = "button";
     retryButton.className = "secondary";
@@ -1604,12 +1638,15 @@ function renderAnalysisErrors(errors: AnalysisErrorRecord[]): void {
         progressText.textContent =
           result.retried > 0
             ? analysisModuleLabel(error.module) + " wurde erneut eingeplant."
-            : "Der Fehlerjob ist nicht mehr erneut startbar.";
+            : error.status === "UNAVAILABLE"
+              ? "Die Datei ist weiterhin nicht erreichbar."
+              : "Der Fehlerjob ist nicht mehr erneut startbar.";
         await loadAnalysisErrors();
       });
     });
 
-    actions.append(copyButton, retryButton);
+    actions.prepend(copyButton);
+    actions.append(retryButton);
     header.append(heading, actions);
 
     const path = document.createElement("div");
