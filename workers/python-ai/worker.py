@@ -19,10 +19,15 @@ except Exception:
 
 try:
     import torch
-    from transformers import AutoModel, AutoProcessor
+    from transformers import (
+        AutoModel,
+        AutoModelForZeroShotObjectDetection,
+        AutoProcessor,
+    )
 except Exception:
     torch = None
     AutoModel = None
+    AutoModelForZeroShotObjectDetection = None
     AutoProcessor = None
 
 try:
@@ -67,6 +72,22 @@ SIGLIP2_MODEL_DIR = os.path.join(
 SIGLIP2_MODEL_VERSION = "SigLIP2 So400m/16 NaFlex FP32 1024patch-v1"
 SIGLIP2_MAX_NUM_PATCHES = 1024
 
+GROUNDING_DINO_MODEL_DIR = os.path.join(
+    WORKER_DIR,
+    "models",
+    "grounding-dino-base",
+)
+RFDETR_MODEL_DIR = os.path.join(
+    WORKER_DIR,
+    "models",
+    "rfdetr",
+)
+RFDETR_MODEL_VERSION = "RF-DETR Large 2026 COCO 704"
+GROUNDING_DINO_MODEL_VERSION = "Grounding DINO Base"
+VERIFIED_OBJECT_VERSION = (
+    "RF-DETR Large + Grounding DINO Base + SigLIP2 So400m crop verifier v2"
+)
+
 COCO_CLASS_NAMES = (
     "person", "bicycle", "car", "motorcycle", "airplane", "bus", "train",
     "truck", "boat", "traffic light", "fire hydrant", "stop sign",
@@ -87,6 +108,10 @@ _dog_reid_session = None
 _onnxruntime_module = None
 _siglip2_model = None
 _siglip2_processor = None
+_siglip2_coco_text_features = None
+_rfdetr_model = None
+_grounding_dino_model = None
+_grounding_dino_processor = None
 
 
 @dataclass
@@ -123,6 +148,15 @@ def snapshot() -> dict:
             "siglip2Model": os.path.isfile(
                 os.path.join(SIGLIP2_MODEL_DIR, "model.safetensors")
             ),
+            "groundingDinoModel": os.path.isfile(
+                os.path.join(GROUNDING_DINO_MODEL_DIR, "model.safetensors")
+            ),
+            "rfdetrModel": any(
+                name == "rf-detr-large-2026.pth"
+                for _root, _dirs, files in os.walk(RFDETR_MODEL_DIR)
+                for name in files
+            ),
+            "rfdetr": importlib.util.find_spec("rfdetr") is not None,
             "torch": torch is not None,
             "transformers": AutoModel is not None and AutoProcessor is not None,
             "onnxRuntime": importlib.util.find_spec("onnxruntime") is not None,
@@ -152,6 +186,22 @@ def snapshot() -> dict:
                 and AutoProcessor is not None
                 and os.path.isfile(
                     os.path.join(SIGLIP2_MODEL_DIR, "model.safetensors")
+                )
+            ),
+            "verifiedObjectDetection": (
+                Image is not None
+                and ImageOps is not None
+                and torch is not None
+                and AutoModelForZeroShotObjectDetection is not None
+                and AutoProcessor is not None
+                and importlib.util.find_spec("rfdetr") is not None
+                and os.path.isfile(
+                    os.path.join(GROUNDING_DINO_MODEL_DIR, "model.safetensors")
+                )
+                and any(
+                    name == "rf-detr-large-2026.pth"
+                    for _root, _dirs, files in os.walk(RFDETR_MODEL_DIR)
+                    for name in files
                 )
             ),
         },
