@@ -2,6 +2,9 @@ import { contextBridge, ipcRenderer } from "electron";
 import type {
   AnalysisErrorRecord,
   AnalysisWorkerStatus,
+  QwenBenchmarkProfile,
+  QwenBenchmarkRunResult,
+  QwenBenchmarkStageResult,
   PipelineStatus,
   CatalogStats,
   ConfirmPersonResult,
@@ -36,6 +39,23 @@ const api = {
       path: string;
       characters: number;
     }> => ipcRenderer.invoke("analysis:copyDevLog"),
+    pickQwenBenchmarkImage: (): Promise<string | null> =>
+      ipcRenderer.invoke("analysis:pickQwenBenchmarkImage"),
+    runQwenBenchmark: (
+      filePath: string,
+      profiles: QwenBenchmarkProfile[]
+    ): Promise<QwenBenchmarkRunResult> =>
+      ipcRenderer.invoke("analysis:runQwenBenchmark", filePath, profiles),
+    onQwenBenchmarkStage: (
+      listener: (stage: QwenBenchmarkStageResult) => void
+    ) => {
+      const handler = (
+        _event: Electron.IpcRendererEvent,
+        stage: QwenBenchmarkStageResult
+      ) => listener(stage);
+      ipcRenderer.on("analysis:qwenBenchmarkStage", handler);
+      return () => ipcRenderer.removeListener("analysis:qwenBenchmarkStage", handler);
+    },
     listErrors: (sourceId?: number, limit = 200): Promise<AnalysisErrorRecord[]> =>
       ipcRenderer.invoke("analysis:listErrors", sourceId, limit),
     retryJob: (jobId: number): Promise<RetryAnalysisResult> =>
