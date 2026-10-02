@@ -826,15 +826,48 @@ app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
 });
 
-app.on("before-quit", () => {
+function shutdownServicesImmediately(): void {
+  if (isQuitting) {
+    // Der Analyse-Service ist idempotent; ein zweiter Aufruf ist als
+    // Sicherheitsnetz erlaubt, falls will-quit nach before-quit folgt.
+    analysis?.stopImmediately();
+    return;
+  }
+
   isQuitting = true;
+
   if (personRefreshTimer) {
     clearTimeout(personRefreshTimer);
     personRefreshTimer = null;
   }
+
   analysisCoordinator?.stop();
   thumbnailCoordinator?.stop();
-  analysis?.stop();
+
+  // Wichtig: zuerst den speicherintensiven Python/Qwen-Prozessbaum synchron
+  // beenden. Erst danach dürfen Electron/Katalog/Thumbnail-Prozesse schließen.
+  analysis?.stopImmediately();
+
   thumbnailService?.stop();
   catalog?.stop();
+}
+
+app.on("before-quit", () => {
+  shutdownServicesImmediately();
+});
+
+app.on("will-quit", () => {
+  shutdownServicesImmediately();
+});
+
+// Auch beim Beenden des Dev-Prozesses per Ctrl+C/SIGTERM muss llama.cpp
+// verschwinden. Sonst bleibt dessen GGUF-Modell im Hauptspeicher liegen.
+process.once("SIGINT", () => {
+  shutdownServicesImmediately();
+  app.quit();
+});
+
+process.once("SIGTERM", () => {
+  shutdownServicesImmediately();
+  app.quit();
 });
