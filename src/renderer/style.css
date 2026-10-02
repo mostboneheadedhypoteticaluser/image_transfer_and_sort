@@ -1465,3 +1465,15 @@ td .badge + .badge {
 .pet-auto-confirm-button:disabled {
   opacity: .45;
 }
+
+
+.dialog-toolbar-actions,
+.analysis-error-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.analysis-error-actions button {
+  white-space: nowrap;
+}
