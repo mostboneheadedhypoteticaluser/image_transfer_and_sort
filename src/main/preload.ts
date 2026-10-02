@@ -102,6 +102,11 @@ const api = {
       petDetectionId: number
     ): Promise<PetCorrectionResult> =>
       ipcRenderer.invoke("pets:removePetDetection", petId, petDetectionId),
+    confirmPetDetection: (
+      petId: number,
+      petDetectionId: number
+    ): Promise<PetCorrectionResult> =>
+      ipcRenderer.invoke("pets:confirmPetDetection", petId, petDetectionId),
     mergePets: (
       targetPetId: number,
       sourcePetId: number
