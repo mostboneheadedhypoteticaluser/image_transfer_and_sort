@@ -1262,10 +1262,10 @@ function renderPetOverview(overview: PetOverview): void {
       name.textContent = pet.name;
       const count = document.createElement("small");
       count.textContent =
-        pet.detectionCount.toLocaleString("de-DE") + " " +
-        (pet.detectionCount === 1
-          ? "bestätigte Fundstelle"
-          : "bestätigte Fundstellen");
+        pet.confirmedCount.toLocaleString("de-DE") + " bestätigt" +
+        (pet.automaticCount > 0
+          ? " · " + pet.automaticCount.toLocaleString("de-DE") + " automatisch"
+          : "");
       const type = document.createElement("small");
       type.textContent = pet.petClass === "dog" ? "Hund" : "Katze";
       text.append(name, count, type);
@@ -1279,11 +1279,20 @@ function renderPetOverview(overview: PetOverview): void {
         const figure = document.createElement("figure");
         figure.className = "person-face confirmed-face pet-crop";
 
+        const isAutomatic =
+          detection.assignmentSource === "AUTO_HIGH_CONFIDENCE";
+        if (isAutomatic) figure.classList.add("auto-assigned");
+
         const img = document.createElement("img");
         img.src = petCropUrl(detection.petDetectionId);
         img.alt = "";
         img.loading = "lazy";
-        img.title = detection.relativePath;
+        img.title =
+          detection.relativePath +
+          (isAutomatic && detection.confidence !== null
+            ? "\nAutomatisch erkannt · Ähnlichkeit " +
+              detection.confidence.toFixed(3)
+            : "\nVon dir bestätigt");
         makePreviewable(img, detection.mediaId, detection.relativePath);
 
         const fallback = document.createElement("span");
@@ -1295,6 +1304,50 @@ function renderPetOverview(overview: PetOverview): void {
           img.hidden = true;
           fallback.hidden = false;
         });
+
+        if (isAutomatic) {
+          const autoBadge = document.createElement("span");
+          autoBadge.className = "pet-auto-badge";
+          autoBadge.textContent =
+            detection.confidence === null
+              ? "Auto"
+              : "Auto " + detection.confidence.toFixed(2);
+          autoBadge.title =
+            "Automatische Zuordnung. Dieses Bild wird erst nach deiner Bestätigung als Referenz verwendet.";
+          figure.appendChild(autoBadge);
+
+          const confirmAutoButton = document.createElement("button");
+          confirmAutoButton.type = "button";
+          confirmAutoButton.className = "pet-auto-confirm-button";
+          confirmAutoButton.textContent = "✓";
+          confirmAutoButton.title =
+            "Diese automatische Zuordnung zu „" + pet.name + "“ bestätigen";
+          confirmAutoButton.setAttribute(
+            "aria-label",
+            "Automatische Zuordnung zu " + pet.name + " bestätigen"
+          );
+          confirmAutoButton.addEventListener("click", (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+
+            void runSafely(async () => {
+              confirmAutoButton.disabled = true;
+              const result = await window.imageSorter.pets.confirmPetDetection(
+                pet.id,
+                detection.petDetectionId
+              );
+              const sourceId = selectedSourceId();
+              if (sourceId !== null) await loadPetOverview(sourceId);
+              progressText.textContent =
+                result.affectedPets > 0
+                  ? "Automatische Zuordnung zu „" + pet.name +
+                    "“ wurde von dir bestätigt und darf künftig als Referenz dienen."
+                  : "Diese Zuordnung war bereits bestätigt.";
+            });
+          });
+
+          figure.appendChild(confirmAutoButton);
+        }
 
         const removeButton = document.createElement("button");
         removeButton.type = "button";
