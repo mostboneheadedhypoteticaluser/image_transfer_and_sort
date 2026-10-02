@@ -1056,8 +1056,6 @@ function listMedia(
   }));
 }
 
-}
-
 function getSearchFacets(sourceId: number): SearchFacets {
   const persons = db.prepare(`
     SELECT
