@@ -140,6 +140,9 @@ function stageText(stats: PipelineStatus["technical"]): {
   if (stats.running > 0) return { text: "Läuft", className: "running" };
   if (stats.pending > 0) return { text: "Wartet", className: "waiting" };
   if (stats.failed > 0) return { text: "Mit Fehlern", className: "error" };
+  if (stats.unavailable > 0) {
+    return { text: "Dateien fehlen", className: "unavailable" };
+  }
   if (stats.done > 0) return { text: "Fertig", className: "done" };
   return { text: "Bereit", className: "waiting" };
 }
@@ -155,7 +158,8 @@ function renderStage(
   countsElement.textContent =
     `${stats.done.toLocaleString("de-DE")} fertig · ` +
     `${stats.pending.toLocaleString("de-DE")} offen · ` +
-    `${stats.failed.toLocaleString("de-DE")} Fehler`;
+    `${stats.failed.toLocaleString("de-DE")} Fehler · ` +
+    `${stats.unavailable.toLocaleString("de-DE")} fehlen`;
 }
 
 function renderPipelineStatus(status: PipelineStatus): void {
@@ -1996,14 +2000,14 @@ void window.imageSorter.analysis
   .then(renderPipelineStatus)
   .catch(() => {
     renderPipelineStatus({
-      technical: { pending: 0, running: 0, done: 0, failed: 0 },
-      thumbnails: { pending: 0, running: 0, done: 0, failed: 0 },
-      imageMetadata: { pending: 0, running: 0, done: 0, failed: 0 },
-      faces: { pending: 0, running: 0, done: 0, failed: 0 },
-      faceEmbeddings: { pending: 0, running: 0, done: 0, failed: 0 },
-      petDetection: { pending: 0, running: 0, done: 0, failed: 0 },
-      petFusion: { pending: 0, running: 0, done: 0, failed: 0 },
-      petEmbeddings: { pending: 0, running: 0, done: 0, failed: 0 }
+      technical: { pending: 0, running: 0, done: 0, failed: 0, unavailable: 0 },
+      thumbnails: { pending: 0, running: 0, done: 0, failed: 0, unavailable: 0 },
+      imageMetadata: { pending: 0, running: 0, done: 0, failed: 0, unavailable: 0 },
+      faces: { pending: 0, running: 0, done: 0, failed: 0, unavailable: 0 },
+      faceEmbeddings: { pending: 0, running: 0, done: 0, failed: 0, unavailable: 0 },
+      petDetection: { pending: 0, running: 0, done: 0, failed: 0, unavailable: 0 },
+      petFusion: { pending: 0, running: 0, done: 0, failed: 0, unavailable: 0 },
+      petEmbeddings: { pending: 0, running: 0, done: 0, failed: 0, unavailable: 0 }
     });
   });
 
