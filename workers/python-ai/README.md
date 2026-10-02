@@ -53,9 +53,16 @@ Damit können Analysemodelle später ersetzt oder erweitert werden, ohne Katalog
 
 ## Allgemeine Motiverkennung mit Qwen3-VL-8B-Thinking Q8_0
 
-Die allgemeine Motiverkennung ist von der funktionierenden Gesichts- und
-Haustierpipeline getrennt. Sie nutzt lokal `Qwen/Qwen3-VL-8B-Thinking Q8_0`
-(ungefähr 17,5 GB Modellgewichte) ohne 4-/8-Bit-Quantisierung.
+Die allgemeine Motiverkennung ist vollständig von der funktionierenden
+Gesichts- und Haustierpipeline getrennt. Verwendet wird die offizielle
+GGUF-Ausgabe von `Qwen/Qwen3-VL-8B-Thinking-GGUF`:
+
+- LLM: `Qwen3VL-8B-Thinking-Q8_0.gguf` (ca. 8,71 GB)
+- Vision-Projektor: `mmproj-Qwen3VL-8B-Thinking-F16.gguf` (ca. 1,16 GB)
+- Laufzeit: aktuelles `llama.cpp` / `llama-server`
+- Standardmäßig CPU-Ausführung (`-ngl 0` und kein mmproj-Offload), damit kein
+  dedizierter Grafikspeicher vorausgesetzt wird. Das ist langsamer, verändert
+  aber die Modellgewichte bzw. Erkennungsqualität nicht.
 
 Ablauf pro Bild:
 
@@ -67,17 +74,22 @@ Ablauf pro Bild:
 5. Ein zweiter Qwen-Durchlauf klassifiziert dieselbe Box blind, ohne den
    ursprünglichen Klassennamen zu kennen.
 6. Nur wenn beide Ausschnittprüfungen übereinstimmen, wird das Motiv gespeichert.
-   Einzeltreffer benötigen dabei hohe Sicherheit; mittlere Sicherheit wird nur
-   bei mehrfach unabhängiger Sichtung akzeptiert.
 7. Hund und Katze werden aus der allgemeinen Motivliste herausgehalten, weil
    dafür weiterhin die bestehende Haustier-/Dog-ReID-Pipeline zuständig ist.
 
-Das Modell liegt nach `npm.cmd run setup:ai` unter
-`workers/python-ai/models/qwen3-vl-8b-thinking`.
+`npm.cmd run setup:ai` entfernt automatisch den alten, nicht mehr verwendeten
+17,5-GB-Transformers/BF16-Checkpoint aus
+`workers/python-ai/models/qwen3-vl-8b-thinking` und lädt stattdessen die beiden
+GGUF-Dateien nach
+`workers/python-ai/models/qwen3-vl-8b-thinking-gguf`.
 
-Weil Qwen3-VL-8B und SigLIP2 zusammen viel Arbeitsspeicher benötigen, werden
-die Analysephasen stapelweise abgearbeitet. Qwen wird für seine Bildserie im RAM
-gehalten und vor der SigLIP2-Phase wieder freigegeben.
+Unter Windows muss zusätzlich ein aktuelles `llama.cpp` installiert sein:
+
+`winget install llama.cpp`
+
+Qwen und SigLIP2 werden nicht gleichzeitig im RAM gehalten. Vor der
+SigLIP2-Phase wird der lokale llama.cpp-Qwen-Server beendet.
+
 
 ## Semantikanalyse mit SigLIP2 So400m NaFlex
 
