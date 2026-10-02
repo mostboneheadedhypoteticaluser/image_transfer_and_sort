@@ -133,7 +133,7 @@
             <article class="pipeline-stage">
               <div>
                 <small>Stufe 6</small>
-                <strong>Haustier- &amp; Motivdetektion</strong>
+                <strong>Haustierdetektion · NanoDet + YOLOX-S</strong>
               </div>
               <div class="pipeline-stage-status">
                 <span id="petStageState" class="stage-state waiting">Wartet</span>
@@ -170,7 +170,7 @@
               </div>
               <div class="pipeline-stage-status">
                 <span class="stage-state done">Über Reiter</span>
-                <small>Vorschläge aus SFace-Merkmalen</small>
+                <small>Bereits nach den SFace-Merkmalen möglich</small>
               </div>
             </article>
 
@@ -181,14 +181,36 @@
               </div>
               <div class="pipeline-stage-status">
                 <span class="stage-state done">Über Reiter</span>
-                <small>Dog-ReID gruppiert denselben Hund</small>
+                <small>Bereits nach Dog-ReID möglich</small>
+              </div>
+            </article>
+
+            <article class="pipeline-stage">
+              <div>
+                <small>Stufe 11 · rechenintensiv</small>
+                <strong>Semantikanalyse · SigLIP2 So400m NaFlex</strong>
+              </div>
+              <div class="pipeline-stage-status">
+                <span id="semanticStageState" class="stage-state waiting">Wartet</span>
+                <small id="semanticStageCounts">0 fertig · 0 offen</small>
+              </div>
+            </article>
+
+            <article class="pipeline-stage">
+              <div>
+                <small>Stufe 12 · rechenintensiv · zuletzt</small>
+                <strong>Motive · Qwen3-VL-8B Q8_0 Vollbild/Kacheln</strong>
+              </div>
+              <div class="pipeline-stage-status">
+                <span id="objectVerificationStageState" class="stage-state waiting">Wartet</span>
+                <small id="objectVerificationStageCounts">0 fertig · 0 offen</small>
               </div>
             </article>
 
             <article class="pipeline-stage future">
               <div>
                 <small>Danach</small>
-                <strong>Katzen-ID · kombinierte Suche</strong>
+                <strong>Katzen-ID · weitere Open-Vocabulary-Erkennung</strong>
               </div>
               <div class="pipeline-stage-status">
                 <span class="stage-state future">Noch nicht aktiv</span>
@@ -202,7 +224,16 @@
               <button id="analysisErrorsButton" class="ghost analysis-errors-button" type="button" hidden>
                 Fehler anzeigen <span id="analysisErrorCount" class="tab-count">0</span>
               </button>
-              <span class="analysis-note">NanoDet + YOLOX-S finden Tiere; YOLOX-S speichert zusätzlich allgemeine COCO-Motive. Fusionierte Hundefundstellen erhalten anschließend Dog-ReID-Merkmale.</span>
+              <button id="analysisDevLogButton" class="ghost" type="button">
+                Dev-Protokoll öffnen
+              </button>
+              <button id="analysisCopyDevLogButton" class="ghost" type="button">
+                Dev-Protokoll kopieren
+              </button>
+              <button id="qwenBenchmarkButton" class="ghost" type="button">
+                Qwen-Einzelbild testen
+              </button>
+              <span class="analysis-note">Gesichts- und Haustiererkennung bleiben unverändert und haben Vorrang. Personen- und Haustierbestätigung ist bereits nach den Identitätsstufen möglich. Erst danach folgen die rechenintensiven allgemeinen Analysen: SigLIP2 und als letzte Rechenstufe Qwen3-VL-8B-Thinking Q8_0. Qwen untersucht Gesamtbild und überlappende Kacheln; jeder Kandidat wird danach zweimal am markierten Ausschnitt neu geprüft.</span>
             </div>
           </div>
         </section>
@@ -220,6 +251,9 @@
             <button id="mediaTab" class="view-tab active" type="button">
               Alle Medien <span id="mediaTabCount" class="tab-count">0</span>
             </button>
+            <button id="searchTab" class="view-tab" type="button">
+              Kombinierte Suche <span id="searchTabCount" class="tab-count">0</span>
+            </button>
             <button id="duplicateTab" class="view-tab" type="button">
               Dubletten <span id="duplicateTabCount" class="tab-count">0</span>
             </button>
@@ -235,6 +269,69 @@
           </div>
 
           <div id="mediaView" class="catalog-view">
+            <section id="searchPanel" class="search-panel" hidden>
+              <div class="search-panel-heading">
+                <div>
+                  <h3>Kombinierte Suche</h3>
+                  <p>Mehrere ausgewählte Kriterien werden mit UND verknüpft. Innerhalb einer Gruppe kannst du mehrere konkrete Personen, Haustiere oder Motive verlangen.</p>
+                </div>
+                <span id="searchSummary" class="search-summary">Noch keine Suche ausgeführt.</span>
+              </div>
+
+              <div class="search-grid">
+                <section class="search-group">
+                  <h4>Personen</h4>
+                  <p>Nur bereits bestätigte Personen.</p>
+                  <div id="searchPersons" class="search-facets"></div>
+                </section>
+
+                <section class="search-group">
+                  <h4>Haustiere</h4>
+                  <p>Bestätigte bzw. sicher automatisch zugeordnete Haustiere.</p>
+                  <div id="searchPets" class="search-facets"></div>
+                </section>
+
+                <section class="search-group search-group-wide semantic-search-group">
+                  <h4>Semantischer Bildinhalt · SigLIP2</h4>
+                  <p>Freier Suchtext, z. B. „Hund im Schnee“, „Wald“, „Rettungshundetraining“ oder „Person mit Hund neben einem Fahrzeug“. Der Score ist ein SigLIP2-Ähnlichkeitswert und keine statistische Wahrscheinlichkeit.</p>
+                  <div class="semantic-search-row">
+                    <input id="searchSemanticQuery" type="text" maxlength="300" autocomplete="off" placeholder="Semantischen Bildinhalt beschreiben …" />
+                    <label for="searchSemanticMinProbability">
+                      Mindest-Score
+                      <span class="semantic-score-input">
+                        <input id="searchSemanticMinProbability" type="number" min="0" max="99" step="1" value="65" />
+                        <span>%</span>
+                      </span>
+                    </label>
+                  </div>
+                  <small class="semantic-search-note">Standard 65 % ist bewusst streng gewählt. Niedriger erhöht die Trefferzahl, aber auch mögliche Fehlzuordnungen.</small>
+                </section>
+
+                <section class="search-group search-group-wide">
+                  <h4>Motive</h4>
+                  <p>Nur Objekte, die Qwen3-VL-8B im Gesamtbild/Kacheln gefunden oder als Hinweis erhalten und anschließend am Ausschnitt doppelt bestätigt hat.</p>
+                  <div id="searchObjects" class="search-facets motif-facets"></div>
+                </section>
+
+                <section class="search-group">
+                  <h4>Anzahl Tiere</h4>
+                  <div class="search-count-row">
+                    <label for="searchMinDogs">Mindestens Hunde</label>
+                    <input id="searchMinDogs" type="number" min="0" max="20" step="1" value="0" />
+                  </div>
+                  <div class="search-count-row">
+                    <label for="searchMinCats">Mindestens Katzen</label>
+                    <input id="searchMinCats" type="number" min="0" max="20" step="1" value="0" />
+                  </div>
+                </section>
+              </div>
+
+              <div class="search-actions">
+                <button id="runSearch" class="primary" type="button">Suchen</button>
+                <button id="resetSearch" class="ghost" type="button">Suchkriterien zurücksetzen</button>
+              </div>
+            </section>
+
             <div class="table-wrap">
               <table>
                 <thead>
@@ -314,6 +411,62 @@
         </section>
       </main>
     </div>
+
+    <dialog id="qwenBenchmarkDialog" class="app-dialog qwen-benchmark-dialog">
+      <div class="dialog-header">
+        <div>
+          <h2>Qwen-Einzelbild-Benchmark</h2>
+          <p>Ein Bild stufenweise analysieren, ohne die Ergebnisse in den Katalog zu schreiben.</p>
+        </div>
+        <button id="closeQwenBenchmark" class="dialog-close" type="button" aria-label="Schließen">×</button>
+      </div>
+
+      <div class="qwen-benchmark-body">
+        <div class="qwen-benchmark-file-row">
+          <button id="pickQwenBenchmarkImage" class="secondary" type="button">Bild auswählen</button>
+          <code id="qwenBenchmarkFilePath">Noch kein Bild ausgewählt.</code>
+        </div>
+
+        <fieldset class="qwen-benchmark-profiles">
+          <legend>Teststufen</legend>
+          <label>
+            <input type="checkbox" name="qwenBenchmarkProfile" value="whole" checked />
+            <span><strong>1 · Gesamtbild</strong><small>1 Modellaufruf, keine Kacheln, keine Einzelprüfung.</small></span>
+          </label>
+          <label>
+            <input type="checkbox" name="qwenBenchmarkProfile" value="tiles4" checked />
+            <span><strong>2 · Gesamtbild + 4 Kacheln</strong><small>Mehr Details, noch ohne Crop-Prüfung.</small></span>
+          </label>
+          <label>
+            <input type="checkbox" name="qwenBenchmarkProfile" value="single-check" checked />
+            <span><strong>3 · Bis 6 Kacheln + 1 Prüfung</strong><small>Jeder Kandidat wird einmal am Ausschnitt bestätigt.</small></span>
+          </label>
+          <label>
+            <input type="checkbox" name="qwenBenchmarkProfile" value="full" checked />
+            <span><strong>4 · Vollanalyse</strong><small>Aktuelles Verfahren: bis 12 Kacheln und Doppelprüfung.</small></span>
+          </label>
+        </fieldset>
+
+        <div class="qwen-benchmark-actions">
+          <button id="runQwenBenchmark" class="primary" type="button">Ausgewählte Stufen starten</button>
+          <button id="copyQwenBenchmark" class="ghost" type="button" disabled>Testprotokoll kopieren</button>
+        </div>
+
+        <div id="qwenBenchmarkLive" class="qwen-benchmark-live">
+          Bild auswählen und anschließend den Test starten.
+        </div>
+
+        <div id="qwenBenchmarkResults" class="qwen-benchmark-results">
+          <p class="qwen-benchmark-empty">Noch keine Testergebnisse.</p>
+        </div>
+
+        <p class="qwen-benchmark-note">
+          Der erste Test kann zusätzlich die einmalige Modellladezeit enthalten. Diese wird separat ausgewiesen.
+          Hunde und Katzen können in der Testausgabe sichtbar sein; die Produktivpipeline überlässt ihre endgültige
+          Zuordnung weiterhin der Haustiererkennung.
+        </p>
+      </div>
+    </dialog>
 
     <dialog id="analysisErrorDialog" class="app-dialog error-dialog">
       <div class="dialog-header">

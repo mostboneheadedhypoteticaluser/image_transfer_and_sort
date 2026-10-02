@@ -16,7 +16,9 @@ type PythonStage =
   | "faceEmbeddings"
   | "petDetection"
   | "petFusion"
-  | "petEmbeddings";
+  | "petEmbeddings"
+  | "objectVerification"
+  | "semanticEmbeddings";
 
 type ModuleSpec = {
   module: string;
@@ -29,7 +31,9 @@ type ModuleSpec = {
     | "completeFaceEmbeddingJob"
     | "completePetDetectionJob"
     | "completePetFusionJob"
-    | "completePetEmbeddingJob";
+    | "completePetEmbeddingJob"
+    | "completeVerifiedObjectDetectionJob"
+    | "completeSemanticEmbeddingJob";
   label: string;
   timeoutMs: number;
 };
@@ -98,6 +102,24 @@ const MODULES: ModuleSpec[] = [
     completeMethod: "completePetEmbeddingJob",
     label: "Individuelle Hundemerkmale",
     timeoutMs: 120000
+  },
+  {
+    module: "semantic-embed-siglip2-v1",
+    stage: "semanticEmbeddings",
+    workerMethod: "extract_semantic_image_embedding",
+    completeMethod: "completeSemanticEmbeddingJob",
+    label: "Semantikanalyse · SigLIP2 So400m NaFlex",
+    timeoutMs: 1800000
+  },
+  {
+    module: "object-detect-qwen3vl-gguf-v2",
+    stage: "objectVerification",
+    workerMethod: "detect_qwen3vl_objects",
+    completeMethod: "completeVerifiedObjectDetectionJob",
+    label: "Motive · Qwen3-VL-8B Q8_0 Vollbild/Kacheln",
+    // Inaktivitäts-Watchdog statt absoluter Jobdauer. Fortschrittsereignisse
+    // aus dem Worker setzen diese Frist jeweils neu.
+    timeoutMs: 1800000
   }
 ];
 
@@ -110,6 +132,8 @@ type PythonPipelineStats = Pick<
   | "petDetection"
   | "petFusion"
   | "petEmbeddings"
+  | "objectVerification"
+  | "semanticEmbeddings"
 >;
 
 function emptyStats(): AnalysisQueueStats {
@@ -133,7 +157,7 @@ export class AnalysisCoordinator {
   private timer: NodeJS.Timeout | null = null;
   private pumping = false;
   private stopped = true;
-  private cursor = 0;
+  private benchmarkPaused = false;
 
   constructor(
     private readonly catalog: CatalogService,
@@ -165,6 +189,31 @@ export class AnalysisCoordinator {
     this.timer = null;
   }
 
+  async pauseForBenchmark(): Promise<void> {
+    this.benchmarkPaused = true;
+    this.stop();
+
+    // Wichtig: nicht nur keine neuen Jobs starten, sondern einen bereits
+    // laufenden Qwen/llama.cpp-Prozess wirklich beenden. Sonst bleibt der PC
+    // so ausgelastet, dass selbst der Dateidialog des Einzeltests stockt.
+    this.analysis.stopForBenchmark();
+
+    const deadline = Date.now() + 15000;
+    while (this.pumping && Date.now() < deadline) {
+      await new Promise<void>((resolve) => setTimeout(resolve, 50));
+    }
+
+    this.analysis.setQueueState(
+      0,
+      0,
+      "Standardanalyse für Qwen-Einzelbildtest pausiert."
+    );
+  }
+
+  endBenchmarkPause(): void {
+    this.benchmarkPaused = false;
+  }
+
   private async enqueueExistingSources(): Promise<void> {
     const sources = await this.catalog.request<SourceRecord[]>("listSources");
 
@@ -188,7 +237,9 @@ export class AnalysisCoordinator {
       faceEmbeddings: emptyStats(),
       petDetection: emptyStats(),
       petFusion: emptyStats(),
-      petEmbeddings: emptyStats()
+      petEmbeddings: emptyStats(),
+      objectVerification: emptyStats(),
+      semanticEmbeddings: emptyStats()
     };
 
     for (const spec of MODULES) {
@@ -211,7 +262,9 @@ export class AnalysisCoordinator {
       result.faceEmbeddings.pending +
       result.petDetection.pending +
       result.petFusion.pending +
-      result.petEmbeddings.pending;
+      result.petEmbeddings.pending +
+      result.objectVerification.pending +
+      result.semanticEmbeddings.pending;
     const active =
       result.technical.running +
       result.imageMetadata.running +
@@ -219,7 +272,9 @@ export class AnalysisCoordinator {
       result.faceEmbeddings.running +
       result.petDetection.running +
       result.petFusion.running +
-      result.petEmbeddings.running;
+      result.petEmbeddings.running +
+      result.objectVerification.running +
+      result.semanticEmbeddings.running;
 
     this.analysis.setQueueState(
       queued,
@@ -233,18 +288,16 @@ export class AnalysisCoordinator {
   }
 
   private async nextPendingSpec(): Promise<ModuleSpec | null> {
-    for (let offset = 0; offset < MODULES.length; offset += 1) {
-      const index = (this.cursor + offset) % MODULES.length;
-      const spec = MODULES[index];
+    // Die Identitätsstufen stehen bewusst zuerst. Teure allgemeine Analysen
+    // folgen erst danach; Qwen3-VL ist als schwerste Stufe ganz zuletzt.
+    // Innerhalb einer Stufe bleibt das jeweilige Modell für die Bildserie geladen.
+    for (const spec of MODULES) {
       const stats = await this.catalog.request<AnalysisQueueStats>(
         "getAnalysisQueueStats",
         { module: spec.module }
       );
 
-      if (stats.pending > 0) {
-        this.cursor = (index + 1) % MODULES.length;
-        return spec;
-      }
+      if (stats.pending > 0) return spec;
     }
 
     return null;
@@ -265,7 +318,9 @@ export class AnalysisCoordinator {
         stats.faceEmbeddings.running +
         stats.petDetection.running +
         stats.petFusion.running +
-        stats.petEmbeddings.running;
+        stats.petEmbeddings.running +
+        stats.objectVerification.running +
+        stats.semanticEmbeddings.running;
 
       if (totalRunning > 0) return;
 
@@ -291,7 +346,9 @@ export class AnalysisCoordinator {
         stats.faceEmbeddings.pending +
         stats.petDetection.pending +
         stats.petFusion.pending +
-        stats.petEmbeddings.pending - 1;
+        stats.petEmbeddings.pending +
+        stats.objectVerification.pending +
+        stats.semanticEmbeddings.pending - 1;
 
       this.analysis.setQueueState(
         Math.max(0, queued),
@@ -321,8 +378,14 @@ export class AnalysisCoordinator {
             mediaId: job.mediaId,
             inputSha256: job.sha256
           });
+          const objects = await this.catalog.request<
+            Array<Record<string, unknown>>
+          >("getObjectDetectionsForFusion", {
+            mediaId: job.mediaId,
+            inputSha256: job.sha256
+          });
 
-          extraPayload = { detections };
+          extraPayload = { detections, objects };
         }
 
         if (spec.module === "pet-embed-dogreid-v1") {
@@ -335,6 +398,20 @@ export class AnalysisCoordinator {
           );
 
           extraPayload = { pets };
+        }
+
+        if (spec.module === "object-detect-qwen3vl-gguf-v2") {
+          // Die alten Detektoren sind nur zusätzliche Recall-Hinweise.
+          // Qwen analysiert Gesamtbild und Kacheln unabhängig davon und muss
+          // jeden Hinweis anschließend selbst doppelt bestätigen.
+          const hints = await this.catalog.request<
+            Array<Record<string, unknown>>
+          >("getObjectDetectionsForFusion", {
+            mediaId: job.mediaId,
+            inputSha256: job.sha256
+          });
+
+          extraPayload = { hints };
         }
 
         const result = await this.analysis.request<Record<string, unknown>>(
@@ -354,10 +431,21 @@ export class AnalysisCoordinator {
           result
         });
       } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
         await this.catalog.request("failAnalysisJob", {
           jobId: job.id,
-          error: error instanceof Error ? error.message : String(error)
+          error: message
         });
+
+        // Der Einzelbildtest darf den gerade unterbrochenen Standardjob nicht
+        // als echten Analysefehler hinterlassen. Nach dem kontrollierten Kill
+        // wird er sofort wieder auf PENDING gesetzt und erst nach Testende neu
+        // gestartet.
+        if (this.benchmarkPaused) {
+          await this.catalog.request("retryAnalysisJob", {
+            jobId: job.id
+          });
+        }
       }
 
       await this.refreshAllStats();

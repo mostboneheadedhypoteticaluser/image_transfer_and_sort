@@ -1,6 +1,6 @@
 import path from "node:path";
-import { readFile } from "node:fs/promises";
-import { app, BrowserWindow, dialog, ipcMain, protocol, shell } from "electron";
+import { readFile, rm } from "node:fs/promises";
+import { app, BrowserWindow, clipboard, dialog, ipcMain, protocol, shell, type OpenDialogOptions } from "electron";
 import { CatalogService } from "./catalog-service";
 import { AnalysisService } from "./analysis-service";
 import { AnalysisCoordinator } from "./analysis-coordinator";
@@ -12,6 +12,9 @@ import type {
   AnalysisErrorRecord,
   AnalysisQueueStats,
   AnalysisWorkerStatus,
+  QwenBenchmarkProfile,
+  QwenBenchmarkRunResult,
+  QwenBenchmarkStageResult,
   CatalogStats,
   ConfirmPersonResult,
   ConfirmPetResult,
@@ -29,6 +32,9 @@ import type {
   RestoreResult,
   ResetCatalogResult,
   RetryAnalysisResult,
+  SearchFacets,
+  SearchFilter,
+  SemanticTextEmbedding,
   ScanResult,
   SourceRecord,
   ThumbnailInfo,
@@ -47,6 +53,8 @@ let thumbnailCacheRoot = "";
 let personRefreshTimer: NodeJS.Timeout | null = null;
 let personRefreshRunning = false;
 let isQuitting = false;
+let qwenBenchmarkMode = false;
+let qwenBenchmarkPreparing: Promise<void> | null = null;
 
 const EMPTY_QUEUE: AnalysisQueueStats = {
   pending: 0,
@@ -64,8 +72,12 @@ let pipelineStatus: PipelineStatus = {
   faceEmbeddings: { ...EMPTY_QUEUE },
   petDetection: { ...EMPTY_QUEUE },
   petFusion: { ...EMPTY_QUEUE },
-  petEmbeddings: { ...EMPTY_QUEUE }
+  petEmbeddings: { ...EMPTY_QUEUE },
+  objectVerification: { ...EMPTY_QUEUE },
+  semanticEmbeddings: { ...EMPTY_QUEUE }
 };
+
+const semanticTextCache = new Map<string, SemanticTextEmbedding>();
 
 protocol.registerSchemesAsPrivileged([
   {
@@ -124,7 +136,8 @@ function pythonAnalysisIdle(): boolean {
     pipelineStatus.faceEmbeddings,
     pipelineStatus.petDetection,
     pipelineStatus.petFusion,
-    pipelineStatus.petEmbeddings
+    pipelineStatus.petEmbeddings,
+    pipelineStatus.objectVerification
   ].every((stats) => stats.pending === 0 && stats.running === 0);
 }
 
@@ -181,7 +194,8 @@ function updatePipelineStage(
     stage === "faceEmbeddings" ||
     stage === "petDetection" ||
     stage === "petFusion" ||
-    stage === "petEmbeddings"
+    stage === "petEmbeddings" ||
+    stage === "objectVerification"
   ) {
     schedulePersonRefresh();
   }
@@ -222,6 +236,53 @@ function createWindow(): BrowserWindow {
   return win;
 }
 
+async function enterQwenBenchmarkMode(): Promise<void> {
+  if (qwenBenchmarkPreparing) {
+    await qwenBenchmarkPreparing;
+    return;
+  }
+  if (qwenBenchmarkMode) return;
+
+  qwenBenchmarkMode = true;
+  qwenBenchmarkPreparing = (async () => {
+    if (analysisCoordinator) {
+      await analysisCoordinator.pauseForBenchmark();
+    } else {
+      analysis?.stopForBenchmark();
+    }
+  })();
+
+  try {
+    await qwenBenchmarkPreparing;
+  } catch (error) {
+    qwenBenchmarkMode = false;
+    throw error;
+  } finally {
+    qwenBenchmarkPreparing = null;
+  }
+}
+
+async function leaveQwenBenchmarkMode(): Promise<void> {
+  if (qwenBenchmarkPreparing) {
+    await qwenBenchmarkPreparing;
+  }
+  if (!qwenBenchmarkMode) return;
+
+  qwenBenchmarkMode = false;
+  analysisCoordinator?.endBenchmarkPause();
+
+  // Auch das Testmodell selbst wieder entladen, bevor die normale Queue
+  // fortgesetzt wird. So beginnt der Standardlauf aus einem sauberen Zustand.
+  analysis?.stopForBenchmark();
+
+  if (isQuitting || !analysis) return;
+
+  await analysis.start();
+  if (analysis.getStatus().state === "READY") {
+    await analysisCoordinator?.start();
+  }
+}
+
 function registerIpc(): void {
   ipcMain.handle("dialog:pickSource", async () => {
     const result = await dialog.showOpenDialog(windowRef!, {
@@ -247,6 +308,50 @@ function registerIpc(): void {
     catalog!.request<MediaRecord[]>("listMedia", { sourceId, limit })
   );
 
+  ipcMain.handle("catalog:getSearchFacets", (_event, sourceId: number) =>
+    catalog!.request<SearchFacets>("getSearchFacets", { sourceId })
+  );
+
+  ipcMain.handle(
+    "catalog:searchMedia",
+    async (_event, sourceId: number, filter: SearchFilter, limit: number) => {
+      const query =
+        typeof filter?.semanticQuery === "string"
+          ? filter.semanticQuery.trim()
+          : "";
+
+      let semantic: SemanticTextEmbedding | null = null;
+
+      if (query) {
+        const cacheKey = query.toLocaleLowerCase("de-DE");
+        semantic = semanticTextCache.get(cacheKey) ?? null;
+
+        if (!semantic) {
+          if (!analysis || analysis.getStatus().state !== "READY") {
+            throw new Error(
+              "Die semantische Suche ist noch nicht bereit. " +
+              "Bitte AI-Setup und Analyse-Worker prüfen."
+            );
+          }
+
+          semantic = await analysis.request<SemanticTextEmbedding>(
+            "extract_semantic_text_embedding",
+            { text: query },
+            1800000
+          );
+          semanticTextCache.set(cacheKey, semantic);
+        }
+      }
+
+      return catalog!.request<MediaRecord[]>("searchMedia", {
+        sourceId,
+        filter,
+        semantic,
+        limit
+      });
+    }
+  );
+
   ipcMain.handle("catalog:listDuplicateGroups", (_event, sourceId: number, limit: number) =>
     catalog!.request<DuplicateGroup[]>("listDuplicateGroups", { sourceId, limit })
   );
@@ -263,12 +368,175 @@ function registerIpc(): void {
     catalog!.request<RestoreResult>("restoreMedia", { mediaId })
   );
 
-  ipcMain.handle("catalog:resetCatalog", () =>
-    catalog!.request<ResetCatalogResult>("resetCatalog")
-  );
+  ipcMain.handle("catalog:resetCatalog", async () => {
+    semanticTextCache.clear();
+
+    // Laufende Analyse-/Thumbnail-Jobs zuerst sauber anhalten. Insbesondere
+    // SigLIP2 kann lange rechnen; ein Reset darf nicht parallel einen alten
+    // Job nachträglich wieder in die frisch geleerte Datenbank schreiben.
+    analysisCoordinator?.stop();
+    thumbnailCoordinator?.stop();
+    analysis?.stop();
+    thumbnailService?.stop();
+
+    if (personRefreshTimer) {
+      clearTimeout(personRefreshTimer);
+      personRefreshTimer = null;
+    }
+
+    await new Promise<void>((resolve) => setTimeout(resolve, 800));
+
+    const result = await catalog!.request<ResetCatalogResult>("resetCatalog");
+
+    // Auch abgeleitete Vorschaudateien/Crops entfernen. Die Originalmedien
+    // und die großen KI-Modellgewichte bleiben ausdrücklich erhalten.
+    if (thumbnailCacheRoot) {
+      await rm(thumbnailCacheRoot, { recursive: true, force: true });
+    }
+
+    pipelineStatus = {
+      technical: { ...EMPTY_QUEUE },
+      thumbnails: { ...EMPTY_QUEUE },
+      imageMetadata: { ...EMPTY_QUEUE },
+      faces: { ...EMPTY_QUEUE },
+      faceEmbeddings: { ...EMPTY_QUEUE },
+      petDetection: { ...EMPTY_QUEUE },
+      petFusion: { ...EMPTY_QUEUE },
+      petEmbeddings: { ...EMPTY_QUEUE },
+      objectVerification: { ...EMPTY_QUEUE },
+      semanticEmbeddings: { ...EMPTY_QUEUE }
+    };
+    sendToRenderer("analysis:pipelineStatus", pipelineStatus);
+
+    thumbnailService?.start();
+    void thumbnailCoordinator?.start();
+
+    if (analysis) {
+      await analysis.start();
+      if (analysis.getStatus().state === "READY") {
+        void analysisCoordinator?.start();
+      }
+    }
+
+    return result;
+  });
 
   ipcMain.handle("analysis:getStatus", (): Promise<AnalysisWorkerStatus> =>
     analysis!.refreshStatus()
+  );
+
+  ipcMain.handle("analysis:openDevLog", async () => {
+    const logPath = analysis!.getDevLogPath();
+    const result = await shell.openPath(logPath);
+    if (result) {
+      throw new Error("Dev-Protokoll konnte nicht geöffnet werden: " + result);
+    }
+    return { opened: true, path: logPath };
+  });
+
+  ipcMain.handle("analysis:copyDevLog", async () => {
+    const logPath = analysis!.getDevLogPath();
+    const text = await readFile(logPath, "utf8");
+    clipboard.writeText(text);
+    return {
+      copied: true,
+      path: logPath,
+      characters: text.length
+    };
+  });
+
+  ipcMain.handle("analysis:prepareQwenBenchmark", async () => {
+    await enterQwenBenchmarkMode();
+    return { paused: true };
+  });
+
+  ipcMain.handle("analysis:finishQwenBenchmark", async () => {
+    await leaveQwenBenchmarkMode();
+    return { resumed: true };
+  });
+
+  ipcMain.handle("analysis:pickQwenBenchmarkImage", async () => {
+    // Sicherheitsnetz: selbst bei direktem IPC-Aufruf ist der normale Qwen-
+    // Lauf beendet und llama.cpp entladen, bevor Windows den Dateidialog zeigt.
+    await enterQwenBenchmarkMode();
+
+    const options: OpenDialogOptions = {
+      title: "Bild für Qwen-Einzeltest auswählen",
+      properties: ["openFile"],
+      filters: [
+        {
+          name: "Bilder",
+          extensions: ["jpg", "jpeg", "png", "webp", "bmp", "tif", "tiff"]
+        }
+      ]
+    };
+
+    const result = windowRef
+      ? await dialog.showOpenDialog(windowRef, options)
+      : await dialog.showOpenDialog(options);
+
+    if (result.canceled || result.filePaths.length === 0) return null;
+    return result.filePaths[0];
+  });
+
+  ipcMain.handle(
+    "analysis:runQwenBenchmark",
+    async (
+      _event,
+      filePath: string,
+      profiles: QwenBenchmarkProfile[]
+    ): Promise<QwenBenchmarkRunResult> => {
+      const normalizedPath = typeof filePath === "string" ? filePath.trim() : "";
+      if (!normalizedPath) {
+        throw new Error("Bitte zuerst ein Bild für den Qwen-Test auswählen.");
+      }
+
+      const allowed: QwenBenchmarkProfile[] = [
+        "whole",
+        "tiles4",
+        "single-check",
+        "full"
+      ];
+      const selected = [...new Set(profiles)].filter(
+        (profile): profile is QwenBenchmarkProfile =>
+          allowed.includes(profile as QwenBenchmarkProfile)
+      );
+
+      if (selected.length === 0) {
+        throw new Error("Bitte mindestens eine Qwen-Teststufe auswählen.");
+      }
+
+      await enterQwenBenchmarkMode();
+
+      if (!analysis) throw new Error("Analyse-Worker ist nicht initialisiert.");
+      if (analysis.getStatus().state !== "READY") {
+        await analysis.start();
+      }
+      if (analysis.getStatus().state !== "READY") {
+        throw new Error("Analyse-Worker ist für den Qwen-Test nicht bereit.");
+      }
+
+      const results: QwenBenchmarkStageResult[] = [];
+
+        for (const profile of selected) {
+          const stage = await analysis.request<QwenBenchmarkStageResult>(
+            "benchmark_qwen3vl",
+            {
+              path: normalizedPath,
+              profile
+            },
+            1800000
+          );
+
+          results.push(stage);
+          sendToRenderer("analysis:qwenBenchmarkStage", stage);
+        }
+
+      return {
+        path: normalizedPath,
+        results
+      };
+    }
   );
 
   ipcMain.handle(
@@ -341,7 +609,9 @@ function registerIpc(): void {
     faceEmbeddings: { ...pipelineStatus.faceEmbeddings },
     petDetection: { ...pipelineStatus.petDetection },
     petFusion: { ...pipelineStatus.petFusion },
-    petEmbeddings: { ...pipelineStatus.petEmbeddings }
+    petEmbeddings: { ...pipelineStatus.petEmbeddings },
+    objectVerification: { ...pipelineStatus.objectVerification },
+    semanticEmbeddings: { ...pipelineStatus.semanticEmbeddings }
   }));
 
   ipcMain.handle(
@@ -490,9 +760,18 @@ app.whenReady().then(() => {
     sendToRenderer("catalog:progress", progress);
   });
 
-  analysis = new AnalysisService(analysisWorkerPath, (status) => {
-    sendToRenderer("analysis:status", status);
-  });
+  const analysisDevLogPath = path.join(
+    app.getPath("userData"),
+    "analysis-dev.log"
+  );
+
+  analysis = new AnalysisService(
+    analysisWorkerPath,
+    (status) => {
+      sendToRenderer("analysis:status", status);
+    },
+    analysisDevLogPath
+  );
 
   thumbnailService = new ThumbnailService(
     thumbnailWorkerPath,
@@ -722,15 +1001,48 @@ app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
 });
 
-app.on("before-quit", () => {
+function shutdownServicesImmediately(): void {
+  if (isQuitting) {
+    // Der Analyse-Service ist idempotent; ein zweiter Aufruf ist als
+    // Sicherheitsnetz erlaubt, falls will-quit nach before-quit folgt.
+    analysis?.stopImmediately();
+    return;
+  }
+
   isQuitting = true;
+
   if (personRefreshTimer) {
     clearTimeout(personRefreshTimer);
     personRefreshTimer = null;
   }
+
   analysisCoordinator?.stop();
   thumbnailCoordinator?.stop();
-  analysis?.stop();
+
+  // Wichtig: zuerst den speicherintensiven Python/Qwen-Prozessbaum synchron
+  // beenden. Erst danach dürfen Electron/Katalog/Thumbnail-Prozesse schließen.
+  analysis?.stopImmediately();
+
   thumbnailService?.stop();
   catalog?.stop();
+}
+
+app.on("before-quit", () => {
+  shutdownServicesImmediately();
+});
+
+app.on("will-quit", () => {
+  shutdownServicesImmediately();
+});
+
+// Auch beim Beenden des Dev-Prozesses per Ctrl+C/SIGTERM muss llama.cpp
+// verschwinden. Sonst bleibt dessen GGUF-Modell im Hauptspeicher liegen.
+process.once("SIGINT", () => {
+  shutdownServicesImmediately();
+  app.quit();
+});
+
+process.once("SIGTERM", () => {
+  shutdownServicesImmediately();
+  app.quit();
 });

@@ -1,3 +1,11 @@
+export type AnalysisWorkerProgress = {
+  kind: "qwen3vl";
+  phase: string;
+  current: number | null;
+  total: number | null;
+  message: string;
+};
+
 export type AnalysisWorkerStatus = {
   state: "STARTING" | "READY" | "STOPPED" | "ERROR";
   pid: number | null;
@@ -8,6 +16,53 @@ export type AnalysisWorkerStatus = {
   queuedJobs: number;
   activeJobs: number;
   message: string;
+  progress?: AnalysisWorkerProgress | null;
+};
+
+export type QwenBenchmarkProfile =
+  | "whole"
+  | "tiles4"
+  | "single-check"
+  | "full";
+
+export type QwenBenchmarkObject = {
+  label: string;
+  score: number;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  agreementCount: number;
+  sources: string[];
+};
+
+export type QwenBenchmarkTimings = {
+  prepareMs: number;
+  imageLoadMs: number;
+  modelReadyMs: number;
+  discoveryMs: number;
+  verificationMs: number;
+  totalMs: number;
+};
+
+export type QwenBenchmarkStageResult = {
+  path: string;
+  profile: QwenBenchmarkProfile;
+  label: string;
+  description: string;
+  imageWidth: number;
+  imageHeight: number;
+  regionCount: number;
+  candidateCount: number;
+  verifiedCount: number;
+  rejectedCount: number;
+  timings: QwenBenchmarkTimings;
+  objects: QwenBenchmarkObject[];
+};
+
+export type QwenBenchmarkRunResult = {
+  path: string;
+  results: QwenBenchmarkStageResult[];
 };
 
 export type AnalysisQueueStats = {
@@ -27,6 +82,8 @@ export type PipelineStatus = {
   petDetection: AnalysisQueueStats;
   petFusion: AnalysisQueueStats;
   petEmbeddings: AnalysisQueueStats;
+  objectVerification: AnalysisQueueStats;
+  semanticEmbeddings: AnalysisQueueStats;
 };
 
 export type AnalysisJob = {
@@ -54,6 +111,16 @@ export type AnalysisErrorRecord = {
 
 export type RetryAnalysisResult = {
   retried: number;
+};
+
+export type SemanticTextEmbedding = {
+  model: string;
+  query: string;
+  prompt: string;
+  dimension: number;
+  vector: number[];
+  logitScale: number;
+  logitBias: number;
 };
 
 export type MediaPreviewInfo = {
@@ -322,7 +389,31 @@ export type MediaRecord = {
   petSingleModelCount: number;
   objectCount: number;
   objectLabels: string[];
+  semanticReady: boolean;
+  semanticModel: string | null;
+  semanticScore: number | null;
   lastSeenAt: string;
+};
+
+export type SearchFilter = {
+  personIds: number[];
+  petIds: number[];
+  objectLabels: string[];
+  minDogs: number;
+  minCats: number;
+  semanticQuery: string;
+  semanticMinProbability: number;
+};
+
+export type SearchFacets = {
+  persons: Array<{ id: number; name: string; mediaCount: number }>;
+  pets: Array<{
+    id: number;
+    name: string;
+    petClass: "dog" | "cat";
+    mediaCount: number;
+  }>;
+  objects: Array<{ label: string; mediaCount: number }>;
 };
 
 export type DuplicateItem = {
@@ -371,6 +462,8 @@ export type CatalogMethod =
   | "addSource"
   | "getStats"
   | "listMedia"
+  | "getSearchFacets"
+  | "searchMedia"
   | "listDuplicateGroups"
   | "listRecycleMedia"
   | "enqueueAnalysisJobs"
@@ -388,9 +481,12 @@ export type CatalogMethod =
   | "completeFaceEmbeddingJob"
   | "completePetDetectionJob"
   | "getPetDetectionsForFusion"
+  | "getObjectDetectionsForFusion"
   | "completePetFusionJob"
+  | "completeVerifiedObjectDetectionJob"
   | "getPetDetectionsForEmbedding"
   | "completePetEmbeddingJob"
+  | "completeSemanticEmbeddingJob"
   | "getPetEmbeddingsForClustering"
   | "replacePetCandidates"
   | "autoAssignKnownPetCandidates"

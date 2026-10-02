@@ -1,6 +1,9 @@
 import type {
   AnalysisErrorRecord,
   AnalysisWorkerStatus,
+  QwenBenchmarkProfile,
+  QwenBenchmarkRunResult,
+  QwenBenchmarkStageResult,
   PipelineStatus,
   CatalogStats,
   ConfirmPersonResult,
@@ -18,6 +21,8 @@ import type {
   RetryAnalysisResult,
   ScanProgress,
   ScanResult,
+  SearchFacets,
+  SearchFilter,
   SourceRecord
 } from "../shared/protocol";
 
@@ -28,6 +33,22 @@ declare global {
       analysis: {
         getStatus(): Promise<AnalysisWorkerStatus>;
         getPipelineStatus(): Promise<PipelineStatus>;
+        openDevLog(): Promise<{ opened: true; path: string }>;
+        copyDevLog(): Promise<{
+          copied: true;
+          path: string;
+          characters: number;
+        }>;
+        prepareQwenBenchmark(): Promise<{ paused: true }>;
+        finishQwenBenchmark(): Promise<{ resumed: true }>;
+        pickQwenBenchmarkImage(): Promise<string | null>;
+        runQwenBenchmark(
+          filePath: string,
+          profiles: QwenBenchmarkProfile[]
+        ): Promise<QwenBenchmarkRunResult>;
+        onQwenBenchmarkStage(
+          listener: (stage: QwenBenchmarkStageResult) => void
+        ): () => void;
         listErrors(sourceId?: number, limit?: number): Promise<AnalysisErrorRecord[]>;
         retryJob(jobId: number): Promise<RetryAnalysisResult>;
         retryAll(sourceId?: number): Promise<RetryAnalysisResult>;
@@ -94,6 +115,12 @@ declare global {
         addSource(sourcePath: string): Promise<SourceRecord>;
         getStats(sourceId: number): Promise<CatalogStats>;
         listMedia(sourceId: number, limit?: number): Promise<MediaRecord[]>;
+        getSearchFacets(sourceId: number): Promise<SearchFacets>;
+        searchMedia(
+          sourceId: number,
+          filter: SearchFilter,
+          limit?: number
+        ): Promise<MediaRecord[]>;
         listDuplicateGroups(sourceId: number, limit?: number): Promise<DuplicateGroup[]>;
         listRecycleMedia(sourceId: number, limit?: number): Promise<MediaRecord[]>;
         scanSource(sourceId: number): Promise<ScanResult>;

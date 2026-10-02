@@ -1,27 +1,93 @@
 from __future__ import annotations
 
+import base64
+import gc
 import importlib.util
+import io
 import json
 import math
 import mimetypes
 import os
+import shutil
+import socket
+from pathlib import Path
+import subprocess
 import sys
 import time
+from urllib import error as urllib_error
+from urllib import request as urllib_request
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from typing import Any
 
-try:
-    from PIL import Image
-except Exception:
-    Image = None
+_PROCESS_STARTED_AT = time.perf_counter()
+_DEV_LOG_PATH = os.environ.get("IMAGE_SORTER_DEV_LOG", "").strip()
 
+
+def dev_log(event: str, **fields) -> None:
+    if not _DEV_LOG_PATH:
+        return
+
+    try:
+        payload = {
+            "ts": datetime.now().astimezone().isoformat(timespec="milliseconds"),
+            "source": "python-worker",
+            "pid": os.getpid(),
+            "uptimeMs": round((time.perf_counter() - _PROCESS_STARTED_AT) * 1000, 1),
+            "event": event,
+            **fields,
+        }
+        with open(_DEV_LOG_PATH, "a", encoding="utf-8") as handle:
+            handle.write(json.dumps(payload, ensure_ascii=False) + "\n")
+    except Exception:
+        # Diagnose darf den Worker niemals beeinflussen.
+        pass
+
+
+dev_log("PYTHON_PROCESS_BEGIN", python=sys.executable, argv=sys.argv)
+
+_pil_started = time.perf_counter()
+_pil_error = None
+try:
+    from PIL import Image, ImageDraw, ImageOps
+except Exception as exc:
+    Image = None
+    ImageDraw = None
+    ImageOps = None
+    _pil_error = str(exc)
+finally:
+    dev_log(
+        "IMPORT_PIL",
+        elapsedMs=round((time.perf_counter() - _pil_started) * 1000, 1),
+        ok=Image is not None,
+        error=_pil_error,
+    )
+
+# PyTorch/Transformers werden bewusst erst bei der SigLIP2-Stufe geladen.
+# Der Worker muss auf ping sofort antworten können; insbesondere unter Windows
+# kann der Import dieser großen Bibliotheken sonst bereits den Start-Timeout
+# überschreiten.
+torch = None
+AutoModel = None
+AutoProcessor = None
+_torch_transformers_import_error = None
+
+_opencv_started = time.perf_counter()
+_opencv_error = None
 try:
     import cv2
     import numpy as np
-except Exception:
+except Exception as exc:
     cv2 = None
     np = None
+    _opencv_error = str(exc)
+finally:
+    dev_log(
+        "IMPORT_OPENCV_NUMPY",
+        elapsedMs=round((time.perf_counter() - _opencv_started) * 1000, 1),
+        ok=cv2 is not None and np is not None,
+        error=_opencv_error,
+    )
 
 WORKER_DIR = os.path.dirname(os.path.abspath(__file__))
 YUNET_MODEL = os.path.join(
@@ -50,6 +116,33 @@ DOG_REID_MODEL = os.path.join(
     "dog_reid_dinov2_b14_0_2_0.onnx",
 )
 
+SIGLIP2_MODEL_DIR = os.path.join(
+    WORKER_DIR,
+    "models",
+    "siglip2-so400m-patch16-naflex",
+)
+SIGLIP2_MODEL_VERSION = "SigLIP2 So400m/16 NaFlex FP32 1024patch-v1"
+SIGLIP2_MAX_NUM_PATCHES = 1024
+
+
+QWEN3VL_MODEL_DIR = os.path.join(
+    WORKER_DIR,
+    "models",
+    "qwen3-vl-8b-thinking-gguf",
+)
+QWEN3VL_MODEL_FILE = os.path.join(
+    QWEN3VL_MODEL_DIR,
+    "Qwen3VL-8B-Thinking-Q8_0.gguf",
+)
+QWEN3VL_MMPROJ_FILE = os.path.join(
+    QWEN3VL_MODEL_DIR,
+    "mmproj-Qwen3VL-8B-Thinking-F16.gguf",
+)
+QWEN3VL_MODEL_VERSION = (
+    "Qwen3-VL-8B-Thinking GGUF Q8_0 + mmproj F16 structured non-thinking v3"
+)
+QWEN3VL_CONTEXT_SIZE = 16384
+
 COCO_CLASS_NAMES = (
     "person", "bicycle", "car", "motorcycle", "airplane", "bus", "train",
     "truck", "boat", "traffic light", "fire hydrant", "stop sign",
@@ -68,6 +161,15 @@ COCO_CLASS_NAMES = (
 
 _dog_reid_session = None
 _onnxruntime_module = None
+_siglip2_model = None
+_siglip2_processor = None
+_siglip2_coco_text_features = None
+_qwen_server_process = None
+_qwen_server_port = None
+_qwen_server_log_handle = None
+_llama_server_cached = None
+_llama_server_searched = False
+QWEN_SERVER_LOG = os.path.join(WORKER_DIR, "llama-qwen3vl.log")
 
 
 @dataclass
@@ -87,6 +189,108 @@ config = WorkerConfig()
 runtime = WorkerRuntime()
 
 
+def find_llama_server() -> str | None:
+    global _llama_server_cached, _llama_server_searched
+
+    if _llama_server_searched:
+        return _llama_server_cached
+
+    started = time.perf_counter()
+    dev_log("LLAMA_SERVER_SEARCH_BEGIN")
+
+    configured = os.environ.get("IMAGE_SORTER_LLAMA_SERVER", "").strip()
+    if configured and os.path.isfile(configured):
+        _llama_server_cached = configured
+        _llama_server_searched = True
+        dev_log(
+            "LLAMA_SERVER_SEARCH_OK",
+            elapsedMs=round((time.perf_counter() - started) * 1000, 1),
+            path=configured,
+            sourceKind="env",
+        )
+        return configured
+
+    # Normaler PATH/Alias-Fall.
+    for name in ("llama-server.exe", "llama-server"):
+        found = shutil.which(name)
+        if found and os.path.isfile(found):
+            _llama_server_cached = found
+            _llama_server_searched = True
+            dev_log(
+                "LLAMA_SERVER_SEARCH_OK",
+                elapsedMs=round((time.perf_counter() - started) * 1000, 1),
+                path=found,
+                sourceKind="path",
+            )
+            return found
+
+    # WinGet-Portable-Pakete sind nicht in jedem bereits laufenden Prozess
+    # sofort im PATH sichtbar. Deshalb zusätzlich direkt an den bekannten
+    # WinGet-Orten suchen.
+    if os.name == "nt":
+        local_app_data = os.environ.get("LOCALAPPDATA", "").strip()
+        if local_app_data:
+            local = Path(local_app_data)
+
+            direct_candidates = (
+                local / "Microsoft" / "WinGet" / "Links" / "llama-server.exe",
+                local / "Microsoft" / "WindowsApps" / "llama-server.exe",
+            )
+            for candidate in direct_candidates:
+                if candidate.is_file():
+                    value = str(candidate)
+                    _llama_server_cached = value
+                    _llama_server_searched = True
+                    dev_log(
+                        "LLAMA_SERVER_SEARCH_OK",
+                        elapsedMs=round((time.perf_counter() - started) * 1000, 1),
+                        path=value,
+                        sourceKind="winget-link",
+                    )
+                    return value
+
+            packages = local / "Microsoft" / "WinGet" / "Packages"
+            if packages.is_dir():
+                package_dirs = sorted(
+                    packages.glob("ggml.llamacpp_*"),
+                    key=lambda path: path.stat().st_mtime if path.exists() else 0,
+                    reverse=True,
+                )
+                for package_dir in package_dirs:
+                    try:
+                        matches = list(package_dir.rglob("llama-server.exe"))
+                    except OSError:
+                        matches = []
+                    if matches:
+                        value = str(matches[0])
+                        _llama_server_cached = value
+                        _llama_server_searched = True
+                        dev_log(
+                            "LLAMA_SERVER_SEARCH_OK",
+                            elapsedMs=round((time.perf_counter() - started) * 1000, 1),
+                            path=value,
+                            sourceKind="winget-package",
+                        )
+                        return value
+
+    _llama_server_cached = None
+    _llama_server_searched = True
+    dev_log(
+        "LLAMA_SERVER_SEARCH_MISSING",
+        elapsedMs=round((time.perf_counter() - started) * 1000, 1),
+    )
+    return None
+
+
+def qwen_gguf_ready() -> bool:
+    return (
+        os.path.isfile(QWEN3VL_MODEL_FILE)
+        and os.path.getsize(QWEN3VL_MODEL_FILE) > 8_000_000_000
+        and os.path.isfile(QWEN3VL_MMPROJ_FILE)
+        and os.path.getsize(QWEN3VL_MMPROJ_FILE) > 1_000_000_000
+    )
+
+
 def snapshot() -> dict:
     return {
         **asdict(config),
@@ -101,6 +305,13 @@ def snapshot() -> dict:
             "nanodetModel": os.path.isfile(NANODET_MODEL),
             "yoloxModel": os.path.isfile(YOLOX_MODEL),
             "dogReIdModel": os.path.isfile(DOG_REID_MODEL),
+            "siglip2Model": os.path.isfile(
+                os.path.join(SIGLIP2_MODEL_DIR, "model.safetensors")
+            ),
+            "qwen3vlModel": qwen_gguf_ready(),
+            "qwen3vlRuntime": find_llama_server() is not None,
+            "torch": importlib.util.find_spec("torch") is not None,
+            "transformers": importlib.util.find_spec("transformers") is not None,
             "onnxRuntime": importlib.util.find_spec("onnxruntime") is not None,
             "imageMetadata": Image is not None,
             "faceDetection": cv2 is not None and os.path.isfile(YUNET_MODEL),
@@ -121,6 +332,21 @@ def snapshot() -> dict:
                 and importlib.util.find_spec("onnxruntime") is not None
                 and os.path.isfile(DOG_REID_MODEL)
             ),
+            "semanticEmbeddings": (
+                Image is not None
+                and importlib.util.find_spec("torch") is not None
+                and importlib.util.find_spec("transformers") is not None
+                and os.path.isfile(
+                    os.path.join(SIGLIP2_MODEL_DIR, "model.safetensors")
+                )
+            ),
+            "qwenObjectDetection": (
+                Image is not None
+                and ImageDraw is not None
+                and ImageOps is not None
+                and qwen_gguf_ready()
+                and find_llama_server() is not None
+            ),
         },
     }
 
@@ -132,6 +358,52 @@ def respond(request_id: str | None, *, result=None, error: str | None = None) ->
     else:
         message["error"] = error
     print(json.dumps(message, ensure_ascii=False), flush=True)
+
+
+def report_progress(
+    request_id: str | None,
+    message: str,
+    *,
+    phase: str | None = None,
+    current: int | None = None,
+    total: int | None = None,
+) -> None:
+    if not request_id:
+        return
+
+    event = {
+        "event": "progress",
+        "requestId": request_id,
+        "message": str(message),
+    }
+    if phase:
+        event["phase"] = phase
+    if current is not None:
+        event["current"] = int(current)
+    if total is not None:
+        event["total"] = int(total)
+
+    print(json.dumps(event, ensure_ascii=False), flush=True)
+
+
+def report_process_event(
+    process_kind: str,
+    process_state: str,
+    *,
+    pid: int | None = None,
+    port: int | None = None,
+) -> None:
+    event = {
+        "event": "process",
+        "processKind": process_kind,
+        "processState": process_state,
+    }
+    if pid is not None:
+        event["pid"] = int(pid)
+    if port is not None:
+        event["port"] = int(port)
+
+    print(json.dumps(event, ensure_ascii=False), flush=True)
 
 
 def require_file(payload: dict) -> str:
@@ -499,9 +771,12 @@ def detect_pets(file_path: str) -> dict:
     strides = (8, 16, 32, 64)
     reg_max = 7
     project = np.arange(reg_max + 1, dtype=np.float32)
-    boxes: list[list[float]] = []
-    scores: list[float] = []
-    class_ids: list[int] = []
+    candidates_by_class: dict[int, list[tuple[list[float], float]]] = {}
+
+    # Bewusst etwas niedriger Roh-Schwellwert: schwächere echte Treffer dürfen
+    # in die spätere Zwei-Modell-Fusion gelangen. Erst dort wird entschieden,
+    # ob ein Motiv belastbar genug für Anzeige und Suche ist.
+    raw_threshold = 0.25
 
     for stride, cls_score, bbox_pred in zip(
         strides,
@@ -546,8 +821,11 @@ def detect_pets(file_path: str) -> dict:
             class_id = int(class_id)
             confidence = float(confidence)
 
-            # COCO: cat=15, dog=16.
-            if class_id not in (15, 16) or confidence < 0.38:
+            if (
+                class_id < 0
+                or class_id >= len(COCO_CLASS_NAMES)
+                or confidence < raw_threshold
+            ):
                 continue
 
             x1 = max(0.0, float(anchor[0] - distance[0]))
@@ -555,18 +833,23 @@ def detect_pets(file_path: str) -> dict:
             x2 = min(416.0, float(anchor[0] + distance[2]))
             y2 = min(416.0, float(anchor[1] + distance[3]))
 
-            boxes.append([x1, y1, max(0.0, x2 - x1), max(0.0, y2 - y1)])
-            scores.append(confidence)
-            class_ids.append(class_id)
+            box = [x1, y1, max(0.0, x2 - x1), max(0.0, y2 - y1)]
+            candidates_by_class.setdefault(class_id, []).append((box, confidence))
 
     pets: list[dict] = []
+    objects: list[dict] = []
 
-    if boxes:
-        indices = cv2.dnn.NMSBoxes(boxes, scores, 0.38, 0.60)
+    # NMS klassenweise ausführen. So verdrängt z. B. eine Person kein
+    # überlappendes Fahrrad oder einen Hund.
+    for class_id, candidates in candidates_by_class.items():
+        boxes = [box for box, _score in candidates]
+        scores = [score for _box, score in candidates]
+        keep = cv2.dnn.NMSBoxes(boxes, scores, raw_threshold, 0.50)
 
-        for raw_index in indices:
-            index = int(raw_index)
-            x, y, width, height = boxes[index]
+        for raw_index in keep:
+            local_index = int(np.asarray(raw_index).reshape(-1)[0])
+            x, y, width, height = boxes[local_index]
+            confidence = float(scores[local_index])
 
             original_x = max(0.0, (x - left) / scale)
             original_y = max(0.0, (y - top) / scale)
@@ -587,17 +870,31 @@ def detect_pets(file_path: str) -> dict:
             if original_width_box <= 1.0 or original_height_box <= 1.0:
                 continue
 
-            class_id = class_ids[index]
-            pets.append({
-                "class": "cat" if class_id == 15 else "dog",
+            item = {
+                "label": COCO_CLASS_NAMES[class_id],
                 "classId": class_id,
-                "score": float(scores[index]),
+                "score": confidence,
                 "x": original_x,
                 "y": original_y,
                 "width": original_width_box,
                 "height": original_height_box,
-            })
+            }
+            objects.append(item)
 
+            # Für die bestehende Haustier-Fusion bleibt die bisherige
+            # Mindestqualität erhalten.
+            if class_id in (15, 16) and confidence >= 0.38:
+                pets.append({
+                    "class": "cat" if class_id == 15 else "dog",
+                    "classId": class_id,
+                    "score": confidence,
+                    "x": original_x,
+                    "y": original_y,
+                    "width": original_width_box,
+                    "height": original_height_box,
+                })
+
+    objects.sort(key=lambda item: float(item["score"]), reverse=True)
     pets.sort(key=lambda pet: float(pet["score"]), reverse=True)
 
     return {
@@ -606,8 +903,8 @@ def detect_pets(file_path: str) -> dict:
         "imageWidth": int(original_width),
         "imageHeight": int(original_height),
         "pets": pets,
+        "objects": objects,
     }
-
 
 def yolox_letterbox(image, target_size: tuple[int, int] = (640, 640)):
     target_h, target_w = target_size
@@ -715,7 +1012,7 @@ def detect_pets_yolox(file_path: str) -> dict:
 
     for class_id in range(class_count):
         scores = class_scores[:, class_id]
-        indices = np.where(scores >= 0.35)[0]
+        indices = np.where(scores >= 0.25)[0]
         if indices.size == 0:
             continue
 
@@ -725,7 +1022,7 @@ def detect_pets_yolox(file_path: str) -> dict:
         keep = cv2.dnn.NMSBoxes(
             boxes,
             confidences,
-            0.35,
+            0.25,
             0.50,
         )
 
@@ -817,7 +1114,157 @@ def box_iou(a: dict, b: dict) -> float:
     return intersection / union if union > 0.0 else 0.0
 
 
-def fuse_pet_detections(detections: list[dict]) -> dict:
+def fuse_object_detections(detections: list[dict]) -> list[dict]:
+    cleaned: list[dict] = []
+
+    for raw in detections:
+        if not isinstance(raw, dict):
+            continue
+
+        label = str(raw.get("label", "")).strip()
+        detector = str(raw.get("detector", "")).strip()
+        score = float(raw.get("score", 0.0))
+        class_id = int(raw.get("classId", -1))
+
+        if (
+            not label
+            or not detector
+            or class_id < 0
+            or class_id >= len(COCO_CLASS_NAMES)
+            or label != COCO_CLASS_NAMES[class_id]
+        ):
+            continue
+
+        item = {
+            "label": label,
+            "classId": class_id,
+            "detector": detector,
+            "score": score,
+            "x": float(raw.get("x", 0.0)),
+            "y": float(raw.get("y", 0.0)),
+            "width": float(raw.get("width", 0.0)),
+            "height": float(raw.get("height", 0.0)),
+        }
+
+        if (
+            item["width"] <= 1.0
+            or item["height"] <= 1.0
+            or not math.isfinite(item["score"])
+        ):
+            continue
+
+        cleaned.append(item)
+
+    cleaned.sort(key=lambda item: float(item["score"]), reverse=True)
+    groups: list[list[dict]] = []
+
+    for item in cleaned:
+        best_group = None
+        best_iou = 0.0
+
+        for group in groups:
+            if str(group[0]["label"]) != str(item["label"]):
+                continue
+            if any(
+                str(member["detector"]) == str(item["detector"])
+                for member in group
+            ):
+                continue
+
+            weights = np.array(
+                [max(0.01, float(member["score"])) for member in group],
+                dtype=np.float32,
+            )
+            centroid = {
+                key: float(np.average(
+                    [float(member[key]) for member in group],
+                    weights=weights,
+                ))
+                for key in ("x", "y", "width", "height")
+            }
+
+            overlap = box_iou(item, centroid)
+            if overlap >= 0.35 and overlap > best_iou:
+                best_iou = overlap
+                best_group = group
+
+        if best_group is None:
+            groups.append([item])
+        else:
+            best_group.append(item)
+
+    fused: list[dict] = []
+    common_large_classes = {
+        "person", "bicycle", "car", "motorcycle", "bus", "train",
+        "truck", "dog", "cat", "horse",
+    }
+
+    for group in groups:
+        sources = sorted({str(member["detector"]) for member in group})
+        scores = [float(member["score"]) for member in group]
+        agreement_count = len(sources)
+        label = str(group[0]["label"])
+        best_score = max(scores)
+
+        if agreement_count == 1:
+            detector = sources[0]
+            if label in common_large_classes:
+                minimum = 0.58 if detector.startswith("YOLOX") else 0.68
+            else:
+                minimum = 0.64 if detector.startswith("YOLOX") else 0.72
+
+            if best_score < minimum:
+                continue
+        else:
+            # Zwei unabhängige Modelle dürfen schwächere Einzelwerte retten.
+            # Extrem schwache Doppeltreffer werden trotzdem verworfen.
+            if best_score < 0.32 or (sum(scores) / len(scores)) < 0.28:
+                continue
+
+        weights = np.array(
+            [max(0.01, score) for score in scores],
+            dtype=np.float32,
+        )
+        box = {
+            key: float(np.average(
+                [float(member[key]) for member in group],
+                weights=weights,
+            ))
+            for key in ("x", "y", "width", "height")
+        }
+
+        fused_score = (
+            min(0.99, best_score + 0.10 * (1.0 - best_score))
+            if agreement_count >= 2
+            else best_score
+        )
+
+        fused.append({
+            "label": label,
+            "classId": int(group[0]["classId"]),
+            "score": float(fused_score),
+            "x": box["x"],
+            "y": box["y"],
+            "width": box["width"],
+            "height": box["height"],
+            "agreementCount": agreement_count,
+            "sources": sources,
+        })
+
+    fused.sort(
+        key=lambda item: (
+            -int(item["agreementCount"]),
+            -float(item["score"]),
+            str(item["label"]),
+        )
+    )
+    return fused
+
+
+def fuse_pet_detections(
+    detections: list[dict],
+    objects: list[dict] | None = None,
+) -> dict:
     cleaned: list[dict] = []
 
     for raw in detections:
@@ -946,8 +1393,9 @@ def fuse_pet_detections(detections: list[dict]) -> dict:
         "module": "pet-fuse-ensemble-v1",
         "fusion": "NanoDet+YOLOX-S weighted-box-v1",
         "pets": fused,
+        "objectFusion": "NanoDet+YOLOX-S consensus-v1",
+        "objects": fuse_object_detections(objects or []),
     }
-
 
 def dog_reid_session():
     global _dog_reid_session, _onnxruntime_module
@@ -958,19 +1406,32 @@ def dog_reid_session():
         )
 
     if _onnxruntime_module is None:
+        started = time.perf_counter()
+        dev_log("DOG_REID_ONNXRUNTIME_IMPORT_BEGIN")
         try:
             import onnxruntime as runtime
         except Exception as exc:
+            dev_log(
+                "DOG_REID_ONNXRUNTIME_IMPORT_ERROR",
+                elapsedMs=round((time.perf_counter() - started) * 1000, 1),
+                error=str(exc),
+            )
             raise RuntimeError(
                 "ONNX Runtime konnte für Dog-ReID nicht geladen werden: "
                 f"{exc}"
             ) from exc
 
         _onnxruntime_module = runtime
+        dev_log(
+            "DOG_REID_ONNXRUNTIME_IMPORT_OK",
+            elapsedMs=round((time.perf_counter() - started) * 1000, 1),
+        )
 
     runtime = _onnxruntime_module
 
     if _dog_reid_session is None:
+        started = time.perf_counter()
+        dev_log("DOG_REID_MODEL_LOAD_BEGIN", model=DOG_REID_MODEL)
         options = runtime.SessionOptions()
         options.intra_op_num_threads = 4
         options.inter_op_num_threads = 1
@@ -979,6 +1440,10 @@ def dog_reid_session():
             DOG_REID_MODEL,
             sess_options=options,
             providers=["CPUExecutionProvider"],
+        )
+        dev_log(
+            "DOG_REID_MODEL_LOAD_OK",
+            elapsedMs=round((time.perf_counter() - started) * 1000, 1),
         )
 
     return _dog_reid_session
@@ -1449,6 +1914,1816 @@ def cluster_face_embeddings(
     }
 
 
+def ensure_torch_transformers() -> None:
+    global torch, AutoModel, AutoProcessor, _torch_transformers_import_error
+
+    if torch is not None and AutoModel is not None and AutoProcessor is not None:
+        return
+
+    if _torch_transformers_import_error is not None:
+        raise RuntimeError(
+            "PyTorch/Transformers konnte zuvor nicht geladen werden: "
+            + _torch_transformers_import_error
+        )
+
+    started = time.perf_counter()
+    dev_log("TORCH_TRANSFORMERS_IMPORT_BEGIN")
+    try:
+        import torch as torch_module
+        from transformers import AutoModel as AutoModelClass
+        from transformers import AutoProcessor as AutoProcessorClass
+
+        torch = torch_module
+        AutoModel = AutoModelClass
+        AutoProcessor = AutoProcessorClass
+        dev_log(
+            "TORCH_TRANSFORMERS_IMPORT_OK",
+            elapsedMs=round((time.perf_counter() - started) * 1000, 1),
+            torchVersion=getattr(torch_module, "__version__", None),
+        )
+    except Exception as exc:
+        _torch_transformers_import_error = str(exc)
+        dev_log(
+            "TORCH_TRANSFORMERS_IMPORT_ERROR",
+            elapsedMs=round((time.perf_counter() - started) * 1000, 1),
+            error=str(exc),
+        )
+        raise RuntimeError(
+            "PyTorch/Transformers konnte für SigLIP2 nicht geladen werden: "
+            + str(exc)
+        ) from exc
+
+
+def release_torch_memory() -> None:
+    gc.collect()
+    if torch is not None and torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
+
+def unload_siglip2() -> None:
+    global _siglip2_model, _siglip2_processor, _siglip2_coco_text_features
+    had_model = _siglip2_model is not None or _siglip2_processor is not None
+    if had_model:
+        dev_log("SIGLIP2_UNLOAD_BEGIN")
+    _siglip2_model = None
+    _siglip2_processor = None
+    _siglip2_coco_text_features = None
+    release_torch_memory()
+    if had_model:
+        dev_log("SIGLIP2_UNLOAD_DONE")
+
+
+def unload_qwen3vl() -> None:
+    global _qwen_server_process, _qwen_server_port, _qwen_server_log_handle
+
+    process = _qwen_server_process
+    if process is not None:
+        dev_log(
+            "QWEN_SERVER_UNLOAD_BEGIN",
+            serverPid=process.pid,
+            running=process.poll() is None,
+        )
+    _qwen_server_process = None
+    _qwen_server_port = None
+
+    if process is not None and process.poll() is None:
+        try:
+            process.terminate()
+            process.wait(timeout=8)
+        except Exception:
+            try:
+                process.kill()
+            except Exception:
+                pass
+
+    if _qwen_server_log_handle is not None:
+        try:
+            _qwen_server_log_handle.close()
+        except Exception:
+            pass
+        _qwen_server_log_handle = None
+
+    release_torch_memory()
+    if process is not None:
+        report_process_event(
+            "qwen-server",
+            "stopped",
+            pid=process.pid,
+        )
+        dev_log("QWEN_SERVER_UNLOAD_DONE", serverPid=process.pid)
+
+
+def prepare_for_qwen() -> None:
+    global _dog_reid_session, _onnxruntime_module
+
+    # Qwen ist die letzte und speicherintensivste Pipeline-Stufe. Alle großen
+    # zuvor verwendeten Modellinstanzen werden deshalb explizit freigegeben.
+    unload_siglip2()
+
+    _dog_reid_session = None
+    _onnxruntime_module = None
+
+    release_torch_memory()
+    gc.collect()
+
+
+def siglip2_runtime():
+    global _siglip2_model, _siglip2_processor
+
+    if Image is None or ImageOps is None:
+        raise RuntimeError(
+            "Pillow fehlt. Einmal 'npm.cmd run setup:ai' ausführen."
+        )
+
+    ensure_torch_transformers()
+
+    weights = os.path.join(SIGLIP2_MODEL_DIR, "model.safetensors")
+    if not os.path.isfile(weights):
+        raise RuntimeError(
+            "SigLIP2 So400m NaFlex fehlt. Einmal 'npm.cmd run setup:ai' ausführen. "
+            "Der einmalige Modell-Download ist etwa 4,6 GB groß."
+        )
+
+    if _siglip2_processor is None:
+        started = time.perf_counter()
+        dev_log("SIGLIP2_PROCESSOR_LOAD_BEGIN")
+        _siglip2_processor = AutoProcessor.from_pretrained(
+            SIGLIP2_MODEL_DIR,
+            local_files_only=True,
+            use_fast=False,
+        )
+        dev_log(
+            "SIGLIP2_PROCESSOR_LOAD_OK",
+            elapsedMs=round((time.perf_counter() - started) * 1000, 1),
+        )
+
+    if _siglip2_model is None:
+        # Qwen3-VL ist deutlich größer. Die beiden großen Modelle werden
+        # absichtlich nicht gleichzeitig im RAM gehalten.
+        unload_qwen3vl()
+
+        # Genauigkeit ist hier wichtiger als Laufzeit: kein INT8/INT4 und keine
+        # aggressive Quantisierung. FP32 ist auch auf CPU reproduzierbar.
+        started = time.perf_counter()
+        dev_log("SIGLIP2_MODEL_LOAD_BEGIN", model=SIGLIP2_MODEL_VERSION)
+        _siglip2_model = AutoModel.from_pretrained(
+            SIGLIP2_MODEL_DIR,
+            local_files_only=True,
+            torch_dtype=torch.float32,
+        )
+        _siglip2_model.eval()
+        dev_log(
+            "SIGLIP2_MODEL_LOAD_OK",
+            elapsedMs=round((time.perf_counter() - started) * 1000, 1),
+        )
+
+    return _siglip2_processor, _siglip2_model
+
+
+def siglip2_feature_tensor(features):
+    # Transformers liefert bei SigLIP2 je nach Version entweder direkt einen
+    # Tensor oder ein BaseModelOutputWithPooling. Für Ähnlichkeitssuche ist
+    # dessen trainierter pooler_output der richtige einzelne Bild-/Textvektor.
+    if torch.is_tensor(features):
+        return features
+
+    pooled = getattr(features, "pooler_output", None)
+    if torch.is_tensor(pooled):
+        return pooled
+
+    # Kompatibilität mit return_dict=False bzw. älteren Transformers-Versionen.
+    if isinstance(features, (tuple, list)):
+        for candidate in reversed(features):
+            if torch.is_tensor(candidate) and candidate.ndim == 2:
+                return candidate
+
+    raise RuntimeError(
+        "SigLIP2 hat keinen auswertbaren gepoolten Merkmalsvektor geliefert "
+        f"(Typ: {type(features).__name__})."
+    )
+
+
+def normalized_torch_vector(features) -> list[float]:
+    tensor = siglip2_feature_tensor(features)
+
+    if tensor.ndim == 2:
+        if int(tensor.shape[0]) != 1:
+            raise RuntimeError(
+                "SigLIP2 hat unerwartet mehrere Merkmalsvektoren geliefert: "
+                f"{tuple(tensor.shape)}."
+            )
+        tensor = tensor[0]
+
+    if tensor.ndim != 1:
+        raise RuntimeError(
+            "SigLIP2-Merkmalsvektor hat eine unerwartete Form: "
+            f"{tuple(tensor.shape)}."
+        )
+
+    vector = tensor.detach().to(device="cpu", dtype=torch.float32).reshape(-1)
+    norm = torch.linalg.vector_norm(vector)
+    norm_value = float(norm.item())
+
+    if not math.isfinite(norm_value) or norm_value <= 0.0:
+        raise RuntimeError("SigLIP2 hat einen ungültigen Merkmalsvektor erzeugt.")
+
+    vector = vector / norm
+    return [float(value) for value in vector.tolist()]
+
+
+def extract_semantic_image_embedding(file_path: str) -> dict:
+    processor, model = siglip2_runtime()
+
+    try:
+        with Image.open(file_path) as source:
+            source.load()
+            image = ImageOps.exif_transpose(source).convert("RGB")
+    except Exception as exc:
+        raise RuntimeError(
+            f"Bild konnte für SigLIP2 nicht gelesen werden: {exc}"
+        ) from exc
+
+    try:
+        inputs = processor(
+            images=image,
+            max_num_patches=SIGLIP2_MAX_NUM_PATCHES,
+            return_tensors="pt",
+        )
+
+        with torch.inference_mode():
+            features = model.get_image_features(**inputs)
+
+        vector = normalized_torch_vector(features)
+    finally:
+        image.close()
+
+    return {
+        "module": "semantic-embed-siglip2-v1",
+        "model": SIGLIP2_MODEL_VERSION,
+        "dimension": len(vector),
+        "maxNumPatches": SIGLIP2_MAX_NUM_PATCHES,
+        "precision": "float32",
+        "vector": vector,
+    }
+
+
+def extract_semantic_text_embedding(text: str) -> dict:
+    query = " ".join(str(text).strip().split())
+    if not query:
+        raise RuntimeError("Semantischer Suchtext ist leer.")
+
+    processor, model = siglip2_runtime()
+
+    # SigLIP2 wurde mit kleingeschriebenem Text trainiert. Die Vorlage
+    # entspricht der von Transformers dokumentierten Zero-Shot-Pipeline.
+    normalized_query = query.lower()
+    prompt = f"this is a photo of {normalized_query}."
+
+    inputs = processor(
+        text=[prompt],
+        padding="max_length",
+        max_length=64,
+        truncation=True,
+        return_tensors="pt",
+    )
+
+    with torch.inference_mode():
+        features = model.get_text_features(**inputs)
+
+    vector = normalized_torch_vector(features)
+
+    raw_logit_scale = getattr(model, "logit_scale", None)
+    raw_logit_bias = getattr(model, "logit_bias", None)
+
+    if raw_logit_scale is None or raw_logit_bias is None:
+        raise RuntimeError(
+            "SigLIP2 stellt Logit-Skalierung für die semantische Suche nicht bereit."
+        )
+
+    logit_scale = float(torch.exp(raw_logit_scale.detach().cpu()).item())
+    logit_bias = float(raw_logit_bias.detach().cpu().item())
+
+    if not math.isfinite(logit_scale) or not math.isfinite(logit_bias):
+        raise RuntimeError("SigLIP2-Logitparameter sind ungültig.")
+
+    return {
+        "model": SIGLIP2_MODEL_VERSION,
+        "query": query,
+        "prompt": prompt,
+        "dimension": len(vector),
+        "vector": vector,
+        "logitScale": logit_scale,
+        "logitBias": logit_bias,
+    }
+
+
+
+
+def xyxy_iou(left: list[float], right: list[float]) -> float:
+    x1 = max(float(left[0]), float(right[0]))
+    y1 = max(float(left[1]), float(right[1]))
+    x2 = min(float(left[2]), float(right[2]))
+    y2 = min(float(left[3]), float(right[3]))
+
+    intersection = max(0.0, x2 - x1) * max(0.0, y2 - y1)
+    left_area = max(0.0, float(left[2]) - float(left[0])) * max(
+        0.0, float(left[3]) - float(left[1])
+    )
+    right_area = max(0.0, float(right[2]) - float(right[0])) * max(
+        0.0, float(right[3]) - float(right[1])
+    )
+    union = left_area + right_area - intersection
+    return intersection / union if union > 0.0 else 0.0
+
+
+def qwen_server_log_tail(max_bytes: int = 6000) -> str:
+    try:
+        with open(QWEN_SERVER_LOG, "rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            size = handle.tell()
+            handle.seek(max(0, size - max_bytes), os.SEEK_SET)
+            data = handle.read()
+        return data.decode("utf-8", errors="replace").strip()
+    except Exception:
+        return ""
+
+
+def free_local_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
+
+
+def qwen_server_healthy(port: int, timeout: float = 1.0) -> bool:
+    try:
+        with urllib_request.urlopen(
+            f"http://127.0.0.1:{port}/health",
+            timeout=timeout,
+        ) as response:
+            return int(response.status) == 200
+    except Exception:
+        return False
+
+
+def qwen3vl_runtime() -> int:
+    global _qwen_server_process, _qwen_server_port, _qwen_server_log_handle
+
+    if Image is None or ImageDraw is None or ImageOps is None:
+        raise RuntimeError(
+            "Pillow fehlt. Einmal 'npm.cmd run setup:ai' ausführen."
+        )
+
+    if not qwen_gguf_ready():
+        raise RuntimeError(
+            "Qwen3-VL-8B-Thinking GGUF Q8_0 oder der FP16-Vision-Projektor "
+            "fehlt. Einmal 'npm.cmd run setup:ai' ausführen."
+        )
+
+    executable = find_llama_server()
+    if executable is None:
+        raise RuntimeError(
+            "llama-server wurde nicht gefunden. Unter Windows bitte "
+            "'winget install llama.cpp' ausführen und die App neu starten."
+        )
+
+    if (
+        _qwen_server_process is not None
+        and _qwen_server_process.poll() is None
+        and _qwen_server_port is not None
+        and qwen_server_healthy(int(_qwen_server_port))
+    ):
+        dev_log(
+            "QWEN_SERVER_REUSE",
+            serverPid=_qwen_server_process.pid,
+            port=int(_qwen_server_port),
+        )
+        return int(_qwen_server_port)
+
+    unload_qwen3vl()
+    unload_siglip2()
+
+    port = free_local_port()
+    os.makedirs(os.path.dirname(QWEN_SERVER_LOG), exist_ok=True)
+    _qwen_server_log_handle = open(
+        QWEN_SERVER_LOG,
+        "w",
+        encoding="utf-8",
+        buffering=1,
+    )
+
+    args = [
+        executable,
+        "-m",
+        QWEN3VL_MODEL_FILE,
+        "--mmproj",
+        QWEN3VL_MMPROJ_FILE,
+        "--host",
+        "127.0.0.1",
+        "--port",
+        str(port),
+        "-c",
+        str(QWEN3VL_CONTEXT_SIZE),
+        "-ngl",
+        "0",
+        "--no-mmproj-offload",
+    ]
+
+    creationflags = 0
+    if os.name == "nt":
+        creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+    server_started = time.perf_counter()
+    dev_log(
+        "QWEN_SERVER_START_BEGIN",
+        executable=executable,
+        port=port,
+        context=QWEN3VL_CONTEXT_SIZE,
+        model=QWEN3VL_MODEL_FILE,
+        mmproj=QWEN3VL_MMPROJ_FILE,
+    )
+
+    _qwen_server_process = subprocess.Popen(
+        args,
+        stdin=subprocess.DEVNULL,
+        stdout=_qwen_server_log_handle,
+        stderr=subprocess.STDOUT,
+        creationflags=creationflags,
+    )
+    _qwen_server_port = port
+    report_process_event(
+        "qwen-server",
+        "started",
+        pid=_qwen_server_process.pid,
+        port=port,
+    )
+    dev_log(
+        "QWEN_SERVER_PROCESS_SPAWNED",
+        serverPid=_qwen_server_process.pid,
+        elapsedMs=round((time.perf_counter() - server_started) * 1000, 1),
+    )
+
+    deadline = time.monotonic() + 240.0
+    while time.monotonic() < deadline:
+        if _qwen_server_process.poll() is not None:
+            detail = qwen_server_log_tail()
+            dev_log(
+                "QWEN_SERVER_START_ERROR",
+                elapsedMs=round((time.perf_counter() - server_started) * 1000, 1),
+                detail=detail[-1200:],
+            )
+            unload_qwen3vl()
+            raise RuntimeError(
+                "llama.cpp konnte Qwen3-VL nicht starten."
+                + (f" Log: {detail}" if detail else "")
+            )
+
+        if qwen_server_healthy(port, timeout=1.0):
+            dev_log(
+                "QWEN_SERVER_READY",
+                serverPid=_qwen_server_process.pid,
+                port=port,
+                elapsedMs=round((time.perf_counter() - server_started) * 1000, 1),
+            )
+            return port
+
+        time.sleep(0.75)
+
+    detail = qwen_server_log_tail()
+    dev_log(
+        "QWEN_SERVER_START_TIMEOUT",
+        elapsedMs=round((time.perf_counter() - server_started) * 1000, 1),
+        detail=detail[-1200:],
+    )
+    unload_qwen3vl()
+    raise RuntimeError(
+        "llama.cpp hat Qwen3-VL nicht innerhalb von 240 Sekunden geladen."
+        + (f" Log: {detail}" if detail else "")
+    )
+
+
+def image_data_uri(image) -> str:
+    buffer = io.BytesIO()
+    image.save(buffer, format="PNG", optimize=False)
+    encoded = base64.b64encode(buffer.getvalue()).decode("ascii")
+    return "data:image/png;base64," + encoded
+
+
+def format_live_duration(seconds: float) -> str:
+    total = max(0, int(seconds))
+    hours, remainder = divmod(total, 3600)
+    minutes, secs = divmod(remainder, 60)
+
+    if hours > 0:
+        return f"{hours}:{minutes:02d}:{secs:02d} h"
+    if minutes > 0:
+        return f"{minutes}:{secs:02d} min"
+    return f"{secs} s"
+
+
+def qwen3vl_generate(
+    image,
+    prompt: str,
+    max_new_tokens: int,
+    progress_request_id: str | None = None,
+    progress_label: str = "Qwen3-VL",
+) -> str:
+    generation_started = time.perf_counter()
+    port = qwen3vl_runtime()
+    width, height = image.size
+    dev_log(
+        "QWEN_GENERATE_BEGIN",
+        label=progress_label,
+        imageWidth=int(width),
+        imageHeight=int(height),
+        maxNewTokens=int(max_new_tokens),
+        port=port,
+    )
+
+    # Für diese streng strukturierte Objektaufgabe brauchen wir keine langen
+    # sichtbaren Denkprotokolle. Das gleiche 8B-Modell bleibt aktiv, aber die
+    # Chat-Vorlage wird auf Non-Thinking gesetzt. Das reduziert Laufzeit und
+    # verhindert, dass tausende Reasoning-Tokens vor dem eigentlichen JSON
+    # erzeugt werden.
+    payload = {
+        "model": "Qwen3-VL-8B-Thinking",
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": image_data_uri(image)},
+                    },
+                    {"type": "text", "text": prompt},
+                ],
+            }
+        ],
+        "temperature": 0.7,
+        "top_p": 0.8,
+        "top_k": 20,
+        "max_tokens": int(max_new_tokens),
+        "stream": True,
+        "chat_template_kwargs": {"enable_thinking": False},
+    }
+
+    body = json.dumps(payload).encode("utf-8")
+    request = urllib_request.Request(
+        f"http://127.0.0.1:{port}/v1/chat/completions",
+        data=body,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+
+    content_parts: list[str] = []
+    reasoning_parts: list[str] = []
+    fallback_lines: list[str] = []
+    streamed = False
+    chunk_count = 0
+    last_progress_at = time.monotonic()
+
+    try:
+        # Das ist der Watchdog für EINEN Modellaufruf. Durch Streaming sehen
+        # wir fortlaufend Aktivität. 30 Minuten ohne ein einziges Datenstück
+        # gelten als echter Hänger und nicht als "nur langsam".
+        with urllib_request.urlopen(request, timeout=1800.0) as response:
+            for raw_line in response:
+                line = raw_line.decode("utf-8", errors="replace").strip()
+                if not line:
+                    continue
+
+                if not line.startswith("data:"):
+                    fallback_lines.append(line)
+                    continue
+
+                streamed = True
+                data = line[5:].strip()
+                if data == "[DONE]":
+                    break
+                if not data:
+                    continue
+
+                try:
+                    event = json.loads(data)
+                except Exception:
+                    continue
+
+                choices = event.get("choices") or []
+                if not choices:
+                    continue
+
+                delta = choices[0].get("delta") or {}
+                content = delta.get("content")
+                reasoning = delta.get("reasoning_content")
+
+                if isinstance(content, str) and content:
+                    content_parts.append(content)
+                if isinstance(reasoning, str) and reasoning:
+                    reasoning_parts.append(reasoning)
+
+                chunk_count += 1
+                now = time.monotonic()
+                if now - last_progress_at >= 15.0:
+                    report_progress(
+                        progress_request_id,
+                        (
+                            f"Qwen3-VL: {progress_label} · Modellantwort läuft · "
+                            f"{chunk_count} Datenblöcke · "
+                            f"{format_live_duration(now - generation_started)}"
+                        ),
+                        phase="generation",
+                    )
+                    last_progress_at = now
+    except urllib_error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        dev_log(
+            "QWEN_GENERATE_HTTP_ERROR",
+            label=progress_label,
+            elapsedMs=round((time.perf_counter() - generation_started) * 1000, 1),
+            status=exc.code,
+            detail=detail[:1200],
+        )
+        raise RuntimeError(
+            f"llama.cpp/Qwen3-VL HTTP {exc.code}: {detail[:1200]}"
+        ) from exc
+    except Exception as exc:
+        dev_log(
+            "QWEN_GENERATE_ERROR",
+            label=progress_label,
+            elapsedMs=round((time.perf_counter() - generation_started) * 1000, 1),
+            error=str(exc),
+        )
+        raise RuntimeError(
+            f"llama.cpp/Qwen3-VL Anfrage fehlgeschlagen: {exc}"
+        ) from exc
+
+    if streamed:
+        parts = []
+        if reasoning_parts:
+            parts.append("".join(reasoning_parts))
+        if content_parts:
+            parts.append("".join(content_parts))
+        result = "\n".join(parts).strip()
+        if result:
+            dev_log(
+                "QWEN_GENERATE_OK",
+                label=progress_label,
+                elapsedMs=round((time.perf_counter() - generation_started) * 1000, 1),
+                chunks=chunk_count,
+                contentChars=sum(len(part) for part in content_parts),
+                reasoningChars=sum(len(part) for part in reasoning_parts),
+                streamed=True,
+            )
+            return result
+        dev_log(
+            "QWEN_GENERATE_EMPTY",
+            label=progress_label,
+            elapsedMs=round((time.perf_counter() - generation_started) * 1000, 1),
+            chunks=chunk_count,
+        )
+        raise RuntimeError("llama.cpp/Qwen3-VL hat eine leere Streaming-Antwort geliefert.")
+
+    # Rückwärtskompatibler Fallback für llama.cpp-Builds, die trotz stream=True
+    # eine normale JSON-Antwort senden.
+    raw = "\n".join(fallback_lines).strip()
+    try:
+        value = json.loads(raw)
+        choices = value.get("choices") or []
+        message = choices[0].get("message") if choices else None
+        if not isinstance(message, dict):
+            raise ValueError("choices[0].message fehlt")
+
+        content = message.get("content")
+        reasoning = message.get("reasoning_content")
+
+        parts = []
+        if isinstance(reasoning, str) and reasoning.strip():
+            parts.append(reasoning)
+        if isinstance(content, str) and content.strip():
+            parts.append(content)
+
+        result = "\n".join(parts).strip()
+        if not result:
+            raise ValueError("leere Modellantwort")
+        dev_log(
+            "QWEN_GENERATE_OK",
+            label=progress_label,
+            elapsedMs=round((time.perf_counter() - generation_started) * 1000, 1),
+            streamed=False,
+            contentChars=len(result),
+        )
+        return result
+    except Exception as exc:
+        dev_log(
+            "QWEN_GENERATE_PARSE_ERROR",
+            label=progress_label,
+            elapsedMs=round((time.perf_counter() - generation_started) * 1000, 1),
+            error=str(exc),
+            rawPrefix=raw[:500],
+        )
+        raise RuntimeError(
+            "llama.cpp hat keine auswertbare Chat-Antwort geliefert: "
+            f"{raw[:1000]}"
+        ) from exc
+
+
+def last_json_value(text: str, expected_type):
+    decoder = json.JSONDecoder()
+    values = []
+
+    for index, char in enumerate(text):
+        if char not in "[{":
+            continue
+        try:
+            value, _end = decoder.raw_decode(text[index:])
+        except Exception:
+            continue
+        if isinstance(value, expected_type):
+            values.append(value)
+
+    if values:
+        return values[-1]
+
+    raise RuntimeError(
+        "Qwen3-VL hat keine auswertbare JSON-Antwort geliefert. "
+        f"Antwortanfang: {text[:300]!r}"
+    )
+
+
+def normalize_qwen_label(raw: str) -> str:
+    value = " ".join(str(raw).strip().lower().split())
+    value = value.strip(" .,:;!?\"'()[]{}")
+
+    for article in ("a ", "an ", "the "):
+        if value.startswith(article):
+            value = value[len(article):].strip()
+
+    aliases = {
+        "human": "person",
+        "man": "person",
+        "woman": "person",
+        "boy": "person",
+        "girl": "person",
+        "child": "person",
+        "adult": "person",
+        "puppy": "dog",
+        "puppy dog": "dog",
+        "canine": "dog",
+        "kitten": "cat",
+        "feline": "cat",
+        "teddy": "teddy bear",
+        "stuffed bear": "teddy bear",
+        "plush bear": "teddy bear",
+        "stuffed animal": "plush toy",
+        "stuffed toy": "plush toy",
+        "mobile phone": "cell phone",
+        "smartphone": "cell phone",
+        "motorbike": "motorcycle",
+        "sofa": "couch",
+    }
+    return aliases.get(value, value)
+
+
+def qwen_detection_regions(
+    image,
+    tile_size: int = 1600,
+    overlap_fraction: float = 0.22,
+    max_tiles: int = 12,
+) -> list[tuple[int, int, int, int, str]]:
+    width, height = image.size
+    regions: list[tuple[int, int, int, int, str]] = [
+        (0, 0, width, height, "whole-image")
+    ]
+
+    if max(width, height) <= 1800:
+        return regions
+
+    tile_width = min(tile_size, width)
+    tile_height = min(tile_size, height)
+    step_x = max(512, int(tile_width * (1.0 - overlap_fraction)))
+    step_y = max(512, int(tile_height * (1.0 - overlap_fraction)))
+
+    def starts(length: int, tile: int, step: int) -> list[int]:
+        if length <= tile:
+            return [0]
+        values = list(range(0, max(1, length - tile + 1), step))
+        end = length - tile
+        if not values or values[-1] != end:
+            values.append(end)
+        return sorted(set(values))
+
+    tile_regions = []
+    for top in starts(height, tile_height, step_y):
+        for left in starts(width, tile_width, step_x):
+            tile_regions.append((
+                left,
+                top,
+                min(width, left + tile_width),
+                min(height, top + tile_height),
+                "tile",
+            ))
+
+    # Bei sehr großen Bildern werden gleichmäßig verteilte Kacheln gewählt,
+    # statt hunderte Durchläufe zu erzeugen.
+    if len(tile_regions) > max_tiles:
+        if max_tiles == 1:
+            tile_regions = [tile_regions[len(tile_regions) // 2]]
+        else:
+            indices = [
+                round(index * (len(tile_regions) - 1) / (max_tiles - 1))
+                for index in range(max_tiles)
+            ]
+            tile_regions = [tile_regions[index] for index in sorted(set(indices))]
+
+    regions.extend(tile_regions)
+    return regions
+
+
+def qwen_bbox_to_pixels(
+    bbox,
+    region_width: int,
+    region_height: int,
+) -> list[float] | None:
+    if not isinstance(bbox, list) or len(bbox) != 4:
+        return None
+
+    try:
+        values = [float(value) for value in bbox]
+    except Exception:
+        return None
+
+    if not all(math.isfinite(value) for value in values):
+        return None
+
+    # Qwen3-VL-Grounding wird auf relative 0..1000-Koordinaten gepromptet.
+    # Falls es trotzdem Pixelkoordinaten >1000 liefert, werden diese robust
+    # als lokale Pixelkoordinaten interpretiert.
+    if max(values) <= 1000.0 and min(values) >= -10.0:
+        x1 = values[0] / 1000.0 * region_width
+        y1 = values[1] / 1000.0 * region_height
+        x2 = values[2] / 1000.0 * region_width
+        y2 = values[3] / 1000.0 * region_height
+    else:
+        x1, y1, x2, y2 = values
+
+    x1 = max(0.0, min(float(region_width), x1))
+    y1 = max(0.0, min(float(region_height), y1))
+    x2 = max(0.0, min(float(region_width), x2))
+    y2 = max(0.0, min(float(region_height), y2))
+
+    if x2 <= x1 + 2.0 or y2 <= y1 + 2.0:
+        return None
+
+    return [x1, y1, x2, y2]
+
+
+def qwen_discover_region(
+    image,
+    region_name: str,
+    progress_request_id: str | None = None,
+    progress_label: str | None = None,
+    max_new_tokens: int = 1536,
+) -> list[dict]:
+    prompt = """
+Inspect this image extremely carefully and locate every clearly visible physical
+object. This is an archival image-indexing task where false positives are more
+harmful than omissions.
+
+Important rules:
+- Work independently; do not assume any COCO class list.
+- Include ordinary objects, animals, vehicles, equipment and people.
+- Do not output scene concepts such as "outdoors", "forest", "grass" or "sky".
+- Never infer an object merely because a texture or shape resembles it.
+- Be especially conservative with bird, teddy bear, plush toy and small distant
+  objects. A dog is not a teddy bear. Leaves, signs and patterns are not birds.
+- Use a short singular English noun as label.
+- bbox_2d must be [x1,y1,x2,y2] in relative coordinates 0..1000 for THIS image.
+- certainty must be "high" or "medium". Omit low-certainty guesses.
+- Return every separate instance as its own item.
+
+Return ONLY a JSON array:
+[
+  {"label":"dog","bbox_2d":[100,120,450,800],"certainty":"high"}
+]
+If no physical object can be identified, return [].
+""".strip()
+
+    output = qwen3vl_generate(
+        image,
+        prompt,
+        max_new_tokens=max_new_tokens,
+        progress_request_id=progress_request_id,
+        progress_label=progress_label or region_name,
+    )
+    raw = last_json_value(output, list)
+    result: list[dict] = []
+
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+
+        label = normalize_qwen_label(item.get("label", ""))
+        certainty = str(item.get("certainty", "")).strip().lower()
+        box = qwen_bbox_to_pixels(item.get("bbox_2d"), image.width, image.height)
+
+        if (
+            not label
+            or label in ("none", "unknown", "object")
+            or certainty not in ("high", "medium")
+            or box is None
+        ):
+            continue
+
+        result.append({
+            "label": label,
+            "box": box,
+            "certainty": certainty,
+            "source": region_name,
+        })
+
+    return result
+
+
+def qwen_add_global_candidate(
+    candidates: list[dict],
+    label: str,
+    box: list[float],
+    source: str,
+    certainty: str,
+) -> None:
+    label = normalize_qwen_label(label)
+    if not label or label in ("none", "unknown", "object"):
+        return
+
+    for existing in candidates:
+        if existing["label"] != label:
+            continue
+        if xyxy_iou(existing["box"], box) < 0.45:
+            continue
+
+        # Mehrere unabhängige Sichtfenster desselben Modells erhöhen die
+        # Evidenz, ohne automatisch einen Treffer zu bestätigen.
+        existing["votes"] += 1
+        existing["sources"].add(source)
+
+        if certainty == "high" and existing["certainty"] != "high":
+            existing["certainty"] = "high"
+
+        # Die größere Box wird beibehalten, damit die spätere Crop-Prüfung
+        # ausreichend Objektkontext erhält.
+        old_area = (
+            (existing["box"][2] - existing["box"][0])
+            * (existing["box"][3] - existing["box"][1])
+        )
+        new_area = (box[2] - box[0]) * (box[3] - box[1])
+        if new_area > old_area:
+            existing["box"] = box
+        return
+
+    candidates.append({
+        "label": label,
+        "box": box,
+        "certainty": certainty,
+        "votes": 1,
+        "sources": {source},
+    })
+
+
+def qwen_annotated_candidate_crop(
+    image,
+    box: list[float],
+    margin_fraction: float = 0.65,
+):
+    x1, y1, x2, y2 = [float(value) for value in box]
+    width = max(1.0, x2 - x1)
+    height = max(1.0, y2 - y1)
+    margin_x = max(48.0, width * margin_fraction)
+    margin_y = max(48.0, height * margin_fraction)
+
+    left = max(0, int(math.floor(x1 - margin_x)))
+    top = max(0, int(math.floor(y1 - margin_y)))
+    right = min(image.width, int(math.ceil(x2 + margin_x)))
+    bottom = min(image.height, int(math.ceil(y2 + margin_y)))
+
+    crop = image.crop((left, top, right, bottom)).copy()
+    local = [
+        int(round(x1 - left)),
+        int(round(y1 - top)),
+        int(round(x2 - left)),
+        int(round(y2 - top)),
+    ]
+
+    draw = ImageDraw.Draw(crop)
+    stroke = max(3, int(round(min(crop.size) / 140.0)))
+    for offset in range(stroke):
+        draw.rectangle(
+            (
+                local[0] - offset,
+                local[1] - offset,
+                local[2] + offset,
+                local[3] + offset,
+            ),
+            outline=(255, 0, 0),
+            width=1,
+        )
+
+    return crop
+
+
+def qwen_presence_check(
+    crop,
+    candidate_label: str,
+    progress_request_id: str | None = None,
+    max_new_tokens: int = 384,
+) -> dict:
+    prompt = f"""
+The red rectangle marks a candidate object. Verify it conservatively.
+
+Candidate label: {candidate_label}
+
+Decide whether the red rectangle clearly contains a real {candidate_label}.
+Do not accept resemblance, background texture, printed pictures, shadows or
+ambiguous shapes. In particular, do not call a dog a teddy bear and do not call
+foliage, signs or random details a bird.
+
+Return ONLY one JSON object:
+{{"present":true,"label":"{candidate_label}","confidence":"high"}}
+
+Rules:
+- present is true only when the object is visibly identifiable in the red box.
+- If false, label should be the actual clearly identifiable object, or "none".
+- confidence is "high", "medium" or "low".
+""".strip()
+
+    output = qwen3vl_generate(
+        crop,
+        prompt,
+        max_new_tokens=max_new_tokens,
+        progress_request_id=progress_request_id,
+        progress_label=f"Prüfung: {candidate_label}",
+    )
+    value = last_json_value(output, dict)
+
+    return {
+        "present": bool(value.get("present", False)),
+        "label": normalize_qwen_label(value.get("label", "")),
+        "confidence": str(value.get("confidence", "")).strip().lower(),
+    }
+
+
+def qwen_blind_box_classification(
+    crop,
+    progress_request_id: str | None = None,
+    max_new_tokens: int = 384,
+) -> dict:
+    prompt = """
+Ignore any previous classification. Look only at the object inside the red
+rectangle and identify what it actually is.
+
+Be conservative. If the rectangle does not contain one clearly identifiable
+physical object, answer "none". Do not turn dogs into teddy bears and do not
+invent birds from foliage, signs or background patterns.
+
+Return ONLY one JSON object:
+{"label":"dog","confidence":"high"}
+
+Use a short singular English noun. confidence must be "high", "medium" or "low".
+""".strip()
+
+    output = qwen3vl_generate(
+        crop,
+        prompt,
+        max_new_tokens=max_new_tokens,
+        progress_request_id=progress_request_id,
+        progress_label="Blindprüfung",
+    )
+    value = last_json_value(output, dict)
+    return {
+        "label": normalize_qwen_label(value.get("label", "")),
+        "confidence": str(value.get("confidence", "")).strip().lower(),
+    }
+
+
+def legacy_object_hints(hints: list[dict], image) -> list[dict]:
+    result = []
+
+    for raw in hints:
+        if not isinstance(raw, dict):
+            continue
+
+        label = normalize_qwen_label(raw.get("label", ""))
+        try:
+            x = float(raw.get("x", 0.0))
+            y = float(raw.get("y", 0.0))
+            width = float(raw.get("width", 0.0))
+            height = float(raw.get("height", 0.0))
+            score = float(raw.get("score", 0.0))
+        except Exception:
+            continue
+
+        if (
+            not label
+            or width <= 2.0
+            or height <= 2.0
+            or not math.isfinite(score)
+            or score < 0.35
+        ):
+            continue
+
+        box = [
+            max(0.0, x),
+            max(0.0, y),
+            min(float(image.width), x + width),
+            min(float(image.height), y + height),
+        ]
+        if box[2] <= box[0] + 2.0 or box[3] <= box[1] + 2.0:
+            continue
+
+        result.append({
+            "label": label,
+            "box": box,
+            "certainty": "medium",
+            "source": "legacy-detector-hint",
+        })
+
+    return result
+
+
+
+QWEN_BENCHMARK_PROFILES = {
+    "whole": {
+        "label": "1 · Gesamtbild",
+        "description": "Nur das Gesamtbild, keine Kacheln und keine Einzelprüfung.",
+        "tile_size": 1600,
+        "overlap_fraction": 0.0,
+        "max_tiles": 0,
+        "verification_passes": 0,
+        "discovery_tokens": 768,
+        "verification_tokens": 256,
+    },
+    "tiles4": {
+        "label": "2 · Gesamtbild + 4 Kacheln",
+        "description": "Gesamtbild plus bis zu vier Kacheln, noch ohne Crop-Prüfung.",
+        "tile_size": 2000,
+        "overlap_fraction": 0.12,
+        "max_tiles": 4,
+        "verification_passes": 0,
+        "discovery_tokens": 1024,
+        "verification_tokens": 256,
+    },
+    "single-check": {
+        "label": "3 · Bis 6 Kacheln + 1 Prüfung",
+        "description": "Gesamtbild plus bis zu sechs Kacheln und eine konservative Crop-Prüfung pro Kandidat.",
+        "tile_size": 1800,
+        "overlap_fraction": 0.18,
+        "max_tiles": 6,
+        "verification_passes": 1,
+        "discovery_tokens": 1024,
+        "verification_tokens": 256,
+    },
+    "full": {
+        "label": "4 · Vollanalyse",
+        "description": "Aktuelles Produktionsniveau: Gesamtbild, bis zu zwölf Kacheln und zwei unabhängige Crop-Prüfungen.",
+        "tile_size": 1600,
+        "overlap_fraction": 0.22,
+        "max_tiles": 12,
+        "verification_passes": 2,
+        "discovery_tokens": 1536,
+        "verification_tokens": 384,
+    },
+}
+
+
+def benchmark_qwen3vl(
+    file_path: str,
+    profile_name: str,
+    progress_request_id: str | None = None,
+) -> dict:
+    if Image is None or ImageOps is None:
+        raise RuntimeError(
+            "Pillow fehlt. Einmal 'npm.cmd run setup:ai' ausführen."
+        )
+
+    profile = QWEN_BENCHMARK_PROFILES.get(profile_name)
+    if profile is None:
+        raise RuntimeError(f"Unbekannte Qwen-Benchmark-Stufe: {profile_name}")
+
+    total_started = time.perf_counter()
+    file_name = os.path.basename(file_path)
+    label = str(profile["label"])
+
+    dev_log(
+        "QWEN_BENCHMARK_BEGIN",
+        profile=profile_name,
+        label=label,
+        target=file_path,
+    )
+
+    report_progress(
+        progress_request_id,
+        f"Qwen-Test {label}: Speicher wird vorbereitet · {file_name}",
+        phase="benchmark-prepare",
+    )
+    prepare_started = time.perf_counter()
+    prepare_for_qwen()
+    prepare_ms = (time.perf_counter() - prepare_started) * 1000.0
+
+    load_started = time.perf_counter()
+    try:
+        with Image.open(file_path) as source:
+            source.load()
+            image = ImageOps.exif_transpose(source).convert("RGB")
+    except Exception as exc:
+        raise RuntimeError(
+            f"Bild konnte für den Qwen-Test nicht gelesen werden: {exc}"
+        ) from exc
+    image_load_ms = (time.perf_counter() - load_started) * 1000.0
+
+    try:
+        report_progress(
+            progress_request_id,
+            f"Qwen-Test {label}: Modell wird geladen/bereitgestellt · {file_name}",
+            phase="benchmark-model",
+        )
+        model_started = time.perf_counter()
+        qwen3vl_runtime()
+        model_ready_ms = (time.perf_counter() - model_started) * 1000.0
+
+        if int(profile["max_tiles"]) <= 0:
+            regions = [(0, 0, image.width, image.height, "whole-image")]
+        else:
+            regions = qwen_detection_regions(
+                image,
+                tile_size=int(profile["tile_size"]),
+                overlap_fraction=float(profile["overlap_fraction"]),
+                max_tiles=int(profile["max_tiles"]),
+            )
+
+        candidates: list[dict] = []
+        region_count = len(regions)
+
+        discovery_started = time.perf_counter()
+        for region_index, (left, top, right, bottom, kind) in enumerate(
+            regions,
+            start=1,
+        ):
+            region_name = (
+                "qwen-whole-image"
+                if kind == "whole-image"
+                else f"qwen-tile-{left}-{top}-{right}-{bottom}"
+            )
+            display_kind = "Gesamtbild" if kind == "whole-image" else "Kachel"
+
+            report_progress(
+                progress_request_id,
+                (
+                    f"Qwen-Test {label}: {display_kind} "
+                    f"{region_index}/{region_count} · {file_name}"
+                ),
+                phase="benchmark-regions",
+                current=region_index,
+                total=region_count,
+            )
+
+            owns_region = kind != "whole-image"
+            region = image.crop((left, top, right, bottom)) if owns_region else image
+            try:
+                found_items = qwen_discover_region(
+                    region,
+                    region_name,
+                    progress_request_id,
+                    progress_label=(
+                        f"Test {label} · {display_kind} "
+                        f"{region_index}/{region_count}"
+                    ),
+                    max_new_tokens=int(profile["discovery_tokens"]),
+                )
+            finally:
+                if owns_region:
+                    region.close()
+                gc.collect()
+
+            for found in found_items:
+                local = found["box"]
+                global_box = [
+                    float(local[0]) + left,
+                    float(local[1]) + top,
+                    float(local[2]) + left,
+                    float(local[3]) + top,
+                ]
+                qwen_add_global_candidate(
+                    candidates,
+                    str(found["label"]),
+                    global_box,
+                    region_name,
+                    str(found["certainty"]),
+                )
+
+        discovery_ms = (time.perf_counter() - discovery_started) * 1000.0
+
+        verification_passes = int(profile["verification_passes"])
+        verification_tokens = int(profile["verification_tokens"])
+        verified: list[dict] = []
+        rejected = 0
+        candidate_count = len(candidates)
+
+        verification_started = time.perf_counter()
+
+        for candidate_index, candidate in enumerate(candidates, start=1):
+            candidate_label = normalize_qwen_label(candidate["label"])
+            x1, y1, x2, y2 = [float(value) for value in candidate["box"]]
+            class_id = (
+                int(COCO_CLASS_NAMES.index(candidate_label))
+                if candidate_label in COCO_CLASS_NAMES
+                else -1
+            )
+
+            if verification_passes == 0:
+                verified.append({
+                    "label": candidate_label,
+                    "classId": class_id,
+                    "score": 0.88 if candidate["certainty"] == "high" else 0.74,
+                    "x": x1,
+                    "y": y1,
+                    "width": x2 - x1,
+                    "height": y2 - y1,
+                    "agreementCount": int(candidate["votes"]),
+                    "sources": sorted(candidate["sources"]),
+                })
+                continue
+
+            crop = qwen_annotated_candidate_crop(image, candidate["box"])
+            try:
+                report_progress(
+                    progress_request_id,
+                    (
+                        f"Qwen-Test {label}: Objekt "
+                        f"{candidate_index}/{candidate_count} · Prüfung 1/"
+                        f"{verification_passes} · {candidate_label}"
+                    ),
+                    phase="benchmark-check-1",
+                    current=candidate_index,
+                    total=candidate_count,
+                )
+                presence = qwen_presence_check(
+                    crop,
+                    candidate_label,
+                    progress_request_id,
+                    max_new_tokens=verification_tokens,
+                )
+
+                presence_label = normalize_qwen_label(presence["label"])
+                if (
+                    not presence["present"]
+                    or presence_label != candidate_label
+                    or presence["confidence"] not in ("high", "medium")
+                ):
+                    rejected += 1
+                    continue
+
+                if verification_passes == 1:
+                    verified.append({
+                        "label": candidate_label,
+                        "classId": class_id,
+                        "score": 0.94 if presence["confidence"] == "high" else 0.84,
+                        "x": x1,
+                        "y": y1,
+                        "width": x2 - x1,
+                        "height": y2 - y1,
+                        "agreementCount": 1 + min(3, int(candidate["votes"])),
+                        "sources": sorted(
+                            set(candidate["sources"]) |
+                            {"qwen-crop-presence-check"}
+                        ),
+                    })
+                    continue
+
+                report_progress(
+                    progress_request_id,
+                    (
+                        f"Qwen-Test {label}: Objekt "
+                        f"{candidate_index}/{candidate_count} · Prüfung 2/2 · "
+                        "blind klassifizieren"
+                    ),
+                    phase="benchmark-check-2",
+                    current=candidate_index,
+                    total=candidate_count,
+                )
+                blind = qwen_blind_box_classification(
+                    crop,
+                    progress_request_id,
+                    max_new_tokens=verification_tokens,
+                )
+                blind_label = normalize_qwen_label(blind["label"])
+
+                labels_agree = blind_label == candidate_label
+                high_high = (
+                    presence["confidence"] == "high"
+                    and blind["confidence"] == "high"
+                )
+                repeated_medium = (
+                    int(candidate["votes"]) >= 2
+                    and presence["confidence"] in ("high", "medium")
+                    and blind["confidence"] in ("high", "medium")
+                )
+
+                if not labels_agree or not (high_high or repeated_medium):
+                    rejected += 1
+                    continue
+
+                verified.append({
+                    "label": candidate_label,
+                    "classId": class_id,
+                    "score": 0.98 if high_high else 0.90,
+                    "x": x1,
+                    "y": y1,
+                    "width": x2 - x1,
+                    "height": y2 - y1,
+                    "agreementCount": 2 + min(3, int(candidate["votes"])),
+                    "sources": sorted(
+                        set(candidate["sources"]) |
+                        {
+                            "qwen-crop-presence-check",
+                            "qwen-blind-box-classification",
+                        }
+                    ),
+                })
+            finally:
+                crop.close()
+                gc.collect()
+
+        verification_ms = (time.perf_counter() - verification_started) * 1000.0
+
+        verified.sort(key=lambda item: float(item["score"]), reverse=True)
+        final: list[dict] = []
+
+        for item in verified:
+            box = [
+                float(item["x"]),
+                float(item["y"]),
+                float(item["x"]) + float(item["width"]),
+                float(item["y"]) + float(item["height"]),
+            ]
+            duplicate = False
+
+            for existing in final:
+                if existing["label"] != item["label"]:
+                    continue
+                existing_box = [
+                    float(existing["x"]),
+                    float(existing["y"]),
+                    float(existing["x"]) + float(existing["width"]),
+                    float(existing["y"]) + float(existing["height"]),
+                ]
+                if xyxy_iou(box, existing_box) >= 0.50:
+                    existing["agreementCount"] = max(
+                        int(existing["agreementCount"]),
+                        int(item["agreementCount"]),
+                    )
+                    existing["sources"] = sorted(set(
+                        list(existing["sources"]) + list(item["sources"])
+                    ))
+                    duplicate = True
+                    break
+
+            if not duplicate:
+                final.append(item)
+
+        total_ms = (time.perf_counter() - total_started) * 1000.0
+
+        report_progress(
+            progress_request_id,
+            (
+                f"Qwen-Test {label}: fertig · {region_count} Bildbereiche · "
+                f"{candidate_count} Kandidaten · {len(final)} Ergebnisse · "
+                f"{format_live_duration(total_ms / 1000.0)}"
+            ),
+            phase="benchmark-done",
+            current=candidate_count,
+            total=candidate_count,
+        )
+
+        result = {
+            "path": file_path,
+            "profile": profile_name,
+            "label": label,
+            "description": str(profile["description"]),
+            "imageWidth": int(image.width),
+            "imageHeight": int(image.height),
+            "regionCount": region_count,
+            "candidateCount": candidate_count,
+            "verifiedCount": len(final),
+            "rejectedCount": rejected,
+            "timings": {
+                "prepareMs": round(prepare_ms, 1),
+                "imageLoadMs": round(image_load_ms, 1),
+                "modelReadyMs": round(model_ready_ms, 1),
+                "discoveryMs": round(discovery_ms, 1),
+                "verificationMs": round(verification_ms, 1),
+                "totalMs": round(total_ms, 1),
+            },
+            "objects": final,
+        }
+
+        dev_log(
+            "QWEN_BENCHMARK_DONE",
+            profile=profile_name,
+            label=label,
+            target=file_path,
+            regionCount=region_count,
+            candidateCount=candidate_count,
+            verifiedCount=len(final),
+            rejectedCount=rejected,
+            timings=result["timings"],
+        )
+        return result
+    finally:
+        image.close()
+        gc.collect()
+
+
+def detect_qwen3vl_objects(
+    file_path: str,
+    hints: list[dict] | None = None,
+    progress_request_id: str | None = None,
+) -> dict:
+    if Image is None or ImageOps is None:
+        raise RuntimeError(
+            "Pillow fehlt. Einmal 'npm.cmd run setup:ai' ausführen."
+        )
+
+    report_progress(
+        progress_request_id,
+        "Qwen3-VL: andere große Modellinstanzen werden aus dem Speicher entfernt …",
+        phase="memory-cleanup",
+    )
+    prepare_for_qwen()
+
+    try:
+        with Image.open(file_path) as source:
+            source.load()
+            image = ImageOps.exif_transpose(source).convert("RGB")
+    except Exception as exc:
+        raise RuntimeError(
+            f"Bild konnte für Qwen3-VL nicht gelesen werden: {exc}"
+        ) from exc
+
+    try:
+        candidates: list[dict] = []
+        regions = qwen_detection_regions(image)
+        region_count = len(regions)
+        file_name = os.path.basename(file_path)
+
+        report_progress(
+            progress_request_id,
+            (
+                f"Qwen3-VL: Modell wird vorbereitet · {region_count} "
+                f"{'Bildbereich' if region_count == 1 else 'Bildbereiche'} · {file_name}"
+            ),
+            phase="model-load",
+            current=0,
+            total=region_count,
+        )
+
+        # 1) Qwen sucht selbstständig im Gesamtbild UND in hochauflösenden
+        # Kacheln. Es gibt dabei immer nur genau EIN Bild an llama.cpp.
+        for region_index, (left, top, right, bottom, kind) in enumerate(
+            regions,
+            start=1,
+        ):
+            region_name = (
+                "qwen-whole-image"
+                if kind == "whole-image"
+                else f"qwen-tile-{left}-{top}-{right}-{bottom}"
+            )
+            display_kind = "Gesamtbild" if kind == "whole-image" else "Kachel"
+
+            report_progress(
+                progress_request_id,
+                (
+                    f"Qwen3-VL: {display_kind} {region_index}/{region_count} "
+                    f"wird analysiert · {file_name}"
+                ),
+                phase="regions",
+                current=region_index,
+                total=region_count,
+            )
+
+            # Beim Gesamtbild keine zusätzliche Vollbildkopie erzeugen.
+            owns_region = kind != "whole-image"
+            region = image.crop((left, top, right, bottom)) if owns_region else image
+
+            try:
+                found_items = qwen_discover_region(
+                    region,
+                    region_name,
+                    progress_request_id,
+                    progress_label=(
+                        f"{display_kind} {region_index}/{region_count}"
+                    ),
+                )
+            finally:
+                if owns_region:
+                    region.close()
+                gc.collect()
+
+            for found in found_items:
+                local = found["box"]
+                global_box = [
+                    float(local[0]) + left,
+                    float(local[1]) + top,
+                    float(local[2]) + left,
+                    float(local[3]) + top,
+                ]
+                qwen_add_global_candidate(
+                    candidates,
+                    str(found["label"]),
+                    global_box,
+                    region_name,
+                    str(found["certainty"]),
+                )
+
+        # 2) Alte schnelle Detektoren dürfen zusätzliche Kandidaten vorschlagen,
+        # aber nichts mehr selbst bestätigen. So geht Recall nicht verloren.
+        for hint in legacy_object_hints(hints or [], image):
+            qwen_add_global_candidate(
+                candidates,
+                str(hint["label"]),
+                list(hint["box"]),
+                str(hint["source"]),
+                str(hint["certainty"]),
+            )
+
+        verified: list[dict] = []
+        rejected = 0
+        candidate_count = len(candidates)
+
+        if candidate_count == 0:
+            report_progress(
+                progress_request_id,
+                f"Qwen3-VL: keine Objektkandidaten zur Detailprüfung · {file_name}",
+                phase="candidates",
+                current=0,
+                total=0,
+            )
+
+        # 3) JEDER Kandidat wird einzeln ausgeschnitten und zweimal seriell
+        # geprüft. Der Crop wird unmittelbar danach geschlossen.
+        for candidate_index, candidate in enumerate(candidates, start=1):
+            candidate_label = normalize_qwen_label(candidate["label"])
+            crop = qwen_annotated_candidate_crop(image, candidate["box"])
+
+            try:
+                report_progress(
+                    progress_request_id,
+                    (
+                        f"Qwen3-VL: Objekt {candidate_index}/{candidate_count} · "
+                        f"Prüfung 1/2 · {candidate_label}"
+                    ),
+                    phase="candidate-presence",
+                    current=candidate_index,
+                    total=candidate_count,
+                )
+                presence = qwen_presence_check(
+                    crop,
+                    str(candidate["label"]),
+                    progress_request_id,
+                )
+
+                report_progress(
+                    progress_request_id,
+                    (
+                        f"Qwen3-VL: Objekt {candidate_index}/{candidate_count} · "
+                        f"Prüfung 2/2 · blind klassifizieren"
+                    ),
+                    phase="candidate-blind",
+                    current=candidate_index,
+                    total=candidate_count,
+                )
+                blind = qwen_blind_box_classification(
+                    crop,
+                    progress_request_id,
+                )
+            finally:
+                crop.close()
+                gc.collect()
+
+            presence_label = normalize_qwen_label(presence["label"])
+            blind_label = normalize_qwen_label(blind["label"])
+
+            labels_agree = (
+                presence["present"]
+                and presence_label == candidate_label
+                and blind_label == candidate_label
+            )
+
+            high_high = (
+                presence["confidence"] == "high"
+                and blind["confidence"] == "high"
+            )
+            repeated_medium = (
+                int(candidate["votes"]) >= 2
+                and presence["confidence"] in ("high", "medium")
+                and blind["confidence"] in ("high", "medium")
+            )
+
+            if not labels_agree or not (high_high or repeated_medium):
+                rejected += 1
+                continue
+
+            # Hund/Katze bleiben absichtlich Sache der bewährten Haustierpipeline.
+            # Qwen dient hier nur dazu, Fehlklassen wie "teddy bear" zu verwerfen.
+            if candidate_label in ("dog", "cat"):
+                continue
+
+            x1, y1, x2, y2 = [float(value) for value in candidate["box"]]
+            class_id = (
+                int(COCO_CLASS_NAMES.index(candidate_label))
+                if candidate_label in COCO_CLASS_NAMES
+                else -1
+            )
+
+            score = 0.98 if high_high else 0.90
+            verified.append({
+                "label": candidate_label,
+                "classId": class_id,
+                "score": score,
+                "x": x1,
+                "y": y1,
+                "width": x2 - x1,
+                "height": y2 - y1,
+                "agreementCount": 2 + min(3, int(candidate["votes"])),
+                "sources": sorted({
+                    QWEN3VL_MODEL_VERSION,
+                    *candidate["sources"],
+                    "qwen-crop-presence-check",
+                    "qwen-blind-box-classification",
+                }),
+            })
+
+        # Gleiche Qwen-Funde aus überlappenden Kacheln nach der Verifikation
+        # noch einmal zusammenführen.
+        verified.sort(key=lambda item: float(item["score"]), reverse=True)
+        final: list[dict] = []
+
+        for item in verified:
+            box = [
+                float(item["x"]),
+                float(item["y"]),
+                float(item["x"]) + float(item["width"]),
+                float(item["y"]) + float(item["height"]),
+            ]
+
+            duplicate = False
+            for existing in final:
+                if existing["label"] != item["label"]:
+                    continue
+                existing_box = [
+                    float(existing["x"]),
+                    float(existing["y"]),
+                    float(existing["x"]) + float(existing["width"]),
+                    float(existing["y"]) + float(existing["height"]),
+                ]
+                if xyxy_iou(box, existing_box) >= 0.50:
+                    existing["agreementCount"] = max(
+                        int(existing["agreementCount"]),
+                        int(item["agreementCount"]),
+                    )
+                    existing["sources"] = sorted(set(
+                        list(existing["sources"]) + list(item["sources"])
+                    ))
+                    duplicate = True
+                    break
+
+            if not duplicate:
+                final.append(item)
+
+        report_progress(
+            progress_request_id,
+            (
+                f"Qwen3-VL: Bild fertig · {candidate_count} Kandidaten geprüft · "
+                f"{len(final)} Motive bestätigt · {file_name}"
+            ),
+            phase="done",
+            current=candidate_count,
+            total=candidate_count,
+        )
+
+        return {
+            "module": "object-detect-qwen3vl-gguf-v2",
+            "detector": QWEN3VL_MODEL_VERSION,
+            "imageWidth": int(image.width),
+            "imageHeight": int(image.height),
+            "regionCount": region_count,
+            "candidateCount": candidate_count,
+            "verifiedCount": len(final),
+            "rejectedCount": rejected,
+            "objects": final,
+        }
+    finally:
+        image.close()
+        gc.collect()
+
+
 def handle(message: dict) -> bool:
     request_id = message.get("id")
     method = message.get("method")
@@ -1532,9 +3807,15 @@ def handle(message: dict) -> bool:
 
     if method == "fuse_pet_detections":
         detections = payload.get("detections") or []
+        objects = payload.get("objects") or []
         if not isinstance(detections, list):
             raise RuntimeError("Haustierdetektionen für die Fusion sind ungültig.")
-        respond(request_id, result=fuse_pet_detections(detections))
+        if not isinstance(objects, list):
+            raise RuntimeError("Motivdetektionen für die Fusion sind ungültig.")
+        respond(
+            request_id,
+            result=fuse_pet_detections(detections, objects),
+        )
         return True
 
     if method == "extract_face_embeddings":
@@ -1558,6 +3839,53 @@ def handle(message: dict) -> bool:
         respond(
             request_id,
             result=extract_dog_embeddings(file_path, pets),
+        )
+        return True
+
+    if method == "extract_semantic_image_embedding":
+        file_path = require_file(payload)
+        verify_expected_size(file_path, payload)
+        respond(
+            request_id,
+            result=extract_semantic_image_embedding(file_path),
+        )
+        return True
+
+    if method == "extract_semantic_text_embedding":
+        query = str(payload.get("text", ""))
+        respond(
+            request_id,
+            result=extract_semantic_text_embedding(query),
+        )
+        return True
+
+
+    if method == "benchmark_qwen3vl":
+        file_path = require_file(payload)
+        profile = str(payload.get("profile", "")).strip()
+        respond(
+            request_id,
+            result=benchmark_qwen3vl(
+                file_path,
+                profile,
+                progress_request_id=request_id,
+            ),
+        )
+        return True
+
+    if method == "detect_qwen3vl_objects":
+        file_path = require_file(payload)
+        verify_expected_size(file_path, payload)
+        hints = payload.get("hints") or []
+        if not isinstance(hints, list):
+            raise RuntimeError("Objekthinweise für Qwen3-VL sind ungültig.")
+        respond(
+            request_id,
+            result=detect_qwen3vl_objects(
+                file_path,
+                hints,
+                progress_request_id=request_id,
+            ),
         )
         return True
 
@@ -1593,6 +3921,7 @@ def handle(message: dict) -> bool:
         return True
 
     if method == "shutdown":
+        unload_qwen3vl()
         respond(request_id, result={"status": "bye"})
         return False
 
@@ -1601,22 +3930,72 @@ def handle(message: dict) -> bool:
 
 
 def main() -> int:
-    for line in sys.stdin:
-        line = line.strip()
-        if not line:
-            continue
+    dev_log(
+        "PYTHON_WORKER_READY_FOR_STDIN",
+        startupElapsedMs=round((time.perf_counter() - _PROCESS_STARTED_AT) * 1000, 1),
+        pillow=Image is not None,
+        opencv=cv2 is not None,
+        numpy=np is not None,
+    )
 
-        try:
-            message = json.loads(line)
-            if not handle(message):
-                break
-        except Exception as exc:
+    try:
+        for line in sys.stdin:
+            line = line.strip()
+            if not line:
+                continue
+
+            request_started = time.perf_counter()
             request_id = None
+            method = "unknown"
+            target = None
+
             try:
-                request_id = message.get("id")  # type: ignore[name-defined]
-            except Exception:
-                pass
-            respond(request_id, error=str(exc))
+                message = json.loads(line)
+                request_id = message.get("id")
+                method = str(message.get("method", "unknown"))
+                payload = message.get("payload") or {}
+                if isinstance(payload, dict):
+                    raw_target = payload.get("path")
+                    if isinstance(raw_target, str):
+                        target = raw_target
+
+                dev_log(
+                    "PY_REQUEST_BEGIN",
+                    requestId=request_id,
+                    method=method,
+                    target=target,
+                )
+
+                keep_running = handle(message)
+
+                dev_log(
+                    "PY_REQUEST_END",
+                    requestId=request_id,
+                    method=method,
+                    target=target,
+                    elapsedMs=round((time.perf_counter() - request_started) * 1000, 1),
+                    ok=True,
+                )
+
+                if not keep_running:
+                    break
+            except Exception as exc:
+                dev_log(
+                    "PY_REQUEST_ERROR",
+                    requestId=request_id,
+                    method=method,
+                    target=target,
+                    elapsedMs=round((time.perf_counter() - request_started) * 1000, 1),
+                    error=str(exc),
+                )
+                respond(request_id, error=str(exc))
+    finally:
+        dev_log("PYTHON_WORKER_SHUTDOWN_BEGIN")
+        unload_qwen3vl()
+        dev_log(
+            "PYTHON_WORKER_EXIT",
+            totalUptimeMs=round((time.perf_counter() - _PROCESS_STARTED_AT) * 1000, 1),
+        )
 
     return 0
 

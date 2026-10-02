@@ -2,15 +2,19 @@ import "./style.css";
 import type {
   AnalysisErrorRecord,
   AnalysisWorkerStatus,
+  QwenBenchmarkProfile,
+  QwenBenchmarkStageResult,
   DuplicateGroup,
   MediaRecord,
   PersonOverview,
   PetOverview,
   PipelineStatus,
+  SearchFacets,
+  SearchFilter,
   SourceRecord
 } from "../shared/protocol";
 
-type CatalogView = "media" | "duplicates" | "people" | "pets" | "recycle";
+type CatalogView = "media" | "search" | "duplicates" | "people" | "pets" | "recycle";
 
 const sourceSelect = document.querySelector<HTMLSelectElement>("#sourceSelect")!;
 const addSourceButton = document.querySelector<HTMLButtonElement>("#addSource")!;
@@ -32,11 +36,13 @@ const confirmedPersons = document.querySelector<HTMLDivElement>("#confirmedPerso
 const personStatus = document.querySelector<HTMLParagraphElement>("#personStatus")!;
 const refreshPeopleButton = document.querySelector<HTMLButtonElement>("#refreshPeople")!;
 const mediaTab = document.querySelector<HTMLButtonElement>("#mediaTab")!;
+const searchTab = document.querySelector<HTMLButtonElement>("#searchTab")!;
 const duplicateTab = document.querySelector<HTMLButtonElement>("#duplicateTab")!;
 const peopleTab = document.querySelector<HTMLButtonElement>("#peopleTab")!;
 const petsTab = document.querySelector<HTMLButtonElement>("#petsTab")!;
 const recycleTab = document.querySelector<HTMLButtonElement>("#recycleTab")!;
 const mediaTabCount = document.querySelector<HTMLSpanElement>("#mediaTabCount")!;
+const searchTabCount = document.querySelector<HTMLSpanElement>("#searchTabCount")!;
 const duplicateTabCount = document.querySelector<HTMLSpanElement>("#duplicateTabCount")!;
 const peopleTabCount = document.querySelector<HTMLSpanElement>("#peopleTabCount")!;
 const petsTabCount = document.querySelector<HTMLSpanElement>("#petsTabCount")!;
@@ -73,7 +79,25 @@ const petFusionStageState = document.querySelector<HTMLSpanElement>("#petFusionS
 const petFusionStageCounts = document.querySelector<HTMLElement>("#petFusionStageCounts")!;
 const petEmbeddingStageState = document.querySelector<HTMLSpanElement>("#petEmbeddingStageState")!;
 const petEmbeddingStageCounts = document.querySelector<HTMLElement>("#petEmbeddingStageCounts")!;
+const objectVerificationStageState = document.querySelector<HTMLSpanElement>("#objectVerificationStageState")!;
+const objectVerificationStageCounts = document.querySelector<HTMLElement>("#objectVerificationStageCounts")!;
+const semanticStageState = document.querySelector<HTMLSpanElement>("#semanticStageState")!;
+const semanticStageCounts = document.querySelector<HTMLElement>("#semanticStageCounts")!;
 const analysisErrorsButton = document.querySelector<HTMLButtonElement>("#analysisErrorsButton")!;
+const analysisDevLogButton = document.querySelector<HTMLButtonElement>("#analysisDevLogButton")!;
+const analysisCopyDevLogButton = document.querySelector<HTMLButtonElement>("#analysisCopyDevLogButton")!;
+const qwenBenchmarkButton = document.querySelector<HTMLButtonElement>("#qwenBenchmarkButton")!;
+const qwenBenchmarkDialog = document.querySelector<HTMLDialogElement>("#qwenBenchmarkDialog")!;
+const closeQwenBenchmarkButton = document.querySelector<HTMLButtonElement>("#closeQwenBenchmark")!;
+const pickQwenBenchmarkImageButton = document.querySelector<HTMLButtonElement>("#pickQwenBenchmarkImage")!;
+const runQwenBenchmarkButton = document.querySelector<HTMLButtonElement>("#runQwenBenchmark")!;
+const copyQwenBenchmarkButton = document.querySelector<HTMLButtonElement>("#copyQwenBenchmark")!;
+const qwenBenchmarkFilePath = document.querySelector<HTMLElement>("#qwenBenchmarkFilePath")!;
+const qwenBenchmarkLive = document.querySelector<HTMLDivElement>("#qwenBenchmarkLive")!;
+const qwenBenchmarkResults = document.querySelector<HTMLDivElement>("#qwenBenchmarkResults")!;
+const qwenBenchmarkProfileInputs = Array.from(
+  document.querySelectorAll<HTMLInputElement>('input[name="qwenBenchmarkProfile"]')
+);
 const analysisErrorCount = document.querySelector<HTMLSpanElement>("#analysisErrorCount")!;
 const analysisErrorDialog = document.querySelector<HTMLDialogElement>("#analysisErrorDialog")!;
 const closeAnalysisErrorsButton = document.querySelector<HTMLButtonElement>("#closeAnalysisErrors")!;
@@ -85,6 +109,17 @@ const imagePreviewDialog = document.querySelector<HTMLDialogElement>("#imagePrev
 const closeImagePreviewButton = document.querySelector<HTMLButtonElement>("#closeImagePreview")!;
 const imagePreviewImage = document.querySelector<HTMLImageElement>("#imagePreviewImage")!;
 const imagePreviewCaption = document.querySelector<HTMLDivElement>("#imagePreviewCaption")!;
+const searchPanel = document.querySelector<HTMLElement>("#searchPanel")!;
+const searchPersons = document.querySelector<HTMLDivElement>("#searchPersons")!;
+const searchPets = document.querySelector<HTMLDivElement>("#searchPets")!;
+const searchObjects = document.querySelector<HTMLDivElement>("#searchObjects")!;
+const searchSemanticQuery = document.querySelector<HTMLInputElement>("#searchSemanticQuery")!;
+const searchSemanticMinProbability = document.querySelector<HTMLInputElement>("#searchSemanticMinProbability")!;
+const searchMinDogs = document.querySelector<HTMLInputElement>("#searchMinDogs")!;
+const searchMinCats = document.querySelector<HTMLInputElement>("#searchMinCats")!;
+const runSearchButton = document.querySelector<HTMLButtonElement>("#runSearch")!;
+const resetSearchButton = document.querySelector<HTMLButtonElement>("#resetSearch")!;
+const searchSummary = document.querySelector<HTMLSpanElement>("#searchSummary")!;
 
 let sources: SourceRecord[] = [];
 let currentView: CatalogView = "media";
@@ -98,9 +133,170 @@ let lastFaceEmbeddingDone = -1;
 let lastPetDone = -1;
 let lastPetFusionDone = -1;
 let lastPetEmbeddingDone = -1;
+let lastObjectVerificationDone = -1;
+let lastSemanticDone = -1;
 let analysisRefreshTimer: number | null = null;
+let searchFacetsSourceId: number | null = null;
+let latestAnalysisStatus: AnalysisWorkerStatus | null = null;
+let qwenBenchmarkSelectedPath: string | null = null;
+let qwenBenchmarkRunning = false;
+let qwenBenchmarkStages: QwenBenchmarkStageResult[] = [];
+
+function benchmarkDuration(ms: number): string {
+  const totalSeconds = Math.max(0, Math.round(ms / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+
+  if (hours > 0) {
+    return hours.toLocaleString("de-DE") + ":" +
+      minutes.toString().padStart(2, "0") + ":" +
+      seconds.toString().padStart(2, "0") + " h";
+  }
+  if (minutes > 0) {
+    return minutes.toLocaleString("de-DE") + ":" +
+      seconds.toString().padStart(2, "0") + " min";
+  }
+  return seconds.toLocaleString("de-DE") + " s";
+}
+
+function benchmarkObjectSummary(stage: QwenBenchmarkStageResult): string {
+  if (stage.objects.length === 0) return "Keine bestätigten Motive.";
+
+  const counts = new Map<string, number>();
+  for (const object of stage.objects) {
+    counts.set(object.label, (counts.get(object.label) ?? 0) + 1);
+  }
+
+  return [...counts.entries()]
+    .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
+    .map(([label, count]) => count > 1 ? label + " ×" + count : label)
+    .join(" · ");
+}
+
+function renderQwenBenchmarkStage(stage: QwenBenchmarkStageResult): void {
+  const existingIndex = qwenBenchmarkStages.findIndex(
+    (item) => item.profile === stage.profile
+  );
+  if (existingIndex >= 0) {
+    qwenBenchmarkStages[existingIndex] = stage;
+  } else {
+    qwenBenchmarkStages.push(stage);
+  }
+
+  qwenBenchmarkStages.sort((left, right) => {
+    const order: QwenBenchmarkProfile[] = [
+      "whole",
+      "tiles4",
+      "single-check",
+      "full"
+    ];
+    return order.indexOf(left.profile) - order.indexOf(right.profile);
+  });
+
+  qwenBenchmarkResults.replaceChildren();
+
+  for (const result of qwenBenchmarkStages) {
+    const card = document.createElement("article");
+    card.className = "qwen-benchmark-result";
+
+    const header = document.createElement("div");
+    header.className = "qwen-benchmark-result-header";
+    const title = document.createElement("h3");
+    title.textContent = result.label;
+    const total = document.createElement("strong");
+    total.textContent = benchmarkDuration(result.timings.totalMs);
+    header.append(title, total);
+
+    const metrics = document.createElement("div");
+    metrics.className = "qwen-benchmark-metrics";
+
+    const metricValues: Array<[string, string]> = [
+      ["Modell bereit", benchmarkDuration(result.timings.modelReadyMs)],
+      ["Motivsuche", benchmarkDuration(result.timings.discoveryMs)],
+      ["Prüfungen", benchmarkDuration(result.timings.verificationMs)],
+      ["Bildbereiche", result.regionCount.toLocaleString("de-DE")],
+      ["Kandidaten", result.candidateCount.toLocaleString("de-DE")],
+      ["Ergebnis", result.verifiedCount.toLocaleString("de-DE")]
+    ];
+
+    for (const [label, value] of metricValues) {
+      const item = document.createElement("div");
+      item.className = "qwen-benchmark-metric";
+      const small = document.createElement("small");
+      small.textContent = label;
+      const strong = document.createElement("strong");
+      strong.textContent = value;
+      item.append(small, strong);
+      metrics.appendChild(item);
+    }
+
+    const summary = document.createElement("p");
+    summary.textContent = benchmarkObjectSummary(result);
+
+    const details = document.createElement("details");
+    const detailsSummary = document.createElement("summary");
+    detailsSummary.textContent = "Rohdaten anzeigen";
+    const pre = document.createElement("pre");
+    pre.textContent = JSON.stringify(result, null, 2);
+    details.append(detailsSummary, pre);
+
+    card.append(header, metrics, summary, details);
+    qwenBenchmarkResults.appendChild(card);
+  }
+
+  copyQwenBenchmarkButton.disabled = qwenBenchmarkStages.length === 0;
+}
+
+function renderQwenBenchmarkProgress(status: AnalysisWorkerStatus): void {
+  if (!qwenBenchmarkRunning) return;
+
+  const progress = status.progress;
+  if (progress?.kind === "qwen3vl" && progress.message) {
+    qwenBenchmarkLive.textContent = progress.message;
+  } else if (status.message) {
+    qwenBenchmarkLive.textContent = status.message;
+  }
+}
+
+function qwenBenchmarkCopyText(): string {
+  const lines = [
+    "Qwen-Einzelbild-Benchmark",
+    "Datei: " + (qwenBenchmarkSelectedPath ?? "—"),
+    ""
+  ];
+
+  for (const stage of qwenBenchmarkStages) {
+    lines.push(
+      stage.label,
+      stage.description,
+      "Gesamt: " + benchmarkDuration(stage.timings.totalMs),
+      "Modell bereit: " + benchmarkDuration(stage.timings.modelReadyMs),
+      "Motivsuche: " + benchmarkDuration(stage.timings.discoveryMs),
+      "Prüfungen: " + benchmarkDuration(stage.timings.verificationMs),
+      "Bildbereiche: " + stage.regionCount.toLocaleString("de-DE"),
+      "Kandidaten: " + stage.candidateCount.toLocaleString("de-DE"),
+      "Ergebnis: " + stage.verifiedCount.toLocaleString("de-DE"),
+      "Motive: " + benchmarkObjectSummary(stage),
+      ""
+    );
+  }
+
+  return lines.join("\n").trim();
+}
+
+function renderQwenLiveProgress(): void {
+  const progress = latestAnalysisStatus?.progress;
+  if (!progress || progress.kind !== "qwen3vl") return;
+
+  objectVerificationStageState.className = "stage-state running";
+  objectVerificationStageState.textContent = "Läuft";
+  objectVerificationStageCounts.textContent =
+    progress.message.replace(/^Qwen3-VL:\s*/, "");
+}
 
 function renderAnalysisStatus(status: AnalysisWorkerStatus): void {
+  latestAnalysisStatus = status;
   analysisWorkerState.className = "analysis-state";
 
   switch (status.state) {
@@ -131,6 +327,23 @@ function renderAnalysisStatus(status: AnalysisWorkerStatus): void {
   analysisQueue.textContent = status.queuedJobs.toLocaleString("de-DE");
   analysisActive.textContent = status.activeJobs.toLocaleString("de-DE");
   analysisMessage.textContent = status.message;
+
+  if (status.progress?.kind === "qwen3vl") {
+    const progress = status.progress;
+    if (
+      progress.current !== null &&
+      progress.total !== null &&
+      progress.total > 0
+    ) {
+      analysisWorkerState.textContent =
+        `Qwen ${progress.current.toLocaleString("de-DE")}/` +
+        progress.total.toLocaleString("de-DE");
+    } else {
+      analysisWorkerState.textContent = "Qwen läuft";
+    }
+  }
+
+  renderQwenLiveProgress();
 }
 
 function stageText(stats: PipelineStatus["technical"]): {
@@ -179,6 +392,20 @@ function renderPipelineStatus(status: PipelineStatus): void {
     petEmbeddingStageCounts,
     status.petEmbeddings
   );
+  renderStage(
+    objectVerificationStageState,
+    objectVerificationStageCounts,
+    status.objectVerification
+  );
+  renderStage(
+    semanticStageState,
+    semanticStageCounts,
+    status.semanticEmbeddings
+  );
+
+  // Ein Pipeline-Refresh darf den feineren Live-Status einer laufenden
+  // Qwen-Anfrage nicht mit den groben Job-Zählern überschreiben.
+  renderQwenLiveProgress();
 
   const visualDataChanged =
     status.thumbnails.done !== lastThumbnailDone ||
@@ -187,7 +414,9 @@ function renderPipelineStatus(status: PipelineStatus): void {
     status.faceEmbeddings.done !== lastFaceEmbeddingDone ||
     status.petDetection.done !== lastPetDone ||
     status.petFusion.done !== lastPetFusionDone ||
-    status.petEmbeddings.done !== lastPetEmbeddingDone;
+    status.petEmbeddings.done !== lastPetEmbeddingDone ||
+    status.objectVerification.done !== lastObjectVerificationDone ||
+    status.semanticEmbeddings.done !== lastSemanticDone;
 
   lastThumbnailDone = status.thumbnails.done;
   lastMetadataDone = status.imageMetadata.done;
@@ -196,6 +425,8 @@ function renderPipelineStatus(status: PipelineStatus): void {
   lastPetDone = status.petDetection.done;
   lastPetFusionDone = status.petFusion.done;
   lastPetEmbeddingDone = status.petEmbeddings.done;
+  lastObjectVerificationDone = status.objectVerification.done;
+  lastSemanticDone = status.semanticEmbeddings.done;
 
   const stages = [
     status.technical,
@@ -205,7 +436,9 @@ function renderPipelineStatus(status: PipelineStatus): void {
     status.faceEmbeddings,
     status.petDetection,
     status.petFusion,
-    status.petEmbeddings
+    status.petEmbeddings,
+    status.objectVerification,
+    status.semanticEmbeddings
   ];
 
   const totalIssues = stages.reduce(
@@ -228,7 +461,10 @@ function renderPipelineStatus(status: PipelineStatus): void {
     // Die Medienliste darf während laufender Analyse automatisch aktualisiert
     // werden. Die Personenansicht enthält jedoch Eingabefelder; ein komplettes
     // Re-Rendern würde dort den Fokus/Cursor beim Tippen zerstören.
-    if (currentView === "media" && selectedSourceId() !== null) {
+    if (
+      (currentView === "media" || currentView === "search") &&
+      selectedSourceId() !== null
+    ) {
       void runSafely(refreshCatalog);
     }
   }, 500);
@@ -340,15 +576,251 @@ function statusFor(row: MediaRecord): { text: string; className: string } {
   return { text: "Fehlt", className: "badge missing" };
 }
 
+const MOTIF_LABELS_DE: Record<string, string> = {
+  person: "Person",
+  bicycle: "Fahrrad",
+  car: "Auto",
+  motorcycle: "Motorrad",
+  airplane: "Flugzeug",
+  bus: "Bus",
+  train: "Zug",
+  truck: "Lkw",
+  boat: "Boot",
+  "traffic light": "Ampel",
+  "fire hydrant": "Hydrant",
+  "stop sign": "Stoppschild",
+  "parking meter": "Parkscheinautomat",
+  bench: "Bank",
+  bird: "Vogel",
+  horse: "Pferd",
+  sheep: "Schaf",
+  cow: "Kuh",
+  elephant: "Elefant",
+  bear: "Bär",
+  zebra: "Zebra",
+  giraffe: "Giraffe",
+  backpack: "Rucksack",
+  umbrella: "Regenschirm",
+  handbag: "Handtasche",
+  tie: "Krawatte",
+  suitcase: "Koffer",
+  frisbee: "Frisbee",
+  skis: "Ski",
+  snowboard: "Snowboard",
+  "sports ball": "Ball",
+  kite: "Drachen",
+  "baseball bat": "Baseballschläger",
+  "baseball glove": "Baseballhandschuh",
+  skateboard: "Skateboard",
+  surfboard: "Surfbrett",
+  "tennis racket": "Tennisschläger",
+  bottle: "Flasche",
+  "wine glass": "Weinglas",
+  cup: "Tasse/Becher",
+  fork: "Gabel",
+  knife: "Messer",
+  spoon: "Löffel",
+  bowl: "Schüssel",
+  banana: "Banane",
+  apple: "Apfel",
+  sandwich: "Sandwich",
+  orange: "Orange",
+  broccoli: "Brokkoli",
+  carrot: "Karotte",
+  "hot dog": "Hotdog",
+  pizza: "Pizza",
+  donut: "Donut",
+  cake: "Kuchen",
+  chair: "Stuhl",
+  couch: "Sofa",
+  "potted plant": "Topfpflanze",
+  bed: "Bett",
+  "dining table": "Tisch",
+  toilet: "Toilette",
+  tv: "Fernseher",
+  laptop: "Laptop",
+  mouse: "Maus",
+  remote: "Fernbedienung",
+  keyboard: "Tastatur",
+  "cell phone": "Handy",
+  microwave: "Mikrowelle",
+  oven: "Backofen",
+  toaster: "Toaster",
+  sink: "Spüle",
+  refrigerator: "Kühlschrank",
+  book: "Buch",
+  clock: "Uhr",
+  vase: "Vase",
+  scissors: "Schere",
+  "teddy bear": "Teddybär",
+  "hair drier": "Haartrockner",
+  toothbrush: "Zahnbürste"
+};
+
+function checkedValues(container: HTMLElement): string[] {
+  return [...container.querySelectorAll<HTMLInputElement>('input[type="checkbox"]:checked')]
+    .map((input) => input.value);
+}
+
+function boundedCount(input: HTMLInputElement): number {
+  const value = Math.trunc(Number(input.value) || 0);
+  return Math.max(0, Math.min(20, value));
+}
+
+function currentSearchFilter(): SearchFilter {
+  return {
+    personIds: checkedValues(searchPersons)
+      .map(Number)
+      .filter((value) => Number.isInteger(value) && value > 0),
+    petIds: checkedValues(searchPets)
+      .map(Number)
+      .filter((value) => Number.isInteger(value) && value > 0),
+    objectLabels: checkedValues(searchObjects),
+    minDogs: boundedCount(searchMinDogs),
+    minCats: boundedCount(searchMinCats),
+    semanticQuery: searchSemanticQuery.value.trim(),
+    semanticMinProbability: Math.max(
+      0,
+      Math.min(0.99, (Number(searchSemanticMinProbability.value) || 0) / 100)
+    )
+  };
+}
+
+function searchCriterionCount(filter: SearchFilter): number {
+  return (
+    filter.personIds.length +
+    filter.petIds.length +
+    filter.objectLabels.length +
+    (filter.minDogs > 0 ? 1 : 0) +
+    (filter.minCats > 0 ? 1 : 0) +
+    (filter.semanticQuery ? 1 : 0)
+  );
+}
+
+function appendFacet(
+  container: HTMLElement,
+  value: string,
+  label: string,
+  mediaCount: number,
+  checked: boolean
+): void {
+  const wrapper = document.createElement("label");
+  wrapper.className = "search-facet";
+
+  const input = document.createElement("input");
+  input.type = "checkbox";
+  input.value = value;
+  input.checked = checked;
+
+  const text = document.createElement("span");
+  text.textContent = label;
+
+  const count = document.createElement("small");
+  count.textContent = mediaCount.toLocaleString("de-DE");
+
+  wrapper.append(input, text, count);
+  container.appendChild(wrapper);
+}
+
+function renderSearchFacets(facets: SearchFacets): void {
+  const selectedPersons = new Set(checkedValues(searchPersons));
+  const selectedPets = new Set(checkedValues(searchPets));
+  const selectedObjects = new Set(checkedValues(searchObjects));
+
+  searchPersons.replaceChildren();
+  searchPets.replaceChildren();
+  searchObjects.replaceChildren();
+
+  for (const person of facets.persons) {
+    appendFacet(
+      searchPersons,
+      String(person.id),
+      person.name,
+      person.mediaCount,
+      selectedPersons.has(String(person.id))
+    );
+  }
+
+  for (const pet of facets.pets) {
+    appendFacet(
+      searchPets,
+      String(pet.id),
+      pet.name + (pet.petClass === "dog" ? " · Hund" : " · Katze"),
+      pet.mediaCount,
+      selectedPets.has(String(pet.id))
+    );
+  }
+
+  for (const object of facets.objects) {
+    appendFacet(
+      searchObjects,
+      object.label,
+      MOTIF_LABELS_DE[object.label] ?? object.label,
+      object.mediaCount,
+      selectedObjects.has(object.label)
+    );
+  }
+
+  const addEmpty = (container: HTMLElement, text: string) => {
+    if (container.childElementCount > 0) return;
+    const empty = document.createElement("span");
+    empty.className = "search-facet-empty";
+    empty.textContent = text;
+    container.appendChild(empty);
+  };
+
+  addEmpty(searchPersons, "Noch keine bestätigten Personen.");
+  addEmpty(searchPets, "Noch keine bestätigten Haustiere.");
+  addEmpty(searchObjects, "Noch keine belastbaren Motive analysiert.");
+}
+
+async function loadSearchFacets(sourceId: number): Promise<void> {
+  const facets = await window.imageSorter.catalog.getSearchFacets(sourceId);
+  renderSearchFacets(facets);
+  searchFacetsSourceId = sourceId;
+}
+
+async function runCombinedSearch(sourceId: number): Promise<void> {
+  const filter = currentSearchFilter();
+  const rows = await window.imageSorter.catalog.searchMedia(sourceId, filter, 1000);
+  renderRows(rows, "Keine Medien entsprechen allen ausgewählten Kriterien.");
+
+  const criteria = searchCriterionCount(filter);
+  searchTabCount.textContent = rows.length.toLocaleString("de-DE");
+  searchSummary.textContent =
+    rows.length.toLocaleString("de-DE") + " " +
+    (rows.length === 1 ? "Treffer" : "Treffer") +
+    (criteria > 0
+      ? " · " + criteria.toLocaleString("de-DE") + " UND-" +
+        (criteria === 1 ? "Kriterium" : "Kriterien")
+      : " · keine Einschränkung");
+}
+
+function clearSearchControls(): void {
+  for (const input of [
+    ...searchPersons.querySelectorAll<HTMLInputElement>('input[type="checkbox"]'),
+    ...searchPets.querySelectorAll<HTMLInputElement>('input[type="checkbox"]'),
+    ...searchObjects.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')
+  ]) {
+    input.checked = false;
+  }
+  searchMinDogs.value = "0";
+  searchMinCats.value = "0";
+  searchSemanticQuery.value = "";
+  searchSemanticMinProbability.value = "65";
+}
+
 function setView(view: CatalogView): void {
   currentView = view;
 
   mediaTab.classList.toggle("active", view === "media");
+  searchTab.classList.toggle("active", view === "search");
   duplicateTab.classList.toggle("active", view === "duplicates");
   peopleTab.classList.toggle("active", view === "people");
   petsTab.classList.toggle("active", view === "pets");
   recycleTab.classList.toggle("active", view === "recycle");
 
+  searchPanel.hidden = view !== "search";
   duplicateView.hidden = view !== "duplicates";
   personView.hidden = view !== "people";
   petView.hidden = view !== "pets";
@@ -512,8 +984,27 @@ function renderRows(rows: MediaRecord[], emptyText = "Noch keine Medien katalogi
         "Motive: " + visible.join(" · ") +
         (motifLabels.length > visible.length ? " …" : "");
       motifBadge.title =
-        "YOLOX-S erkannte Objekte: " + motifLabels.join(", ");
+        "Qwen3-VL-8B: Vollbild/Kachel erkannt und pro Ausschnitt doppelt bestätigt: " +
+        motifLabels.join(", ");
       stateCell.appendChild(motifBadge);
+    }
+
+    if (row.availability === "AVAILABLE" && row.semanticReady) {
+      const semanticBadge = document.createElement("span");
+      semanticBadge.className = "badge semantic";
+
+      if (row.semanticScore !== null) {
+        semanticBadge.textContent =
+          "Semantik " + Math.round(row.semanticScore * 100).toLocaleString("de-DE") + " %";
+        semanticBadge.title =
+          "SigLIP2-Suchscore für den eingegebenen semantischen Inhalt · " +
+          (row.semanticModel ?? "SigLIP2");
+      } else {
+        semanticBadge.textContent = "Semantik bereit";
+        semanticBadge.title = row.semanticModel ?? "SigLIP2-Semantikanalyse abgeschlossen";
+      }
+
+      stateCell.appendChild(semanticBadge);
     }
 
     const actionCell = document.createElement("td");
@@ -1536,7 +2027,9 @@ const analysisModuleLabels: Record<string, string> = {
   "pet-detect-nanodet-v1": "Haustierdetektor NanoDet",
   "pet-detect-yolox-v1": "Haustierdetektor YOLOX-S",
   "pet-fuse-ensemble-v1": "Haustier-Ergebnisse fusionieren",
-  "pet-embed-dogreid-v1": "Individuelle Hundemerkmale"
+  "pet-embed-dogreid-v1": "Individuelle Hundemerkmale",
+  "object-detect-qwen3vl-gguf-v2": "Motive · Qwen3-VL-8B Q8_0 Vollbild/Kachel + Doppelprüfung",
+  "semantic-embed-siglip2-v1": "Semantikanalyse (SigLIP2 So400m NaFlex)"
 };
 
 function analysisModuleLabel(module: string): string {
@@ -1709,6 +2202,7 @@ async function refreshCatalog(): Promise<void> {
     recycleCount.textContent = "0";
     lastScan.textContent = "—";
     mediaTabCount.textContent = "0";
+    searchTabCount.textContent = "0";
     duplicateTabCount.textContent = "0";
     peopleTabCount.textContent = "0";
     petsTabCount.textContent = "0";
@@ -1760,6 +2254,12 @@ async function refreshCatalog(): Promise<void> {
   if (currentView === "recycle") {
     const rows = await window.imageSorter.catalog.listRecycleMedia(sourceId, 500);
     renderRows(rows, "Keine wiederherstellbaren oder mehrdeutigen Papierkorb-Einträge.");
+    return;
+  }
+
+  if (currentView === "search") {
+    await loadSearchFacets(sourceId);
+    await runCombinedSearch(sourceId);
     return;
   }
 
@@ -1874,8 +2374,9 @@ resetButton.addEventListener("click", () => {
 
   const confirmed = window.confirm(
     "Wirklich die komplette Entwicklungsdatenbank zurücksetzen? " +
-    "Alle Medienquellen, Katalogeinträge, Scan-Historien und Analysejobs werden gelöscht. " +
-    "Die Originaldateien auf der Festplatte bleiben unverändert."
+    "Medienquellen, Katalog, Scan-Historie, Analysejobs, Gesichts-/Haustierzuordnungen, " +
+    "Motiverkennung und alle SigLIP2-Semantikvektoren werden vollständig gelöscht. " +
+    "Die Originaldateien und die lokal installierten KI-Modelle bleiben unverändert."
   );
   if (!confirmed) return;
 
@@ -1891,16 +2392,24 @@ resetButton.addEventListener("click", () => {
       await window.imageSorter.catalog.resetCatalog();
       currentView = "media";
       mediaTab.classList.add("active");
+      searchTab.classList.remove("active");
       duplicateTab.classList.remove("active");
       peopleTab.classList.remove("active");
       petsTab.classList.remove("active");
       recycleTab.classList.remove("active");
+      searchPanel.hidden = true;
       mediaView.hidden = false;
       duplicateView.hidden = true;
       personView.hidden = true;
       petView.hidden = true;
+      clearSearchControls();
+      searchFacetsSourceId = null;
+      searchTabCount.textContent = "0";
+      searchSummary.textContent = "Noch keine Suche ausgeführt.";
       await loadSources();
-      progressText.textContent = "Katalog zurückgesetzt. Du kannst jetzt eine Medienquelle neu hinzufügen und sauber neu scannen.";
+      progressText.textContent =
+        "Datenbank vollständig zurückgesetzt. Du kannst jetzt sauber neu beginnen; " +
+        "auch alte KI- und Semantikdaten sind entfernt.";
     } finally {
       resetting = false;
       resetButton.disabled = false;
@@ -1912,6 +2421,7 @@ resetButton.addEventListener("click", () => {
 });
 
 mediaTab.addEventListener("click", () => setView("media"));
+searchTab.addEventListener("click", () => setView("search"));
 duplicateTab.addEventListener("click", () => setView("duplicates"));
 peopleTab.addEventListener("click", () => setView("people"));
 petsTab.addEventListener("click", () => setView("pets"));
@@ -1940,6 +2450,164 @@ refreshPetsButton.addEventListener("click", () => {
     petsTabCount.textContent = stats.petCandidates.toLocaleString("de-DE");
   });
 });
+analysisDevLogButton.addEventListener("click", () => {
+  void runSafely(async () => {
+    const result = await window.imageSorter.analysis.openDevLog();
+    progressText.textContent = "Dev-Protokoll geöffnet: " + result.path;
+  });
+});
+
+analysisCopyDevLogButton.addEventListener("click", () => {
+  void runSafely(async () => {
+    analysisCopyDevLogButton.disabled = true;
+    try {
+      const result = await window.imageSorter.analysis.copyDevLog();
+      progressText.textContent =
+        "Dev-Protokoll in die Zwischenablage kopiert · " +
+        result.characters.toLocaleString("de-DE") +
+        " Zeichen.";
+    } finally {
+      analysisCopyDevLogButton.disabled = false;
+    }
+  });
+});
+
+async function closeQwenBenchmarkAndResume(): Promise<void> {
+  if (qwenBenchmarkRunning) {
+    qwenBenchmarkLive.textContent =
+      "Der Test läuft noch. Nach Abschluss kann das Fenster geschlossen werden.";
+    return;
+  }
+
+  closeQwenBenchmarkButton.disabled = true;
+  pickQwenBenchmarkImageButton.disabled = true;
+  runQwenBenchmarkButton.disabled = true;
+  qwenBenchmarkLive.textContent =
+    "Testmodus wird beendet. Normale Analyse wird wieder freigegeben …";
+
+  try {
+    await window.imageSorter.analysis.finishQwenBenchmark();
+    qwenBenchmarkDialog.close();
+    progressText.textContent =
+      "Qwen-Einzeltest beendet. Normale Analyse läuft wieder weiter.";
+  } finally {
+    closeQwenBenchmarkButton.disabled = false;
+    pickQwenBenchmarkImageButton.disabled = false;
+    runQwenBenchmarkButton.disabled = false;
+  }
+}
+
+qwenBenchmarkButton.addEventListener("click", () => {
+  void runSafely(async () => {
+    if (!qwenBenchmarkDialog.open) qwenBenchmarkDialog.showModal();
+
+    qwenBenchmarkButton.disabled = true;
+    pickQwenBenchmarkImageButton.disabled = true;
+    runQwenBenchmarkButton.disabled = true;
+    qwenBenchmarkLive.textContent =
+      "Standard-Qwen wird jetzt gestoppt und aus dem Speicher entladen …";
+
+    try {
+      await window.imageSorter.analysis.prepareQwenBenchmark();
+      qwenBenchmarkLive.textContent =
+        "Standardanalyse ist vollständig pausiert und Qwen ist entladen. " +
+        "Du kannst jetzt ein Bild auswählen.";
+    } finally {
+      qwenBenchmarkButton.disabled = false;
+      pickQwenBenchmarkImageButton.disabled = false;
+      runQwenBenchmarkButton.disabled = false;
+    }
+  });
+});
+
+closeQwenBenchmarkButton.addEventListener("click", () => {
+  void runSafely(closeQwenBenchmarkAndResume);
+});
+
+qwenBenchmarkDialog.addEventListener("cancel", (event) => {
+  event.preventDefault();
+  if (!qwenBenchmarkRunning) {
+    void runSafely(closeQwenBenchmarkAndResume);
+  } else {
+    qwenBenchmarkLive.textContent =
+      "Der Test läuft noch. Nach Abschluss kann das Fenster geschlossen werden.";
+  }
+});
+
+pickQwenBenchmarkImageButton.addEventListener("click", () => {
+  void runSafely(async () => {
+    const selected = await window.imageSorter.analysis.pickQwenBenchmarkImage();
+    if (!selected) return;
+
+    qwenBenchmarkSelectedPath = selected;
+    qwenBenchmarkFilePath.textContent = selected;
+    qwenBenchmarkFilePath.title = selected;
+    qwenBenchmarkLive.textContent =
+      "Bild ausgewählt. Jetzt eine oder mehrere Teststufen starten.";
+  });
+});
+
+runQwenBenchmarkButton.addEventListener("click", () => {
+  void runSafely(async () => {
+    if (!qwenBenchmarkSelectedPath) {
+      qwenBenchmarkLive.textContent = "Bitte zuerst ein Bild auswählen.";
+      return;
+    }
+
+    const profiles = qwenBenchmarkProfileInputs
+      .filter((input) => input.checked)
+      .map((input) => input.value as QwenBenchmarkProfile);
+
+    if (profiles.length === 0) {
+      qwenBenchmarkLive.textContent = "Bitte mindestens eine Teststufe auswählen.";
+      return;
+    }
+
+    qwenBenchmarkRunning = true;
+    qwenBenchmarkStages = [];
+    qwenBenchmarkResults.innerHTML =
+      '<p class="qwen-benchmark-empty">Test läuft …</p>';
+    runQwenBenchmarkButton.disabled = true;
+    pickQwenBenchmarkImageButton.disabled = true;
+    copyQwenBenchmarkButton.disabled = true;
+    closeQwenBenchmarkButton.disabled = true;
+    qwenBenchmarkLive.textContent =
+      "Standardanalyse ist pausiert. Qwen-Test wird vorbereitet …";
+
+    try {
+      const result = await window.imageSorter.analysis.runQwenBenchmark(
+        qwenBenchmarkSelectedPath,
+        profiles
+      );
+
+      for (const stage of result.results) {
+        if (!qwenBenchmarkStages.some((item) => item.profile === stage.profile)) {
+          renderQwenBenchmarkStage(stage);
+        }
+      }
+
+      qwenBenchmarkLive.textContent =
+        "Test abgeschlossen · " +
+        result.results.length.toLocaleString("de-DE") +
+        (result.results.length === 1 ? " Stufe." : " Stufen.");
+    } finally {
+      qwenBenchmarkRunning = false;
+      runQwenBenchmarkButton.disabled = false;
+      pickQwenBenchmarkImageButton.disabled = false;
+      closeQwenBenchmarkButton.disabled = false;
+      copyQwenBenchmarkButton.disabled = qwenBenchmarkStages.length === 0;
+    }
+  });
+});
+
+copyQwenBenchmarkButton.addEventListener("click", () => {
+  void runSafely(async () => {
+    if (qwenBenchmarkStages.length === 0) return;
+    await copyText(qwenBenchmarkCopyText());
+    qwenBenchmarkLive.textContent = "Testprotokoll in die Zwischenablage kopiert.";
+  });
+});
+
 analysisErrorsButton.addEventListener("click", () => {
   void runSafely(async () => {
     await loadAnalysisErrors();
@@ -2014,7 +2682,36 @@ imagePreviewDialog.addEventListener("close", () => {
   imagePreviewCaption.textContent = "";
 });
 
-sourceSelect.addEventListener("change", () => void runSafely(refreshCatalog));
+sourceSelect.addEventListener("change", () => {
+  clearSearchControls();
+  searchFacetsSourceId = null;
+  searchTabCount.textContent = "0";
+  searchSummary.textContent = "Noch keine Suche ausgeführt.";
+  void runSafely(refreshCatalog);
+});
+
+runSearchButton.addEventListener("click", () => {
+  const sourceId = selectedSourceId();
+  if (sourceId === null) return;
+  void runSafely(async () => {
+    if (searchFacetsSourceId !== sourceId) await loadSearchFacets(sourceId);
+    await runCombinedSearch(sourceId);
+  });
+});
+
+searchSemanticQuery.addEventListener("keydown", (event) => {
+  if (event.key !== "Enter") return;
+  event.preventDefault();
+  runSearchButton.click();
+});
+
+resetSearchButton.addEventListener("click", () => {
+  const sourceId = selectedSourceId();
+  clearSearchControls();
+  if (sourceId === null) return;
+  void runSafely(() => runCombinedSearch(sourceId));
+});
+
 refreshButton.addEventListener("click", () => void runSafely(refreshCatalog));
 
 window.imageSorter.catalog.onProgress((progress) => {
@@ -2022,7 +2719,15 @@ window.imageSorter.catalog.onProgress((progress) => {
   progressText.textContent = progress.message;
 });
 
-window.imageSorter.analysis.onStatus(renderAnalysisStatus);
+window.imageSorter.analysis.onStatus((status) => {
+  renderAnalysisStatus(status);
+  renderQwenBenchmarkProgress(status);
+});
+window.imageSorter.analysis.onQwenBenchmarkStage((stage) => {
+  if (qwenBenchmarkDialog.open || qwenBenchmarkRunning) {
+    renderQwenBenchmarkStage(stage);
+  }
+});
 window.imageSorter.analysis.onPipelineStatus(renderPipelineStatus);
 
 window.imageSorter.people.onUpdated(() => {
@@ -2067,7 +2772,9 @@ void window.imageSorter.analysis
       faceEmbeddings: { pending: 0, running: 0, done: 0, failed: 0, unavailable: 0 },
       petDetection: { pending: 0, running: 0, done: 0, failed: 0, unavailable: 0 },
       petFusion: { pending: 0, running: 0, done: 0, failed: 0, unavailable: 0 },
-      petEmbeddings: { pending: 0, running: 0, done: 0, failed: 0, unavailable: 0 }
+      petEmbeddings: { pending: 0, running: 0, done: 0, failed: 0, unavailable: 0 },
+      objectVerification: { pending: 0, running: 0, done: 0, failed: 0, unavailable: 0 },
+      semanticEmbeddings: { pending: 0, running: 0, done: 0, failed: 0, unavailable: 0 }
     });
   });
 
