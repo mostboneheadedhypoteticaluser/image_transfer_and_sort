@@ -16,7 +16,8 @@ type PythonStage =
   | "faceEmbeddings"
   | "petDetection"
   | "petFusion"
-  | "petEmbeddings";
+  | "petEmbeddings"
+  | "semanticEmbeddings";
 
 type ModuleSpec = {
   module: string;
@@ -29,7 +30,8 @@ type ModuleSpec = {
     | "completeFaceEmbeddingJob"
     | "completePetDetectionJob"
     | "completePetFusionJob"
-    | "completePetEmbeddingJob";
+    | "completePetEmbeddingJob"
+    | "completeSemanticEmbeddingJob";
   label: string;
   timeoutMs: number;
 };
@@ -98,6 +100,14 @@ const MODULES: ModuleSpec[] = [
     completeMethod: "completePetEmbeddingJob",
     label: "Individuelle Hundemerkmale",
     timeoutMs: 120000
+  },
+  {
+    module: "semantic-embed-siglip2-v1",
+    stage: "semanticEmbeddings",
+    workerMethod: "extract_semantic_image_embedding",
+    completeMethod: "completeSemanticEmbeddingJob",
+    label: "Semantikanalyse · SigLIP2 So400m NaFlex",
+    timeoutMs: 1800000
   }
 ];
 
@@ -110,6 +120,7 @@ type PythonPipelineStats = Pick<
   | "petDetection"
   | "petFusion"
   | "petEmbeddings"
+  | "semanticEmbeddings"
 >;
 
 function emptyStats(): AnalysisQueueStats {
@@ -188,7 +199,8 @@ export class AnalysisCoordinator {
       faceEmbeddings: emptyStats(),
       petDetection: emptyStats(),
       petFusion: emptyStats(),
-      petEmbeddings: emptyStats()
+      petEmbeddings: emptyStats(),
+      semanticEmbeddings: emptyStats()
     };
 
     for (const spec of MODULES) {
@@ -211,7 +223,8 @@ export class AnalysisCoordinator {
       result.faceEmbeddings.pending +
       result.petDetection.pending +
       result.petFusion.pending +
-      result.petEmbeddings.pending;
+      result.petEmbeddings.pending +
+      result.semanticEmbeddings.pending;
     const active =
       result.technical.running +
       result.imageMetadata.running +
@@ -219,7 +232,8 @@ export class AnalysisCoordinator {
       result.faceEmbeddings.running +
       result.petDetection.running +
       result.petFusion.running +
-      result.petEmbeddings.running;
+      result.petEmbeddings.running +
+      result.semanticEmbeddings.running;
 
     this.analysis.setQueueState(
       queued,
