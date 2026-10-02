@@ -166,17 +166,28 @@
             <article class="pipeline-stage">
               <div>
                 <small>Stufe 9</small>
-                <strong>Motive · Qwen3-VL-8B Q8_0 Vollbild/Kacheln</strong>
+                <strong>Personen bestätigen</strong>
               </div>
               <div class="pipeline-stage-status">
-                <span id="objectVerificationStageState" class="stage-state waiting">Wartet</span>
-                <small id="objectVerificationStageCounts">0 fertig · 0 offen</small>
+                <span class="stage-state done">Über Reiter</span>
+                <small>Bereits nach den SFace-Merkmalen möglich</small>
               </div>
             </article>
 
             <article class="pipeline-stage">
               <div>
                 <small>Stufe 10</small>
+                <strong>Haustiere bestätigen</strong>
+              </div>
+              <div class="pipeline-stage-status">
+                <span class="stage-state done">Über Reiter</span>
+                <small>Bereits nach Dog-ReID möglich</small>
+              </div>
+            </article>
+
+            <article class="pipeline-stage">
+              <div>
+                <small>Stufe 11 · rechenintensiv</small>
                 <strong>Semantikanalyse · SigLIP2 So400m NaFlex</strong>
               </div>
               <div class="pipeline-stage-status">
@@ -187,23 +198,12 @@
 
             <article class="pipeline-stage">
               <div>
-                <small>Stufe 11</small>
-                <strong>Personen bestätigen</strong>
+                <small>Stufe 12 · rechenintensiv · zuletzt</small>
+                <strong>Motive · Qwen3-VL-8B Q8_0 Vollbild/Kacheln</strong>
               </div>
               <div class="pipeline-stage-status">
-                <span class="stage-state done">Über Reiter</span>
-                <small>Vorschläge aus SFace-Merkmalen</small>
-              </div>
-            </article>
-
-            <article class="pipeline-stage">
-              <div>
-                <small>Stufe 12</small>
-                <strong>Haustiere bestätigen</strong>
-              </div>
-              <div class="pipeline-stage-status">
-                <span class="stage-state done">Über Reiter</span>
-                <small>Dog-ReID gruppiert denselben Hund</small>
+                <span id="objectVerificationStageState" class="stage-state waiting">Wartet</span>
+                <small id="objectVerificationStageCounts">0 fertig · 0 offen</small>
               </div>
             </article>
 
@@ -224,7 +224,7 @@
               <button id="analysisErrorsButton" class="ghost analysis-errors-button" type="button" hidden>
                 Fehler anzeigen <span id="analysisErrorCount" class="tab-count">0</span>
               </button>
-              <span class="analysis-note">Gesichts- und Haustiererkennung bleiben unverändert. Allgemeine Motive untersucht Qwen3-VL-8B-Thinking Q8_0 selbstständig im Gesamtbild und in überlappenden Kacheln. Jeder Kandidat wird danach zweimal am markierten Ausschnitt neu geprüft. NanoDet/YOLOX dürfen nur zusätzliche Hinweise liefern. Genauigkeit hat Vorrang vor Laufzeit.</span>
+              <span class="analysis-note">Gesichts- und Haustiererkennung bleiben unverändert und haben Vorrang. Personen- und Haustierbestätigung ist bereits nach den Identitätsstufen möglich. Erst danach folgen die rechenintensiven allgemeinen Analysen: SigLIP2 und als letzte Rechenstufe Qwen3-VL-8B-Thinking Q8_0. Qwen untersucht Gesamtbild und überlappende Kacheln; jeder Kandidat wird danach zweimal am markierten Ausschnitt neu geprüft.</span>
             </div>
           </div>
         </section>
