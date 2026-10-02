@@ -52,7 +52,8 @@ const EMPTY_QUEUE: AnalysisQueueStats = {
   pending: 0,
   running: 0,
   done: 0,
-  failed: 0
+  failed: 0,
+  unavailable: 0
 };
 
 let pipelineStatus: PipelineStatus = {
