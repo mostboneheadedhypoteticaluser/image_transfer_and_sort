@@ -10,6 +10,7 @@ import mimetypes
 import os
 import shutil
 import socket
+from pathlib import Path
 import subprocess
 import sys
 import time
@@ -144,10 +145,42 @@ def find_llama_server() -> str | None:
     if configured and os.path.isfile(configured):
         return configured
 
+    # Normaler PATH/Alias-Fall.
     for name in ("llama-server.exe", "llama-server"):
         found = shutil.which(name)
-        if found:
+        if found and os.path.isfile(found):
             return found
+
+    # WinGet-Portable-Pakete sind nicht in jedem bereits laufenden Prozess
+    # sofort im PATH sichtbar. Deshalb zusätzlich direkt an den bekannten
+    # WinGet-Orten suchen.
+    if os.name == "nt":
+        local_app_data = os.environ.get("LOCALAPPDATA", "").strip()
+        if local_app_data:
+            local = Path(local_app_data)
+
+            direct_candidates = (
+                local / "Microsoft" / "WinGet" / "Links" / "llama-server.exe",
+                local / "Microsoft" / "WindowsApps" / "llama-server.exe",
+            )
+            for candidate in direct_candidates:
+                if candidate.is_file():
+                    return str(candidate)
+
+            packages = local / "Microsoft" / "WinGet" / "Packages"
+            if packages.is_dir():
+                package_dirs = sorted(
+                    packages.glob("ggml.llamacpp_*"),
+                    key=lambda path: path.stat().st_mtime if path.exists() else 0,
+                    reverse=True,
+                )
+                for package_dir in package_dirs:
+                    try:
+                        matches = list(package_dir.rglob("llama-server.exe"))
+                    except OSError:
+                        matches = []
+                    if matches:
+                        return str(matches[0])
 
     return None
 
