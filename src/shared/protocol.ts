@@ -1,3 +1,11 @@
+export type AnalysisWorkerProgress = {
+  kind: "qwen3vl";
+  phase: string;
+  current: number | null;
+  total: number | null;
+  message: string;
+};
+
 export type AnalysisWorkerStatus = {
   state: "STARTING" | "READY" | "STOPPED" | "ERROR";
   pid: number | null;
@@ -8,6 +16,7 @@ export type AnalysisWorkerStatus = {
   queuedJobs: number;
   activeJobs: number;
   message: string;
+  progress?: AnalysisWorkerProgress | null;
 };
 
 export type AnalysisQueueStats = {
