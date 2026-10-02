@@ -1584,6 +1584,33 @@ async function refreshRecycleStatus(sourceId: number): Promise<number> {
   return count;
 }
 
+function reactivateAvailableMediaJobs(sourceId: number): void {
+  const rows = db.prepare(`
+    SELECT j.id
+    FROM analysis_jobs j
+    JOIN media_items m ON m.id=j.media_id
+    WHERE m.source_id=?
+      AND m.availability='AVAILABLE'
+      AND j.status='UNAVAILABLE'
+  `).all(sourceId);
+
+  const reset = db.prepare(`
+    UPDATE analysis_jobs
+    SET
+      status='PENDING',
+      attempts=0,
+      error_message=NULL,
+      started_at=NULL,
+      finished_at=NULL,
+      updated_at=CURRENT_TIMESTAMP
+    WHERE id=?
+  `);
+
+  for (const row of rows) {
+    reset.run(Number(row.id));
+  }
+}
+
 function enqueueAnalysisJobs(sourceId: number, module = "file-probe-v1") {
   const imageExtensions = [...IMAGE_EXTENSIONS];
   const imageOnlyModules = new Set([
