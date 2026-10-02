@@ -1,5 +1,5 @@
 import path from "node:path";
-import { readFile } from "node:fs/promises";
+import { readFile, rm } from "node:fs/promises";
 import { app, BrowserWindow, dialog, ipcMain, protocol, shell } from "electron";
 import { CatalogService } from "./catalog-service";
 import { AnalysisService } from "./analysis-service";
@@ -315,7 +315,54 @@ function registerIpc(): void {
 
   ipcMain.handle("catalog:resetCatalog", async () => {
     semanticTextCache.clear();
-    return catalog!.request<ResetCatalogResult>("resetCatalog");
+
+    // Laufende Analyse-/Thumbnail-Jobs zuerst sauber anhalten. Insbesondere
+    // SigLIP2 kann lange rechnen; ein Reset darf nicht parallel einen alten
+    // Job nachträglich wieder in die frisch geleerte Datenbank schreiben.
+    analysisCoordinator?.stop();
+    thumbnailCoordinator?.stop();
+    analysis?.stop();
+    thumbnailService?.stop();
+
+    if (personRefreshTimer) {
+      clearTimeout(personRefreshTimer);
+      personRefreshTimer = null;
+    }
+
+    await new Promise<void>((resolve) => setTimeout(resolve, 800));
+
+    const result = await catalog!.request<ResetCatalogResult>("resetCatalog");
+
+    // Auch abgeleitete Vorschaudateien/Crops entfernen. Die Originalmedien
+    // und die großen KI-Modellgewichte bleiben ausdrücklich erhalten.
+    if (thumbnailCacheRoot) {
+      await rm(thumbnailCacheRoot, { recursive: true, force: true });
+    }
+
+    pipelineStatus = {
+      technical: { ...EMPTY_QUEUE },
+      thumbnails: { ...EMPTY_QUEUE },
+      imageMetadata: { ...EMPTY_QUEUE },
+      faces: { ...EMPTY_QUEUE },
+      faceEmbeddings: { ...EMPTY_QUEUE },
+      petDetection: { ...EMPTY_QUEUE },
+      petFusion: { ...EMPTY_QUEUE },
+      petEmbeddings: { ...EMPTY_QUEUE },
+      semanticEmbeddings: { ...EMPTY_QUEUE }
+    };
+    sendToRenderer("analysis:pipelineStatus", pipelineStatus);
+
+    thumbnailService?.start();
+    void thumbnailCoordinator?.start();
+
+    if (analysis) {
+      await analysis.start();
+      if (analysis.getStatus().state === "READY") {
+        void analysisCoordinator?.start();
+      }
+    }
+
+    return result;
   });
 
   ipcMain.handle("analysis:getStatus", (): Promise<AnalysisWorkerStatus> =>
