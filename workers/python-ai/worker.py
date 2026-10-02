@@ -20,12 +20,48 @@ from dataclasses import asdict, dataclass
 from datetime import datetime
 from typing import Any
 
+_PROCESS_STARTED_AT = time.perf_counter()
+_DEV_LOG_PATH = os.environ.get("IMAGE_SORTER_DEV_LOG", "").strip()
+
+
+def dev_log(event: str, **fields) -> None:
+    if not _DEV_LOG_PATH:
+        return
+
+    try:
+        payload = {
+            "ts": datetime.now().astimezone().isoformat(timespec="milliseconds"),
+            "source": "python-worker",
+            "pid": os.getpid(),
+            "uptimeMs": round((time.perf_counter() - _PROCESS_STARTED_AT) * 1000, 1),
+            "event": event,
+            **fields,
+        }
+        with open(_DEV_LOG_PATH, "a", encoding="utf-8") as handle:
+            handle.write(json.dumps(payload, ensure_ascii=False) + "\n")
+    except Exception:
+        # Diagnose darf den Worker niemals beeinflussen.
+        pass
+
+
+dev_log("PYTHON_PROCESS_BEGIN", python=sys.executable, argv=sys.argv)
+
+_pil_started = time.perf_counter()
+_pil_error = None
 try:
     from PIL import Image, ImageDraw, ImageOps
-except Exception:
+except Exception as exc:
     Image = None
     ImageDraw = None
     ImageOps = None
+    _pil_error = str(exc)
+finally:
+    dev_log(
+        "IMPORT_PIL",
+        elapsedMs=round((time.perf_counter() - _pil_started) * 1000, 1),
+        ok=Image is not None,
+        error=_pil_error,
+    )
 
 # PyTorch/Transformers werden bewusst erst bei der SigLIP2-Stufe geladen.
 # Der Worker muss auf ping sofort antworten können; insbesondere unter Windows
@@ -36,12 +72,22 @@ AutoModel = None
 AutoProcessor = None
 _torch_transformers_import_error = None
 
+_opencv_started = time.perf_counter()
+_opencv_error = None
 try:
     import cv2
     import numpy as np
-except Exception:
+except Exception as exc:
     cv2 = None
     np = None
+    _opencv_error = str(exc)
+finally:
+    dev_log(
+        "IMPORT_OPENCV_NUMPY",
+        elapsedMs=round((time.perf_counter() - _opencv_started) * 1000, 1),
+        ok=cv2 is not None and np is not None,
+        error=_opencv_error,
+    )
 
 WORKER_DIR = os.path.dirname(os.path.abspath(__file__))
 YUNET_MODEL = os.path.join(
