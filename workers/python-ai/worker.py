@@ -167,6 +167,8 @@ _siglip2_coco_text_features = None
 _qwen_server_process = None
 _qwen_server_port = None
 _qwen_server_log_handle = None
+_llama_server_cached = None
+_llama_server_searched = False
 QWEN_SERVER_LOG = os.path.join(WORKER_DIR, "llama-qwen3vl.log")
 
 
@@ -188,14 +190,38 @@ runtime = WorkerRuntime()
 
 
 def find_llama_server() -> str | None:
+    global _llama_server_cached, _llama_server_searched
+
+    if _llama_server_searched:
+        return _llama_server_cached
+
+    started = time.perf_counter()
+    dev_log("LLAMA_SERVER_SEARCH_BEGIN")
+
     configured = os.environ.get("IMAGE_SORTER_LLAMA_SERVER", "").strip()
     if configured and os.path.isfile(configured):
+        _llama_server_cached = configured
+        _llama_server_searched = True
+        dev_log(
+            "LLAMA_SERVER_SEARCH_OK",
+            elapsedMs=round((time.perf_counter() - started) * 1000, 1),
+            path=configured,
+            sourceKind="env",
+        )
         return configured
 
     # Normaler PATH/Alias-Fall.
     for name in ("llama-server.exe", "llama-server"):
         found = shutil.which(name)
         if found and os.path.isfile(found):
+            _llama_server_cached = found
+            _llama_server_searched = True
+            dev_log(
+                "LLAMA_SERVER_SEARCH_OK",
+                elapsedMs=round((time.perf_counter() - started) * 1000, 1),
+                path=found,
+                sourceKind="path",
+            )
             return found
 
     # WinGet-Portable-Pakete sind nicht in jedem bereits laufenden Prozess
@@ -212,7 +238,16 @@ def find_llama_server() -> str | None:
             )
             for candidate in direct_candidates:
                 if candidate.is_file():
-                    return str(candidate)
+                    value = str(candidate)
+                    _llama_server_cached = value
+                    _llama_server_searched = True
+                    dev_log(
+                        "LLAMA_SERVER_SEARCH_OK",
+                        elapsedMs=round((time.perf_counter() - started) * 1000, 1),
+                        path=value,
+                        sourceKind="winget-link",
+                    )
+                    return value
 
             packages = local / "Microsoft" / "WinGet" / "Packages"
             if packages.is_dir():
@@ -227,8 +262,23 @@ def find_llama_server() -> str | None:
                     except OSError:
                         matches = []
                     if matches:
-                        return str(matches[0])
+                        value = str(matches[0])
+                        _llama_server_cached = value
+                        _llama_server_searched = True
+                        dev_log(
+                            "LLAMA_SERVER_SEARCH_OK",
+                            elapsedMs=round((time.perf_counter() - started) * 1000, 1),
+                            path=value,
+                            sourceKind="winget-package",
+                        )
+                        return value
 
+    _llama_server_cached = None
+    _llama_server_searched = True
+    dev_log(
+        "LLAMA_SERVER_SEARCH_MISSING",
+        elapsedMs=round((time.perf_counter() - started) * 1000, 1),
+    )
     return None
 
 
