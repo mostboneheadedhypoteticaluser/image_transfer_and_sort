@@ -2166,8 +2166,9 @@ resetButton.addEventListener("click", () => {
 
   const confirmed = window.confirm(
     "Wirklich die komplette Entwicklungsdatenbank zurücksetzen? " +
-    "Alle Medienquellen, Katalogeinträge, Scan-Historien und Analysejobs werden gelöscht. " +
-    "Die Originaldateien auf der Festplatte bleiben unverändert."
+    "Medienquellen, Katalog, Scan-Historie, Analysejobs, Gesichts-/Haustierzuordnungen, " +
+    "Motiverkennung und alle SigLIP2-Semantikvektoren werden vollständig gelöscht. " +
+    "Die Originaldateien und die lokal installierten KI-Modelle bleiben unverändert."
   );
   if (!confirmed) return;
 
@@ -2183,16 +2184,24 @@ resetButton.addEventListener("click", () => {
       await window.imageSorter.catalog.resetCatalog();
       currentView = "media";
       mediaTab.classList.add("active");
+      searchTab.classList.remove("active");
       duplicateTab.classList.remove("active");
       peopleTab.classList.remove("active");
       petsTab.classList.remove("active");
       recycleTab.classList.remove("active");
+      searchPanel.hidden = true;
       mediaView.hidden = false;
       duplicateView.hidden = true;
       personView.hidden = true;
       petView.hidden = true;
+      clearSearchControls();
+      searchFacetsSourceId = null;
+      searchTabCount.textContent = "0";
+      searchSummary.textContent = "Noch keine Suche ausgeführt.";
       await loadSources();
-      progressText.textContent = "Katalog zurückgesetzt. Du kannst jetzt eine Medienquelle neu hinzufügen und sauber neu scannen.";
+      progressText.textContent =
+        "Datenbank vollständig zurückgesetzt. Du kannst jetzt sauber neu beginnen; " +
+        "auch alte KI- und Semantikdaten sind entfernt.";
     } finally {
       resetting = false;
       resetButton.disabled = false;
