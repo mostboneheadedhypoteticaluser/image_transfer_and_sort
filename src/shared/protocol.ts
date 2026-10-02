@@ -123,12 +123,15 @@ export type PetRecord = {
   name: string;
   petClass: "dog" | "cat";
   detectionCount: number;
+  confirmedCount: number;
+  automaticCount: number;
   representativePetId: number | null;
   pets: Array<{
     petDetectionId: number;
     mediaId: number;
     relativePath: string;
     confidence: number | null;
+    assignmentSource: "CONFIRMED" | "AUTO_HIGH_CONFIDENCE";
   }>;
 };
 
@@ -392,6 +395,7 @@ export type CatalogMethod =
   | "confirmPetCandidate"
   | "removePetFromCandidate"
   | "removePetFromPet"
+  | "confirmPetDetection"
   | "mergePets"
   | "renamePet"
   | "getPetCropInfo"
