@@ -198,7 +198,12 @@
 
           <div class="analysis-footer">
             <span id="analysisMessage">Analyse-Worker wird gestartet …</span>
-            <span class="analysis-note">NanoDet + YOLOX-S finden Tiere; fusionierte Hundefundstellen erhalten anschließend ein spezialisiertes Dog-ReID-Merkmal für die individuelle Gruppierung.</span>
+            <div class="analysis-footer-actions">
+              <button id="analysisErrorsButton" class="ghost analysis-errors-button" type="button" hidden>
+                Fehler anzeigen <span id="analysisErrorCount" class="tab-count">0</span>
+              </button>
+              <span class="analysis-note">NanoDet + YOLOX-S finden Tiere; fusionierte Hundefundstellen erhalten anschließend ein spezialisiertes Dog-ReID-Merkmal für die individuelle Gruppierung.</span>
+            </div>
           </div>
         </section>
 
@@ -309,6 +314,30 @@
         </section>
       </main>
     </div>
+
+    <dialog id="analysisErrorDialog" class="app-dialog error-dialog">
+      <div class="dialog-header">
+        <div>
+          <h2>Analysefehler</h2>
+          <p>Fehlgeschlagene Hintergrundjobs mit Datei, Modul und Originalmeldung.</p>
+        </div>
+        <button id="closeAnalysisErrors" class="dialog-close" type="button" aria-label="Schließen">×</button>
+      </div>
+      <div class="dialog-toolbar">
+        <span id="analysisErrorSummary">0 Fehler</span>
+        <button id="retryAllAnalysisErrors" class="secondary" type="button">Alle erneut versuchen</button>
+      </div>
+      <div id="analysisErrorList" class="analysis-error-list"></div>
+    </dialog>
+
+    <dialog id="imagePreviewDialog" class="image-preview-dialog">
+      <button id="closeImagePreview" class="image-preview-close" type="button" aria-label="Schließen">×</button>
+      <div class="image-preview-stage">
+        <img id="imagePreviewImage" alt="" />
+      </div>
+      <div id="imagePreviewCaption" class="image-preview-caption"></div>
+    </dialog>
+
     <script type="module" src="/src/renderer/main.ts"></script>
   </body>
 </html>
