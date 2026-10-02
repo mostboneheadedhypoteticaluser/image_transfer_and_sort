@@ -3425,6 +3425,7 @@ function knownPetCentroids(sourceId: number) {
       id: entry.id,
       name: entry.name,
       petClass: entry.petClass,
+      referenceCount: entry.vectors.length,
       vector: centroid(entry.vectors)
     }))
     .filter(
@@ -3432,9 +3433,145 @@ function knownPetCentroids(sourceId: number) {
         id: number;
         name: string;
         petClass: string;
+        referenceCount: number;
         vector: number[];
       } => entry.vector !== null
     );
+}
+
+function autoAssignKnownPetCandidates(sourceId: number) {
+  const candidates = db.prepare(`
+    SELECT id, pet_class
+    FROM pet_candidates
+    WHERE source_id=?
+    ORDER BY id
+  `).all(sourceId);
+
+  if (candidates.length === 0) return { assignedCandidates: 0, assignedPets: 0 };
+
+  const knownPets = knownPetCentroids(sourceId);
+  if (knownPets.length === 0) return { assignedCandidates: 0, assignedPets: 0 };
+
+  const memberRows = db.prepare(`
+    SELECT
+      pci.pet_detection_id,
+      pe.dimension,
+      pe.vector_blob
+    FROM pet_candidate_items pci
+    JOIN pet_embeddings pe ON pe.pet_detection_id=pci.pet_detection_id
+    WHERE pci.candidate_id=?
+      AND pe.model_version='DogReID DINOv2-B14 0.2.0'
+    ORDER BY pci.pet_detection_id
+  `);
+
+  const exclusionQuery = db.prepare(`
+    SELECT 1
+    FROM pet_candidate_items pci
+    JOIN pet_assignment_exclusions pae
+      ON pae.pet_detection_id=pci.pet_detection_id
+    WHERE pci.candidate_id=?
+      AND pae.pet_id=?
+    LIMIT 1
+  `);
+
+  const assign = db.prepare(`
+    INSERT INTO pet_assignments(
+      pet_detection_id,
+      pet_id,
+      assignment_source,
+      confidence,
+      updated_at
+    )
+    VALUES(?,?, 'AUTO_HIGH_CONFIDENCE', ?, CURRENT_TIMESTAMP)
+    ON CONFLICT(pet_detection_id) DO UPDATE SET
+      pet_id=excluded.pet_id,
+      assignment_source=excluded.assignment_source,
+      confidence=excluded.confidence,
+      updated_at=CURRENT_TIMESTAMP
+  `);
+
+  let assignedCandidates = 0;
+  let assignedPets = 0;
+
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    for (const candidate of candidates) {
+      const candidateId = Number(candidate.id);
+      const vectors = memberRows.all(candidateId).map((row) => ({
+        petDetectionId: Number(row.pet_detection_id),
+        vector: vectorFromBlob(row.vector_blob, Number(row.dimension))
+      }));
+
+      if (vectors.length < 2) continue;
+
+      const candidateCentroid = centroid(vectors.map((entry) => entry.vector));
+      if (!candidateCentroid) continue;
+
+      const matches = knownPets
+        .filter(
+          (known) =>
+            known.petClass === String(candidate.pet_class) &&
+            known.referenceCount >= 3 &&
+            !exclusionQuery.get(candidateId, known.id)
+        )
+        .map((known) => {
+          const centroidSimilarity = cosineSimilarity(candidateCentroid, known.vector);
+          const memberSimilarities = vectors.map((entry) =>
+            cosineSimilarity(entry.vector, known.vector)
+          );
+
+          return {
+            known,
+            centroidSimilarity,
+            memberSimilarities,
+            minimumSimilarity: Math.min(...memberSimilarities)
+          };
+        })
+        .sort((left, right) => right.centroidSimilarity - left.centroidSimilarity);
+
+      const best = matches[0];
+      if (!best) continue;
+
+      const secondSimilarity = matches[1]?.centroidSimilarity ?? -1;
+      const margin = best.centroidSimilarity - secondSimilarity;
+
+      // Bewusst streng: automatische Zuordnung nur bei sehr klaren Treffern.
+      if (
+        best.centroidSimilarity < 0.88 ||
+        best.minimumSimilarity < 0.82 ||
+        margin < 0.08
+      ) {
+        continue;
+      }
+
+      const clearExclusion = db.prepare(`
+        DELETE FROM pet_assignment_exclusions
+        WHERE pet_id=?
+          AND pet_detection_id=?
+      `);
+
+      for (let index = 0; index < vectors.length; index += 1) {
+        const entry = vectors[index];
+        clearExclusion.run(best.known.id, entry.petDetectionId);
+        assign.run(
+          entry.petDetectionId,
+          best.known.id,
+          best.memberSimilarities[index]
+        );
+        assignedPets += 1;
+      }
+
+      db.prepare("DELETE FROM pet_candidates WHERE id=?").run(candidateId);
+      assignedCandidates += 1;
+    }
+
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+
+  return { assignedCandidates, assignedPets };
 }
 
 function listPetCandidates(sourceId: number, requestedLimit: number) {
@@ -3604,7 +3741,11 @@ function listPets(sourceId: number) {
   }));
 }
 
-function confirmPetCandidate(candidateId: number, rawName: unknown) {
+function confirmPetCandidate(
+  candidateId: number,
+  rawName: unknown,
+  rejectedPetId?: number
+) {
   const name = typeof rawName === "string" ? rawName.trim() : "";
   if (!name) throw new Error("Bitte einen Namen für das Haustier eingeben.");
   if (name.length > 120) throw new Error("Der Haustiername ist zu lang.");
@@ -3659,6 +3800,53 @@ function confirmPetCandidate(candidateId: number, rawName: unknown) {
       SET name=?, updated_at=CURRENT_TIMESTAMP
       WHERE id=?
     `).run(name, petId);
+
+    if (
+      Number.isInteger(rejectedPetId) &&
+      Number(rejectedPetId) > 0 &&
+      Number(rejectedPetId) !== petId
+    ) {
+      const rejectedPet = db.prepare(`
+        SELECT id, pet_class
+        FROM pets
+        WHERE id=?
+      `).get(Number(rejectedPetId));
+
+      if (rejectedPet && String(rejectedPet.pet_class) === petClass) {
+        const rejectedReferenceIds = db.prepare(`
+          SELECT pa.pet_detection_id
+          FROM pet_assignments pa
+          JOIN pet_fused_detections pd ON pd.id=pa.pet_detection_id
+          JOIN media_items m ON m.id=pd.media_id
+          WHERE pa.pet_id=?
+            AND m.source_id=?
+        `).all(Number(rejectedPetId), Number(candidate.source_id))
+          .map((row) => Number(row.pet_detection_id));
+
+        const rejectAssignment = db.prepare(`
+          INSERT OR IGNORE INTO pet_assignment_exclusions(
+            pet_id,
+            pet_detection_id,
+            reason
+          )
+          VALUES(?,?,'USER_REJECTED_SUGGESTION')
+        `);
+
+        const candidateIds = members.map((member) =>
+          Number(member.pet_detection_id)
+        );
+
+        for (const id of candidateIds) {
+          rejectAssignment.run(Number(rejectedPetId), id);
+        }
+
+        insertPetCannotLinks(
+          candidateIds,
+          rejectedReferenceIds,
+          "USER_REJECTED_SUGGESTION"
+        );
+      }
+    }
 
     const assign = db.prepare(`
       INSERT INTO pet_assignments(
@@ -5396,6 +5584,10 @@ async function dispatch(method: CatalogMethod, payload: Record<string, unknown> 
           : "dogreid-centroid-v1",
         payload.clusters
       );
+    case "autoAssignKnownPetCandidates":
+      return autoAssignKnownPetCandidates(
+        asNumber(payload.sourceId, "sourceId")
+      );
     case "listPetCandidates":
       return listPetCandidates(
         asNumber(payload.sourceId, "sourceId"),
@@ -5406,7 +5598,10 @@ async function dispatch(method: CatalogMethod, payload: Record<string, unknown> 
     case "confirmPetCandidate":
       return confirmPetCandidate(
         asNumber(payload.candidateId, "candidateId"),
-        payload.name
+        payload.name,
+        payload.rejectedPetId === undefined
+          ? undefined
+          : asNumber(payload.rejectedPetId, "rejectedPetId")
       );
     case "removePetFromCandidate":
       return removePetFromCandidate(
