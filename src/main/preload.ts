@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer } from "electron";
 import type {
+  AnalysisErrorRecord,
   AnalysisWorkerStatus,
   PipelineStatus,
   CatalogStats,
@@ -15,6 +16,7 @@ import type {
   PetOverview,
   RestoreResult,
   ResetCatalogResult,
+  RetryAnalysisResult,
   ScanProgress,
   ScanResult,
   SourceRecord
@@ -25,6 +27,12 @@ const api = {
   analysis: {
     getStatus: (): Promise<AnalysisWorkerStatus> => ipcRenderer.invoke("analysis:getStatus"),
     getPipelineStatus: (): Promise<PipelineStatus> => ipcRenderer.invoke("analysis:getPipelineStatus"),
+    listErrors: (sourceId?: number, limit = 200): Promise<AnalysisErrorRecord[]> =>
+      ipcRenderer.invoke("analysis:listErrors", sourceId, limit),
+    retryJob: (jobId: number): Promise<RetryAnalysisResult> =>
+      ipcRenderer.invoke("analysis:retryJob", jobId),
+    retryAll: (sourceId?: number): Promise<RetryAnalysisResult> =>
+      ipcRenderer.invoke("analysis:retryAll", sourceId),
     onStatus: (listener: (status: AnalysisWorkerStatus) => void) => {
       const handler = (_event: Electron.IpcRendererEvent, status: AnalysisWorkerStatus) => listener(status);
       ipcRenderer.on("analysis:status", handler);
@@ -75,9 +83,15 @@ const api = {
       ipcRenderer.invoke("pets:getOverview", sourceId, forceRefresh),
     confirmCandidate: (
       candidateId: number,
-      name: string
+      name: string,
+      rejectedPetId?: number
     ): Promise<ConfirmPetResult> =>
-      ipcRenderer.invoke("pets:confirmCandidate", candidateId, name),
+      ipcRenderer.invoke(
+        "pets:confirmCandidate",
+        candidateId,
+        name,
+        rejectedPetId
+      ),
     removeCandidatePet: (
       candidateId: number,
       petDetectionId: number
