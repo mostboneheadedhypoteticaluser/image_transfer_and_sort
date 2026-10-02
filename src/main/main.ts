@@ -398,6 +398,16 @@ function registerIpc(): void {
   );
 
   ipcMain.handle(
+    "pets:confirmPetDetection",
+    (
+      _event,
+      petId: number,
+      petDetectionId: number
+    ): Promise<PetCorrectionResult> =>
+      petService!.confirmPetDetection(petId, petDetectionId)
+  );
+
+  ipcMain.handle(
     "pets:mergePets",
     (
       _event,
