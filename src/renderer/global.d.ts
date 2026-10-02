@@ -30,6 +30,7 @@ declare global {
       analysis: {
         getStatus(): Promise<AnalysisWorkerStatus>;
         getPipelineStatus(): Promise<PipelineStatus>;
+        openDevLog(): Promise<{ opened: true; path: string }>;
         listErrors(sourceId?: number, limit?: number): Promise<AnalysisErrorRecord[]>;
         retryJob(jobId: number): Promise<RetryAnalysisResult>;
         retryAll(sourceId?: number): Promise<RetryAnalysisResult>;
