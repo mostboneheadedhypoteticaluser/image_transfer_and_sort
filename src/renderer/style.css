@@ -1609,3 +1609,52 @@ td .badge + .badge {
     flex-direction: column;
   }
 }
+
+
+.badge.semantic {
+  background: #eef7f1;
+  color: #2f6242;
+}
+
+.semantic-search-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 190px;
+  gap: 12px;
+  align-items: end;
+  margin-top: 14px;
+}
+
+.semantic-search-row > input {
+  width: 100%;
+  min-width: 0;
+}
+
+.semantic-search-row > label {
+  display: grid;
+  gap: 5px;
+  font-size: 0.86rem;
+  color: var(--muted, #667085);
+}
+
+.semantic-score-input {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+}
+
+.semantic-score-input input {
+  width: 100%;
+}
+
+.semantic-search-note {
+  display: block;
+  margin-top: 9px;
+  color: var(--muted, #667085);
+}
+
+@media (max-width: 800px) {
+  .semantic-search-row {
+    grid-template-columns: 1fr;
+  }
+}
