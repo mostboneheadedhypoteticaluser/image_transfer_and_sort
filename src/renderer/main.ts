@@ -82,6 +82,7 @@ const objectVerificationStageCounts = document.querySelector<HTMLElement>("#obje
 const semanticStageState = document.querySelector<HTMLSpanElement>("#semanticStageState")!;
 const semanticStageCounts = document.querySelector<HTMLElement>("#semanticStageCounts")!;
 const analysisErrorsButton = document.querySelector<HTMLButtonElement>("#analysisErrorsButton")!;
+const analysisDevLogButton = document.querySelector<HTMLButtonElement>("#analysisDevLogButton")!;
 const analysisErrorCount = document.querySelector<HTMLSpanElement>("#analysisErrorCount")!;
 const analysisErrorDialog = document.querySelector<HTMLDialogElement>("#analysisErrorDialog")!;
 const closeAnalysisErrorsButton = document.querySelector<HTMLButtonElement>("#closeAnalysisErrors")!;
@@ -2288,6 +2289,13 @@ refreshPetsButton.addEventListener("click", () => {
     petsTabCount.textContent = stats.petCandidates.toLocaleString("de-DE");
   });
 });
+analysisDevLogButton.addEventListener("click", () => {
+  void runSafely(async () => {
+    const result = await window.imageSorter.analysis.openDevLog();
+    progressText.textContent = "Dev-Protokoll geöffnet: " + result.path;
+  });
+});
+
 analysisErrorsButton.addEventListener("click", () => {
   void runSafely(async () => {
     await loadAnalysisErrors();
