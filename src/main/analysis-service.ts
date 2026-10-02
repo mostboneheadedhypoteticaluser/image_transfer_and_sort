@@ -204,6 +204,19 @@ export class AnalysisService {
           );
         }
 
+        if (
+          capabilities.siglip2Model !== true ||
+          capabilities.torch !== true ||
+          capabilities.transformers !== true ||
+          capabilities.semanticEmbeddings !== true
+        ) {
+          throw new Error(
+            "SigLIP2 So400m NaFlex oder seine Python-Abhängigkeiten fehlen. " +
+            "Bitte 'npm.cmd run setup:ai' ausführen. " +
+            "Der einmalige SigLIP2-Download ist etwa 4,6 GB groß."
+          );
+        }
+
         const configured = await this.request<Record<string, unknown>>(
           "configure",
           {
