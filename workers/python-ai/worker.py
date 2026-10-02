@@ -50,6 +50,22 @@ DOG_REID_MODEL = os.path.join(
     "dog_reid_dinov2_b14_0_2_0.onnx",
 )
 
+COCO_CLASS_NAMES = (
+    "person", "bicycle", "car", "motorcycle", "airplane", "bus", "train",
+    "truck", "boat", "traffic light", "fire hydrant", "stop sign",
+    "parking meter", "bench", "bird", "cat", "dog", "horse", "sheep",
+    "cow", "elephant", "bear", "zebra", "giraffe", "backpack", "umbrella",
+    "handbag", "tie", "suitcase", "frisbee", "skis", "snowboard",
+    "sports ball", "kite", "baseball bat", "baseball glove", "skateboard",
+    "surfboard", "tennis racket", "bottle", "wine glass", "cup", "fork",
+    "knife", "spoon", "bowl", "banana", "apple", "sandwich", "orange",
+    "broccoli", "carrot", "hot dog", "pizza", "donut", "cake", "chair",
+    "couch", "potted plant", "bed", "dining table", "toilet", "tv",
+    "laptop", "mouse", "remote", "keyboard", "cell phone", "microwave",
+    "oven", "toaster", "sink", "refrigerator", "book", "clock", "vase",
+    "scissors", "teddy bear", "hair drier", "toothbrush",
+)
+
 _dog_reid_session = None
 _onnxruntime_module = None
 
@@ -693,8 +709,11 @@ def detect_pets_yolox(file_path: str) -> dict:
 
     class_scores = detections[:, 4:5] * detections[:, 5:]
     pet_candidates: list[dict] = []
+    object_candidates: list[dict] = []
 
-    for class_id, pet_class in ((15, "cat"), (16, "dog")):
+    class_count = min(class_scores.shape[1], len(COCO_CLASS_NAMES))
+
+    for class_id in range(class_count):
         scores = class_scores[:, class_id]
         indices = np.where(scores >= 0.35)[0]
         if indices.size == 0:
@@ -711,7 +730,7 @@ def detect_pets_yolox(file_path: str) -> dict:
         )
 
         for raw_index in keep:
-            local_index = int(raw_index)
+            local_index = int(np.asarray(raw_index).reshape(-1)[0])
             source_index = int(indices[local_index])
             x, y, width, height = boxes_xywh[source_index]
 
@@ -734,16 +753,32 @@ def detect_pets_yolox(file_path: str) -> dict:
             if original_width_box <= 1.0 or original_height_box <= 1.0:
                 continue
 
-            pet_candidates.append({
-                "class": pet_class,
+            item = {
+                "label": COCO_CLASS_NAMES[class_id],
                 "classId": class_id,
                 "score": float(scores[source_index]),
                 "x": original_x,
                 "y": original_y,
                 "width": original_width_box,
                 "height": original_height_box,
-            })
+            }
+            object_candidates.append(item)
 
+            if class_id in (15, 16):
+                pet_candidates.append({
+                    "class": "cat" if class_id == 15 else "dog",
+                    "classId": class_id,
+                    "score": item["score"],
+                    "x": item["x"],
+                    "y": item["y"],
+                    "width": item["width"],
+                    "height": item["height"],
+                })
+
+    object_candidates.sort(
+        key=lambda item: float(item["score"]),
+        reverse=True,
+    )
     pet_candidates.sort(key=lambda pet: float(pet["score"]), reverse=True)
 
     return {
@@ -752,6 +787,7 @@ def detect_pets_yolox(file_path: str) -> dict:
         "imageWidth": int(original_width),
         "imageHeight": int(original_height),
         "pets": pet_candidates,
+        "objects": object_candidates,
     }
 
 
