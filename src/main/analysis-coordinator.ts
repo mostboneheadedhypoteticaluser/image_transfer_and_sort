@@ -104,20 +104,20 @@ const MODULES: ModuleSpec[] = [
     timeoutMs: 120000
   },
   {
-    module: "object-detect-qwen3vl-gguf-v2",
-    stage: "objectVerification",
-    workerMethod: "detect_qwen3vl_objects",
-    completeMethod: "completeVerifiedObjectDetectionJob",
-    label: "Motive · Qwen3-VL-8B Q8_0 Vollbild/Kacheln",
-    timeoutMs: 7200000
-  },
-  {
     module: "semantic-embed-siglip2-v1",
     stage: "semanticEmbeddings",
     workerMethod: "extract_semantic_image_embedding",
     completeMethod: "completeSemanticEmbeddingJob",
     label: "Semantikanalyse · SigLIP2 So400m NaFlex",
     timeoutMs: 1800000
+  },
+  {
+    module: "object-detect-qwen3vl-gguf-v2",
+    stage: "objectVerification",
+    workerMethod: "detect_qwen3vl_objects",
+    completeMethod: "completeVerifiedObjectDetectionJob",
+    label: "Motive · Qwen3-VL-8B Q8_0 Vollbild/Kacheln",
+    timeoutMs: 7200000
   }
 ];
 
@@ -260,9 +260,9 @@ export class AnalysisCoordinator {
   }
 
   private async nextPendingSpec(): Promise<ModuleSpec | null> {
-    // Große Modelle werden bewusst stufenweise abgearbeitet statt im
-    // Round-Robin. So bleibt Qwen3-VL für eine ganze Bildserie im RAM und
-    // wird nicht nach jedem Bild gegen SigLIP2 ausgetauscht.
+    // Die Identitätsstufen stehen bewusst zuerst. Teure allgemeine Analysen
+    // folgen erst danach; Qwen3-VL ist als schwerste Stufe ganz zuletzt.
+    // Innerhalb einer Stufe bleibt das jeweilige Modell für die Bildserie geladen.
     for (const spec of MODULES) {
       const stats = await this.catalog.request<AnalysisQueueStats>(
         "getAnalysisQueueStats",
