@@ -2030,7 +2030,7 @@ function enqueueAnalysisJobs(sourceId: number, module = "file-probe-v1") {
     "pet-detect-yolox-v1",
     "pet-fuse-ensemble-v1",
     "pet-embed-dogreid-v1",
-    "object-detect-verified-v2",
+    "object-detect-qwen3vl-v1",
     "semantic-embed-siglip2-v1"
   ]);
   const imageFilter =
@@ -2369,6 +2369,27 @@ function claimAnalysisJob(module = "file-probe-v1") {
               AND dependency.module='pet-fuse-ensemble-v1'
               AND dependency.status='DONE'
               AND dependency.input_sha256=j.input_sha256
+          )
+        )
+        AND (
+          j.module<>'object-detect-qwen3vl-v1'
+          OR (
+            EXISTS (
+              SELECT 1
+              FROM analysis_jobs dependency
+              WHERE dependency.media_id=j.media_id
+                AND dependency.module='pet-detect-nanodet-v1'
+                AND dependency.status='DONE'
+                AND dependency.input_sha256=j.input_sha256
+            )
+            AND EXISTS (
+              SELECT 1
+              FROM analysis_jobs dependency
+              WHERE dependency.media_id=j.media_id
+                AND dependency.module='pet-detect-yolox-v1'
+                AND dependency.status='DONE'
+                AND dependency.input_sha256=j.input_sha256
+            )
           )
         )
       ORDER BY j.priority ASC, j.id ASC
@@ -2943,7 +2964,7 @@ async function scanSource(sourceId: number): Promise<ScanResult> {
     enqueueAnalysisJobs(sourceId, "pet-detect-yolox-v1");
     enqueueAnalysisJobs(sourceId, "pet-fuse-ensemble-v1");
     enqueueAnalysisJobs(sourceId, "pet-embed-dogreid-v1");
-    enqueueAnalysisJobs(sourceId, "object-detect-verified-v2");
+    enqueueAnalysisJobs(sourceId, "object-detect-qwen3vl-v1");
     enqueueAnalysisJobs(sourceId, "semantic-embed-siglip2-v1");
 
     const result: ScanResult = {
@@ -3718,12 +3739,12 @@ function completeVerifiedObjectDetectionJob(jobId: number, result: unknown) {
   const detectorVersion =
     typeof value.detector === "string" && value.detector.trim()
       ? value.detector.trim()
-      : "RF-DETR + Grounding DINO + SigLIP2 verifier v2";
+      : "Qwen3-VL-8B-Thinking BF16 open-vocabulary v1";
 
   const candidateCount = Math.max(0, Math.trunc(Number(value.candidateCount) || 0));
   const rejectedCount = Math.max(0, Math.trunc(Number(value.rejectedCount) || 0));
 
-  const job = jobForModule(jobId, "object-detect-verified-v2");
+  const job = jobForModule(jobId, "object-detect-qwen3vl-v1");
   const mediaId = Number(job.media_id);
   const inputSha256 = String(job.input_sha256 ?? "");
 
@@ -3829,7 +3850,7 @@ function completeVerifiedObjectDetectionJob(jobId: number, result: unknown) {
         candidateCount,
         verifiedCount: written,
         rejectedCount,
-        verificationVersion: "precision-object-v2"
+        verificationVersion: "qwen3vl-object-v1"
       }),
       jobId
     );
