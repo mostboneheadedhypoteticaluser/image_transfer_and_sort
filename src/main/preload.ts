@@ -19,6 +19,8 @@ import type {
   RetryAnalysisResult,
   ScanProgress,
   ScanResult,
+  SearchFacets,
+  SearchFilter,
   SourceRecord
 } from "../shared/protocol";
 
@@ -133,6 +135,14 @@ const api = {
     getStats: (sourceId: number): Promise<CatalogStats> => ipcRenderer.invoke("catalog:getStats", sourceId),
     listMedia: (sourceId: number, limit = 500): Promise<MediaRecord[]> =>
       ipcRenderer.invoke("catalog:listMedia", sourceId, limit),
+    getSearchFacets: (sourceId: number): Promise<SearchFacets> =>
+      ipcRenderer.invoke("catalog:getSearchFacets", sourceId),
+    searchMedia: (
+      sourceId: number,
+      filter: SearchFilter,
+      limit = 500
+    ): Promise<MediaRecord[]> =>
+      ipcRenderer.invoke("catalog:searchMedia", sourceId, filter, limit),
     listDuplicateGroups: (sourceId: number, limit = 100): Promise<DuplicateGroup[]> =>
       ipcRenderer.invoke("catalog:listDuplicateGroups", sourceId, limit),
     listRecycleMedia: (sourceId: number, limit = 500): Promise<MediaRecord[]> =>
