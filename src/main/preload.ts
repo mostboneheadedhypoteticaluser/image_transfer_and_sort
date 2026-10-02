@@ -39,6 +39,10 @@ const api = {
       path: string;
       characters: number;
     }> => ipcRenderer.invoke("analysis:copyDevLog"),
+    prepareQwenBenchmark: (): Promise<{ paused: true }> =>
+      ipcRenderer.invoke("analysis:prepareQwenBenchmark"),
+    finishQwenBenchmark: (): Promise<{ resumed: true }> =>
+      ipcRenderer.invoke("analysis:finishQwenBenchmark"),
     pickQwenBenchmarkImage: (): Promise<string | null> =>
       ipcRenderer.invoke("analysis:pickQwenBenchmarkImage"),
     runQwenBenchmark: (
