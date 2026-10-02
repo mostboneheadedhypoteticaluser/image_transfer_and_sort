@@ -877,6 +877,74 @@ export class AnalysisService {
   }
 
   /**
+   * Stoppt den Analyse-Worker samt llama.cpp synchron, bevor der
+   * Qwen-Einzelbildtest geöffnet wird. Dadurch ist der Arbeitsspeicher bereits
+   * frei, wenn der Windows-Dateidialog erscheint. Laufende Queue-Jobs werden
+   * vom AnalysisCoordinator kontrolliert wieder auf PENDING gesetzt.
+   */
+  stopForBenchmark(): void {
+    const stopAt = Date.now();
+    this.devLog("BENCHMARK_STOP_BEGIN", {
+      childPid: this.status.pid,
+      qwenServerPid: this.qwenServerPid
+    });
+    this.stopping = true;
+    const child = this.child;
+
+    if (child) {
+      this.child = null;
+
+      const interruption = new Error(
+        "Analyse-Worker wurde für den Qwen-Einzelbildtest pausiert."
+      );
+      for (const pending of this.pending.values()) {
+        clearTimeout(pending.timeout);
+        pending.reject(interruption);
+      }
+      this.pending.clear();
+
+      try {
+        if (process.platform === "win32" && child.pid) {
+          spawnSync(
+            "taskkill",
+            ["/PID", String(child.pid), "/T", "/F"],
+            {
+              stdio: "ignore",
+              windowsHide: true,
+              timeout: 15000
+            }
+          );
+        } else {
+          child.kill("SIGKILL");
+        }
+      } catch {
+        try {
+          child.kill("SIGKILL");
+        } catch {
+          // Prozess ist bereits beendet.
+        }
+      }
+    }
+
+    // taskkill /T nimmt llama.cpp normalerweise mit. Die separat verfolgte
+    // PID ist das Sicherheitsnetz, damit vor dem Dateidialog garantiert kein
+    // Qwen-Modell mehr im Hauptspeicher liegt.
+    this.killTrackedQwenServerSync();
+
+    this.devLog("BENCHMARK_STOP_DONE", {
+      elapsedMs: Date.now() - stopAt
+    });
+
+    this.publish({
+      state: "STOPPED",
+      pid: null,
+      activeJobs: 0,
+      progress: null,
+      message: "Standardanalyse pausiert · Qwen/llama.cpp für Einzeltest entladen."
+    });
+  }
+
+  /**
    * Harte, synchrone Beendigung für den App-Shutdown.
    *
    * Ein laufender Qwen-Aufruf blockiert den Python-Worker in urllib und kann
