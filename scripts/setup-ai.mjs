@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import process from "node:process";
@@ -114,7 +114,81 @@ function hasCommand(command) {
   return !result.error && result.status === 0;
 }
 
+function findWinGetLlamaServer() {
+  if (process.platform !== "win32") return null;
+
+  const local = process.env.LOCALAPPDATA;
+  if (!local) return null;
+
+  const direct = [
+    path.join(local, "Microsoft", "WinGet", "Links", "llama-server.exe"),
+    path.join(local, "Microsoft", "WindowsApps", "llama-server.exe")
+  ];
+
+  for (const candidate of direct) {
+    if (existsSync(candidate)) return candidate;
+  }
+
+  const packagesRoot = path.join(local, "Microsoft", "WinGet", "Packages");
+  if (!existsSync(packagesRoot)) return null;
+
+  const packageDirs = readdirSync(packagesRoot)
+    .filter((name) => name.startsWith("ggml.llamacpp_"))
+    .map((name) => path.join(packagesRoot, name))
+    .filter((candidate) => {
+      try {
+        return statSync(candidate).isDirectory();
+      } catch {
+        return false;
+      }
+    })
+    .sort((left, right) => {
+      try {
+        return statSync(right).mtimeMs - statSync(left).mtimeMs;
+      } catch {
+        return 0;
+      }
+    });
+
+  const findRecursive = (root) => {
+    const stack = [root];
+
+    while (stack.length > 0) {
+      const current = stack.pop();
+      let entries = [];
+      try {
+        entries = readdirSync(current, { withFileTypes: true });
+      } catch {
+        continue;
+      }
+
+      for (const entry of entries) {
+        const full = path.join(current, entry.name);
+        if (entry.isFile() && entry.name.toLowerCase() === "llama-server.exe") {
+          return full;
+        }
+        if (entry.isDirectory()) stack.push(full);
+      }
+    }
+
+    return null;
+  };
+
+  for (const packageDir of packageDirs) {
+    const found = findRecursive(packageDir);
+    if (found) return found;
+  }
+
+  return null;
+}
+
 function requireLlamaCpp() {
+  const configured = process.env.IMAGE_SORTER_LLAMA_SERVER;
+  if (configured && existsSync(configured)) {
+    console.log(`llama.cpp gefunden: ${configured}`);
+    return configured;
+  }
+
   const candidates =
     process.platform === "win32"
       ? ["llama-server.exe", "llama-server"]
@@ -125,6 +199,12 @@ function requireLlamaCpp() {
       console.log(`llama.cpp gefunden: ${candidate}`);
       return candidate;
     }
+  }
+
+  const wingetServer = findWinGetLlamaServer();
+  if (wingetServer) {
+    console.log(`llama.cpp über WinGet gefunden: ${wingetServer}`);
+    return wingetServer;
   }
 
   const installHint =
