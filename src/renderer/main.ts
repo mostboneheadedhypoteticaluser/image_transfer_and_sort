@@ -78,6 +78,7 @@ const analysisErrorCount = document.querySelector<HTMLSpanElement>("#analysisErr
 const analysisErrorDialog = document.querySelector<HTMLDialogElement>("#analysisErrorDialog")!;
 const closeAnalysisErrorsButton = document.querySelector<HTMLButtonElement>("#closeAnalysisErrors")!;
 const retryAllAnalysisErrorsButton = document.querySelector<HTMLButtonElement>("#retryAllAnalysisErrors")!;
+const copyAllAnalysisErrorsButton = document.querySelector<HTMLButtonElement>("#copyAllAnalysisErrors")!;
 const analysisErrorSummary = document.querySelector<HTMLSpanElement>("#analysisErrorSummary")!;
 const analysisErrorList = document.querySelector<HTMLDivElement>("#analysisErrorList")!;
 const imagePreviewDialog = document.querySelector<HTMLDialogElement>("#imagePreviewDialog")!;
@@ -1516,6 +1517,26 @@ function analysisModuleLabel(module: string): string {
   return analysisModuleLabels[module] ?? module;
 }
 
+function analysisErrorCopyText(error: AnalysisErrorRecord): string {
+  return [
+    "Image Sortierer – Analysefehler",
+    "Stufe: " + analysisModuleLabel(error.module),
+    "Modul: " + error.module,
+    "Datei: " + error.relativePath,
+    "Dateityp: " + error.extension,
+    "Versuche: " + error.attempts.toLocaleString("de-DE"),
+    "Gestartet: " + (error.startedAt ?? "—"),
+    "Beendet: " + (error.finishedAt ?? "—"),
+    "",
+    "Fehlermeldung:",
+    error.errorMessage
+  ].join("\n");
+}
+
+async function copyText(text: string): Promise<void> {
+  await navigator.clipboard.writeText(text);
+}
+
 function renderAnalysisErrors(errors: AnalysisErrorRecord[]): void {
   analysisErrorList.replaceChildren();
   analysisErrorSummary.textContent =
@@ -1553,6 +1574,21 @@ function renderAnalysisErrors(errors: AnalysisErrorRecord[]): void {
 
     heading.append(title, meta);
 
+    const actions = document.createElement("div");
+    actions.className = "analysis-error-actions";
+
+    const copyButton = document.createElement("button");
+    copyButton.type = "button";
+    copyButton.className = "ghost";
+    copyButton.textContent = "Kopieren";
+    copyButton.addEventListener("click", () => {
+      void runSafely(async () => {
+        await copyText(analysisErrorCopyText(error));
+        progressText.textContent =
+          "Analysefehler wurde in die Zwischenablage kopiert.";
+      });
+    });
+
     const retryButton = document.createElement("button");
     retryButton.type = "button";
     retryButton.className = "secondary";
@@ -1569,7 +1605,8 @@ function renderAnalysisErrors(errors: AnalysisErrorRecord[]): void {
       });
     });
 
-    header.append(heading, retryButton);
+    actions.append(copyButton, retryButton);
+    header.append(heading, actions);
 
     const path = document.createElement("div");
     path.className = "analysis-error-path";
@@ -1848,6 +1885,33 @@ analysisErrorsButton.addEventListener("click", () => {
 
 closeAnalysisErrorsButton.addEventListener("click", () => {
   analysisErrorDialog.close();
+});
+
+copyAllAnalysisErrorsButton.addEventListener("click", () => {
+  void runSafely(async () => {
+    const sourceId = selectedSourceId() ?? undefined;
+    const errors = await window.imageSorter.analysis.listErrors(sourceId, 300);
+
+    if (errors.length === 0) {
+      progressText.textContent = "Es gibt keine Analysefehler zum Kopieren.";
+      return;
+    }
+
+    const text = errors
+      .map((error, index) =>
+        "===== Fehler " + (index + 1).toLocaleString("de-DE") + " von " +
+        errors.length.toLocaleString("de-DE") + " =====\n" +
+        analysisErrorCopyText(error)
+      )
+      .join("\n\n");
+
+    await copyText(text);
+    progressText.textContent =
+      errors.length.toLocaleString("de-DE") +
+      (errors.length === 1
+        ? " Analysefehler wurde kopiert."
+        : " Analysefehler wurden kopiert.");
+  });
 });
 
 retryAllAnalysisErrorsButton.addEventListener("click", () => {
