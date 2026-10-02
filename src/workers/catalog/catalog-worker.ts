@@ -20,6 +20,8 @@ import {
 import type {
   CatalogMethod,
   RestoreResult,
+  SearchFacets,
+  SearchFilter,
   ScanProgress,
   ScanResult,
   WorkerRequest,
@@ -820,8 +822,113 @@ function getStats(sourceId: number) {
   };
 }
 
-function listMedia(sourceId: number, requestedLimit: number) {
+function normalizeSearchFilter(raw: SearchFilter | undefined): SearchFilter | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+
+  const uniquePositiveIds = (values: unknown): number[] => {
+    if (!Array.isArray(values)) return [];
+    return [...new Set(
+      values
+        .map((value) => Number(value))
+        .filter((value) => Number.isInteger(value) && value > 0)
+    )];
+  };
+
+  const objectLabels = Array.isArray(raw.objectLabels)
+    ? [...new Set(
+        raw.objectLabels
+          .filter((value): value is string => typeof value === "string")
+          .map((value) => value.trim())
+          .filter(Boolean)
+      )]
+    : [];
+
+  return {
+    personIds: uniquePositiveIds(raw.personIds),
+    petIds: uniquePositiveIds(raw.petIds),
+    objectLabels,
+    minDogs: Math.max(0, Math.min(20, Math.trunc(Number(raw.minDogs) || 0))),
+    minCats: Math.max(0, Math.min(20, Math.trunc(Number(raw.minCats) || 0)))
+  };
+}
+
+function listMedia(
+  sourceId: number,
+  requestedLimit: number,
+  rawSearch?: SearchFilter
+) {
   const limit = Math.max(1, Math.min(2000, Math.trunc(requestedLimit || 500)));
+  const search = normalizeSearchFilter(rawSearch);
+  const searchClauses: string[] = [];
+  const searchArgs: Array<number | string> = [];
+
+  if (search) {
+    searchClauses.push("m.availability='AVAILABLE'");
+
+    for (const personId of search.personIds) {
+      searchClauses.push(`EXISTS (
+        SELECT 1
+        FROM person_face_assignments pfa_search
+        JOIN face_detections fd_search
+          ON fd_search.id=pfa_search.face_detection_id
+        WHERE pfa_search.person_id=?
+          AND fd_search.media_id=m.id
+          AND fd_search.input_sha256=m.sha256
+      )`);
+      searchArgs.push(personId);
+    }
+
+    for (const petId of search.petIds) {
+      searchClauses.push(`EXISTS (
+        SELECT 1
+        FROM pet_assignments pa_search
+        JOIN pet_fused_detections pd_search
+          ON pd_search.id=pa_search.pet_detection_id
+        WHERE pa_search.pet_id=?
+          AND pd_search.media_id=m.id
+          AND pd_search.input_sha256=m.sha256
+      )`);
+      searchArgs.push(petId);
+    }
+
+    for (const label of search.objectLabels) {
+      searchClauses.push(`EXISTS (
+        SELECT 1
+        FROM object_fused_detections od_search
+        WHERE od_search.media_id=m.id
+          AND od_search.input_sha256=m.sha256
+          AND od_search.label=?
+      )`);
+      searchArgs.push(label);
+    }
+
+    if (search.minDogs > 0) {
+      searchClauses.push(`(
+        SELECT COUNT(*)
+        FROM pet_fused_detections dog_search
+        WHERE dog_search.media_id=m.id
+          AND dog_search.input_sha256=m.sha256
+          AND dog_search.pet_class='dog'
+      )>=?`);
+      searchArgs.push(search.minDogs);
+    }
+
+    if (search.minCats > 0) {
+      searchClauses.push(`(
+        SELECT COUNT(*)
+        FROM pet_fused_detections cat_search
+        WHERE cat_search.media_id=m.id
+          AND cat_search.input_sha256=m.sha256
+          AND cat_search.pet_class='cat'
+      )>=?`);
+      searchArgs.push(search.minCats);
+    }
+  }
+
+  const searchSql =
+    searchClauses.length > 0
+      ? "\n      AND " + searchClauses.join("\n      AND ")
+      : "";
 
   return db.prepare(`
     SELECT
@@ -908,7 +1015,7 @@ function listMedia(sourceId: number, requestedLimit: number) {
     FROM media_items m
     LEFT JOIN media_thumbnails t ON t.media_id=m.id
     LEFT JOIN media_image_metadata md ON md.media_id=m.id
-    WHERE m.source_id=?
+    WHERE m.source_id=?${searchSql}
     ORDER BY
       CASE
         WHEN m.availability='MISSING' AND m.in_recycle_bin=1 THEN 1
@@ -918,7 +1025,7 @@ function listMedia(sourceId: number, requestedLimit: number) {
       END,
       m.relative_path COLLATE NOCASE
     LIMIT ?
-  `).all(sourceId, limit).map((row) => ({
+  `).all(sourceId, ...searchArgs, limit).map((row) => ({
     id: Number(row.id),
     relativePath: String(row.relative_path),
     extension: String(row.extension),
@@ -947,6 +1054,71 @@ function listMedia(sourceId: number, requestedLimit: number) {
       : [],
     lastSeenAt: String(row.last_seen_at)
   }));
+}
+
+}
+
+function getSearchFacets(sourceId: number): SearchFacets {
+  const persons = db.prepare(`
+    SELECT
+      p.id,
+      p.name,
+      COUNT(DISTINCT fd.media_id) AS media_count
+    FROM persons p
+    JOIN person_face_assignments pfa ON pfa.person_id=p.id
+    JOIN face_detections fd ON fd.id=pfa.face_detection_id
+    JOIN media_items m ON m.id=fd.media_id
+    WHERE m.source_id=?
+      AND m.availability='AVAILABLE'
+      AND fd.input_sha256=m.sha256
+    GROUP BY p.id, p.name
+    ORDER BY p.name COLLATE NOCASE, p.id
+  `).all(sourceId).map((row) => ({
+    id: Number(row.id),
+    name: String(row.name),
+    mediaCount: Number(row.media_count ?? 0)
+  }));
+
+  const pets = db.prepare(`
+    SELECT
+      p.id,
+      p.name,
+      p.pet_class,
+      COUNT(DISTINCT pd.media_id) AS media_count
+    FROM pets p
+    JOIN pet_assignments pa ON pa.pet_id=p.id
+    JOIN pet_fused_detections pd ON pd.id=pa.pet_detection_id
+    JOIN media_items m ON m.id=pd.media_id
+    WHERE m.source_id=?
+      AND m.availability='AVAILABLE'
+      AND pd.input_sha256=m.sha256
+    GROUP BY p.id, p.name, p.pet_class
+    ORDER BY p.name COLLATE NOCASE, p.id
+  `).all(sourceId).map((row) => ({
+    id: Number(row.id),
+    name: String(row.name),
+    petClass: String(row.pet_class) === "cat" ? "cat" as const : "dog" as const,
+    mediaCount: Number(row.media_count ?? 0)
+  }));
+
+  const objects = db.prepare(`
+    SELECT
+      od.label,
+      COUNT(DISTINCT od.media_id) AS media_count
+    FROM object_fused_detections od
+    JOIN media_items m ON m.id=od.media_id
+    WHERE m.source_id=?
+      AND m.availability='AVAILABLE'
+      AND od.input_sha256=m.sha256
+      AND od.label NOT IN ('dog','cat')
+    GROUP BY od.label
+    ORDER BY media_count DESC, od.label COLLATE NOCASE
+  `).all(sourceId).map((row) => ({
+    label: String(row.label),
+    mediaCount: Number(row.media_count ?? 0)
+  }));
+
+  return { persons, pets, objects };
 }
 
 function listRecycleMedia(sourceId: number, requestedLimit: number) {
@@ -6103,6 +6275,14 @@ async function dispatch(method: CatalogMethod, payload: Record<string, unknown> 
       return listMedia(
         asNumber(payload.sourceId, "sourceId"),
         payload.limit === undefined ? 500 : asNumber(payload.limit, "limit")
+      );
+    case "getSearchFacets":
+      return getSearchFacets(asNumber(payload.sourceId, "sourceId"));
+    case "searchMedia":
+      return listMedia(
+        asNumber(payload.sourceId, "sourceId"),
+        payload.limit === undefined ? 500 : asNumber(payload.limit, "limit"),
+        payload.filter as SearchFilter | undefined
       );
     case "listDuplicateGroups":
       return listDuplicateGroups(
