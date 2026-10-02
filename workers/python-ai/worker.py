@@ -386,6 +386,26 @@ def report_progress(
     print(json.dumps(event, ensure_ascii=False), flush=True)
 
 
+def report_process_event(
+    process_kind: str,
+    process_state: str,
+    *,
+    pid: int | None = None,
+    port: int | None = None,
+) -> None:
+    event = {
+        "event": "process",
+        "processKind": process_kind,
+        "processState": process_state,
+    }
+    if pid is not None:
+        event["pid"] = int(pid)
+    if port is not None:
+        event["port"] = int(port)
+
+    print(json.dumps(event, ensure_ascii=False), flush=True)
+
+
 def require_file(payload: dict) -> str:
     file_path = os.path.abspath(str(payload.get("path", "")))
     if not file_path:
@@ -1985,6 +2005,11 @@ def unload_qwen3vl() -> None:
 
     release_torch_memory()
     if process is not None:
+        report_process_event(
+            "qwen-server",
+            "stopped",
+            pid=process.pid,
+        )
         dev_log("QWEN_SERVER_UNLOAD_DONE", serverPid=process.pid)
 
 
@@ -2325,6 +2350,12 @@ def qwen3vl_runtime() -> int:
         creationflags=creationflags,
     )
     _qwen_server_port = port
+    report_process_event(
+        "qwen-server",
+        "started",
+        pid=_qwen_server_process.pid,
+        port=port,
+    )
     dev_log(
         "QWEN_SERVER_PROCESS_SPAWNED",
         serverPid=_qwen_server_process.pid,
@@ -2375,6 +2406,18 @@ def image_data_uri(image) -> str:
     image.save(buffer, format="PNG", optimize=False)
     encoded = base64.b64encode(buffer.getvalue()).decode("ascii")
     return "data:image/png;base64," + encoded
+
+
+def format_live_duration(seconds: float) -> str:
+    total = max(0, int(seconds))
+    hours, remainder = divmod(total, 3600)
+    minutes, secs = divmod(remainder, 60)
+
+    if hours > 0:
+        return f"{hours}:{minutes:02d}:{secs:02d} h"
+    if minutes > 0:
+        return f"{minutes}:{secs:02d} min"
+    return f"{secs} s"
 
 
 def qwen3vl_generate(
@@ -2483,8 +2526,9 @@ def qwen3vl_generate(
                     report_progress(
                         progress_request_id,
                         (
-                            f"Qwen3-VL: {progress_label} · Modellantwort läuft "
-                            f"({chunk_count} Datenblöcke)"
+                            f"Qwen3-VL: {progress_label} · Modellantwort läuft · "
+                            f"{chunk_count} Datenblöcke · "
+                            f"{format_live_duration(now - generation_started)}"
                         ),
                         phase="generation",
                     )
@@ -2736,6 +2780,7 @@ def qwen_discover_region(
     image,
     region_name: str,
     progress_request_id: str | None = None,
+    progress_label: str | None = None,
 ) -> list[dict]:
     prompt = """
 Inspect this image extremely carefully and locate every clearly visible physical
@@ -2766,7 +2811,7 @@ If no physical object can be identified, return [].
         prompt,
         max_new_tokens=1536,
         progress_request_id=progress_request_id,
-        progress_label=region_name,
+        progress_label=progress_label or region_name,
     )
     raw = last_json_value(output, list)
     result: list[dict] = []
@@ -3076,6 +3121,9 @@ def detect_qwen3vl_objects(
                     region,
                     region_name,
                     progress_request_id,
+                    progress_label=(
+                        f"{display_kind} {region_index}/{region_count}"
+                    ),
                 )
             finally:
                 if owns_region:
