@@ -218,6 +218,22 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_face_embedding_media
     ON face_embeddings(media_id);
 
+  CREATE TABLE IF NOT EXISTS semantic_embeddings (
+    media_id INTEGER PRIMARY KEY REFERENCES media_items(id) ON DELETE CASCADE,
+    model_version TEXT NOT NULL,
+    input_sha256 TEXT NOT NULL,
+    dimension INTEGER NOT NULL,
+    vector_blob BLOB NOT NULL,
+    max_num_patches INTEGER NOT NULL,
+    precision TEXT NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_semantic_embedding_hash
+    ON semantic_embeddings(input_sha256);
+  CREATE INDEX IF NOT EXISTS idx_semantic_embedding_model
+    ON semantic_embeddings(model_version);
+
   CREATE TABLE IF NOT EXISTS pet_detections (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     media_id INTEGER NOT NULL REFERENCES media_items(id) ON DELETE CASCADE,
