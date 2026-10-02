@@ -12,9 +12,18 @@ from datetime import datetime
 from typing import Any
 
 try:
-    from PIL import Image
+    from PIL import Image, ImageOps
 except Exception:
     Image = None
+    ImageOps = None
+
+try:
+    import torch
+    from transformers import AutoModel, AutoProcessor
+except Exception:
+    torch = None
+    AutoModel = None
+    AutoProcessor = None
 
 try:
     import cv2
@@ -50,6 +59,14 @@ DOG_REID_MODEL = os.path.join(
     "dog_reid_dinov2_b14_0_2_0.onnx",
 )
 
+SIGLIP2_MODEL_DIR = os.path.join(
+    WORKER_DIR,
+    "models",
+    "siglip2-so400m-patch16-naflex",
+)
+SIGLIP2_MODEL_VERSION = "SigLIP2 So400m/16 NaFlex FP32 1024patch-v1"
+SIGLIP2_MAX_NUM_PATCHES = 1024
+
 COCO_CLASS_NAMES = (
     "person", "bicycle", "car", "motorcycle", "airplane", "bus", "train",
     "truck", "boat", "traffic light", "fire hydrant", "stop sign",
@@ -68,6 +85,8 @@ COCO_CLASS_NAMES = (
 
 _dog_reid_session = None
 _onnxruntime_module = None
+_siglip2_model = None
+_siglip2_processor = None
 
 
 @dataclass
@@ -101,6 +120,11 @@ def snapshot() -> dict:
             "nanodetModel": os.path.isfile(NANODET_MODEL),
             "yoloxModel": os.path.isfile(YOLOX_MODEL),
             "dogReIdModel": os.path.isfile(DOG_REID_MODEL),
+            "siglip2Model": os.path.isfile(
+                os.path.join(SIGLIP2_MODEL_DIR, "model.safetensors")
+            ),
+            "torch": torch is not None,
+            "transformers": AutoModel is not None and AutoProcessor is not None,
             "onnxRuntime": importlib.util.find_spec("onnxruntime") is not None,
             "imageMetadata": Image is not None,
             "faceDetection": cv2 is not None and os.path.isfile(YUNET_MODEL),
@@ -120,6 +144,15 @@ def snapshot() -> dict:
                 and np is not None
                 and importlib.util.find_spec("onnxruntime") is not None
                 and os.path.isfile(DOG_REID_MODEL)
+            ),
+            "semanticEmbeddings": (
+                Image is not None
+                and torch is not None
+                and AutoModel is not None
+                and AutoProcessor is not None
+                and os.path.isfile(
+                    os.path.join(SIGLIP2_MODEL_DIR, "model.safetensors")
+                )
             ),
         },
     }
@@ -1625,6 +1658,140 @@ def cluster_face_embeddings(
     }
 
 
+def siglip2_runtime():
+    global _siglip2_model, _siglip2_processor
+
+    if Image is None or ImageOps is None:
+        raise RuntimeError(
+            "Pillow fehlt. Einmal 'npm.cmd run setup:ai' ausführen."
+        )
+    if torch is None or AutoModel is None or AutoProcessor is None:
+        raise RuntimeError(
+            "PyTorch/Transformers fehlt. Einmal 'npm.cmd run setup:ai' ausführen."
+        )
+
+    weights = os.path.join(SIGLIP2_MODEL_DIR, "model.safetensors")
+    if not os.path.isfile(weights):
+        raise RuntimeError(
+            "SigLIP2 So400m NaFlex fehlt. Einmal 'npm.cmd run setup:ai' ausführen. "
+            "Der einmalige Modell-Download ist etwa 4,6 GB groß."
+        )
+
+    if _siglip2_processor is None:
+        _siglip2_processor = AutoProcessor.from_pretrained(
+            SIGLIP2_MODEL_DIR,
+            local_files_only=True,
+            use_fast=False,
+        )
+
+    if _siglip2_model is None:
+        # Genauigkeit ist hier wichtiger als Laufzeit: kein INT8/INT4 und keine
+        # aggressive Quantisierung. FP32 ist auch auf CPU reproduzierbar.
+        _siglip2_model = AutoModel.from_pretrained(
+            SIGLIP2_MODEL_DIR,
+            local_files_only=True,
+            torch_dtype=torch.float32,
+        )
+        _siglip2_model.eval()
+
+    return _siglip2_processor, _siglip2_model
+
+
+def normalized_torch_vector(features) -> list[float]:
+    vector = features.detach().to(device="cpu", dtype=torch.float32).reshape(-1)
+    norm = torch.linalg.vector_norm(vector)
+    norm_value = float(norm.item())
+
+    if not math.isfinite(norm_value) or norm_value <= 0.0:
+        raise RuntimeError("SigLIP2 hat einen ungültigen Merkmalsvektor erzeugt.")
+
+    vector = vector / norm
+    return [float(value) for value in vector.tolist()]
+
+
+def extract_semantic_image_embedding(file_path: str) -> dict:
+    processor, model = siglip2_runtime()
+
+    try:
+        with Image.open(file_path) as source:
+            source.load()
+            image = ImageOps.exif_transpose(source).convert("RGB")
+    except Exception as exc:
+        raise RuntimeError(
+            f"Bild konnte für SigLIP2 nicht gelesen werden: {exc}"
+        ) from exc
+
+    inputs = processor(
+        images=image,
+        max_num_patches=SIGLIP2_MAX_NUM_PATCHES,
+        return_tensors="pt",
+    )
+
+    with torch.inference_mode():
+        features = model.get_image_features(**inputs)
+
+    vector = normalized_torch_vector(features)
+
+    return {
+        "module": "semantic-embed-siglip2-v1",
+        "model": SIGLIP2_MODEL_VERSION,
+        "dimension": len(vector),
+        "maxNumPatches": SIGLIP2_MAX_NUM_PATCHES,
+        "precision": "float32",
+        "vector": vector,
+    }
+
+
+def extract_semantic_text_embedding(text: str) -> dict:
+    query = " ".join(str(text).strip().split())
+    if not query:
+        raise RuntimeError("Semantischer Suchtext ist leer.")
+
+    processor, model = siglip2_runtime()
+
+    # SigLIP2 wurde mit kleingeschriebenem Text trainiert. Die Vorlage
+    # entspricht der von Transformers dokumentierten Zero-Shot-Pipeline.
+    normalized_query = query.lower()
+    prompt = f"this is a photo of {normalized_query}."
+
+    inputs = processor(
+        text=[prompt],
+        padding="max_length",
+        max_length=64,
+        truncation=True,
+        return_tensors="pt",
+    )
+
+    with torch.inference_mode():
+        features = model.get_text_features(**inputs)
+
+    vector = normalized_torch_vector(features)
+
+    raw_logit_scale = getattr(model, "logit_scale", None)
+    raw_logit_bias = getattr(model, "logit_bias", None)
+
+    if raw_logit_scale is None or raw_logit_bias is None:
+        raise RuntimeError(
+            "SigLIP2 stellt Logit-Skalierung für die semantische Suche nicht bereit."
+        )
+
+    logit_scale = float(torch.exp(raw_logit_scale.detach().cpu()).item())
+    logit_bias = float(raw_logit_bias.detach().cpu().item())
+
+    if not math.isfinite(logit_scale) or not math.isfinite(logit_bias):
+        raise RuntimeError("SigLIP2-Logitparameter sind ungültig.")
+
+    return {
+        "model": SIGLIP2_MODEL_VERSION,
+        "query": query,
+        "prompt": prompt,
+        "dimension": len(vector),
+        "vector": vector,
+        "logitScale": logit_scale,
+        "logitBias": logit_bias,
+    }
+
+
 def handle(message: dict) -> bool:
     request_id = message.get("id")
     method = message.get("method")
@@ -1740,6 +1907,23 @@ def handle(message: dict) -> bool:
         respond(
             request_id,
             result=extract_dog_embeddings(file_path, pets),
+        )
+        return True
+
+    if method == "extract_semantic_image_embedding":
+        file_path = require_file(payload)
+        verify_expected_size(file_path, payload)
+        respond(
+            request_id,
+            result=extract_semantic_image_embedding(file_path),
+        )
+        return True
+
+    if method == "extract_semantic_text_embedding":
+        query = str(payload.get("text", ""))
+        respond(
+            request_id,
+            result=extract_semantic_text_embedding(query),
         )
         return True
 
