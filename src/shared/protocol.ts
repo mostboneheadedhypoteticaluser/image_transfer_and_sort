@@ -320,6 +320,8 @@ export type MediaRecord = {
   catCount: number;
   petMultiModelCount: number;
   petSingleModelCount: number;
+  objectCount: number;
+  objectLabels: string[];
   lastSeenAt: string;
 };
 
