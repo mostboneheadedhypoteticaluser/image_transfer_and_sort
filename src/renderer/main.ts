@@ -628,6 +628,7 @@ function renderPersonOverview(overview: PersonOverview): void {
         img.loading = "lazy";
         img.title =
           `${face.relativePath}\nÄhnlichkeit zur Gruppe: ${face.similarity.toFixed(3)}`;
+        makePreviewable(img, face.mediaId, face.relativePath);
 
         const fallback = document.createElement("span");
         fallback.className = "face-fallback";
@@ -783,6 +784,12 @@ function renderPersonOverview(overview: PersonOverview): void {
         img.src = faceCropUrl(person.representativeFaceId);
         img.alt = "";
         img.loading = "lazy";
+        const representative = person.faces.find(
+          (face) => face.faceDetectionId === person.representativeFaceId
+        );
+        if (representative) {
+          makePreviewable(img, representative.mediaId, representative.relativePath);
+        }
         header.appendChild(img);
       }
 
@@ -809,6 +816,7 @@ function renderPersonOverview(overview: PersonOverview): void {
         img.alt = "";
         img.loading = "lazy";
         img.title = face.relativePath;
+        makePreviewable(img, face.mediaId, face.relativePath);
 
         const fallback = document.createElement("span");
         fallback.className = "face-fallback";
@@ -1039,6 +1047,7 @@ function renderPetOverview(overview: PetOverview): void {
         img.title =
           pet.relativePath + "\nÄhnlichkeit zur Gruppe: " +
           pet.similarity.toFixed(3);
+        makePreviewable(img, pet.mediaId, pet.relativePath);
 
         const fallback = document.createElement("span");
         fallback.className = "face-fallback";
@@ -1124,9 +1133,26 @@ function renderPetOverview(overview: PetOverview): void {
       const button = document.createElement("button");
       button.className = "primary person-confirm";
       button.type = "button";
-      button.textContent = candidate.suggestedPetName
-        ? "Vorschlag bestätigen"
-        : "Bestätigen";
+
+      const updateConfirmLabel = () => {
+        const entered = input.value.trim();
+        if (!entered) {
+          button.textContent = "Bestätigen";
+          return;
+        }
+
+        const matchesSuggestion =
+          candidate.suggestedPetName !== null &&
+          entered.toLocaleLowerCase("de-DE") ===
+            candidate.suggestedPetName.toLocaleLowerCase("de-DE");
+
+        button.textContent = matchesSuggestion
+          ? candidate.suggestedPetName + " bestätigen"
+          : "Als " + entered + " bestätigen";
+      };
+
+      updateConfirmLabel();
+      input.addEventListener("input", updateConfirmLabel);
 
       const confirm = async () => {
         const name = input.value.trim();
@@ -1139,9 +1165,20 @@ function renderPetOverview(overview: PetOverview): void {
         button.disabled = true;
 
         try {
+          const matchesSuggestion =
+            candidate.suggestedPetName !== null &&
+            name.toLocaleLowerCase("de-DE") ===
+              candidate.suggestedPetName.toLocaleLowerCase("de-DE");
+
+          const rejectedPetId =
+            candidate.suggestedPetId !== null && !matchesSuggestion
+              ? candidate.suggestedPetId
+              : undefined;
+
           const result = await window.imageSorter.pets.confirmCandidate(
             candidate.id,
-            name
+            name,
+            rejectedPetId
           );
 
           progressText.textContent =
@@ -1211,6 +1248,12 @@ function renderPetOverview(overview: PetOverview): void {
         img.src = petCropUrl(pet.representativePetId);
         img.alt = "";
         img.loading = "lazy";
+        const representative = pet.pets.find(
+          (item) => item.petDetectionId === pet.representativePetId
+        );
+        if (representative) {
+          makePreviewable(img, representative.mediaId, representative.relativePath);
+        }
         header.appendChild(img);
       }
 
@@ -1241,6 +1284,7 @@ function renderPetOverview(overview: PetOverview): void {
         img.alt = "";
         img.loading = "lazy";
         img.title = detection.relativePath;
+        makePreviewable(img, detection.mediaId, detection.relativePath);
 
         const fallback = document.createElement("span");
         fallback.className = "face-fallback";
