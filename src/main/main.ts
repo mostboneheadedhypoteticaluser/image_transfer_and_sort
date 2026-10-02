@@ -68,6 +68,7 @@ let pipelineStatus: PipelineStatus = {
   petDetection: { ...EMPTY_QUEUE },
   petFusion: { ...EMPTY_QUEUE },
   petEmbeddings: { ...EMPTY_QUEUE },
+  objectVerification: { ...EMPTY_QUEUE },
   semanticEmbeddings: { ...EMPTY_QUEUE }
 };
 
@@ -130,7 +131,8 @@ function pythonAnalysisIdle(): boolean {
     pipelineStatus.faceEmbeddings,
     pipelineStatus.petDetection,
     pipelineStatus.petFusion,
-    pipelineStatus.petEmbeddings
+    pipelineStatus.petEmbeddings,
+    pipelineStatus.objectVerification
   ].every((stats) => stats.pending === 0 && stats.running === 0);
 }
 
@@ -187,7 +189,8 @@ function updatePipelineStage(
     stage === "faceEmbeddings" ||
     stage === "petDetection" ||
     stage === "petFusion" ||
-    stage === "petEmbeddings"
+    stage === "petEmbeddings" ||
+    stage === "objectVerification"
   ) {
     schedulePersonRefresh();
   }
@@ -348,6 +351,7 @@ function registerIpc(): void {
       petDetection: { ...EMPTY_QUEUE },
       petFusion: { ...EMPTY_QUEUE },
       petEmbeddings: { ...EMPTY_QUEUE },
+      objectVerification: { ...EMPTY_QUEUE },
       semanticEmbeddings: { ...EMPTY_QUEUE }
     };
     sendToRenderer("analysis:pipelineStatus", pipelineStatus);
@@ -440,6 +444,7 @@ function registerIpc(): void {
     petDetection: { ...pipelineStatus.petDetection },
     petFusion: { ...pipelineStatus.petFusion },
     petEmbeddings: { ...pipelineStatus.petEmbeddings },
+    objectVerification: { ...pipelineStatus.objectVerification },
     semanticEmbeddings: { ...pipelineStatus.semanticEmbeddings }
   }));
 
