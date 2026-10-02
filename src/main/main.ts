@@ -9,6 +9,7 @@ import { ThumbnailCoordinator } from "./thumbnail-coordinator";
 import { PersonService } from "./person-service";
 import { PetService } from "./pet-service";
 import type {
+  AnalysisErrorRecord,
   AnalysisQueueStats,
   AnalysisWorkerStatus,
   CatalogStats,
@@ -16,6 +17,7 @@ import type {
   ConfirmPetResult,
   DuplicateGroup,
   FaceCropInfo,
+  MediaPreviewInfo,
   MediaRecord,
   MergePersonsResult,
   MergePetsResult,
@@ -26,6 +28,7 @@ import type {
   PetOverview,
   RestoreResult,
   ResetCatalogResult,
+  RetryAnalysisResult,
   ScanResult,
   SourceRecord,
   ThumbnailInfo,
@@ -82,6 +85,14 @@ protocol.registerSchemesAsPrivileged([
   },
   {
     scheme: "image-sorter-pet",
+    privileges: {
+      standard: true,
+      secure: true,
+      supportFetchAPI: true
+    }
+  },
+  {
+    scheme: "image-sorter-preview",
     privileges: {
       standard: true,
       secure: true,
@@ -259,6 +270,29 @@ function registerIpc(): void {
     analysis!.refreshStatus()
   );
 
+  ipcMain.handle(
+    "analysis:listErrors",
+    (_event, sourceId?: number, limit = 200): Promise<AnalysisErrorRecord[]> =>
+      catalog!.request<AnalysisErrorRecord[]>("listAnalysisErrors", {
+        sourceId,
+        limit
+      })
+  );
+
+  ipcMain.handle(
+    "analysis:retryJob",
+    (_event, jobId: number): Promise<RetryAnalysisResult> =>
+      catalog!.request<RetryAnalysisResult>("retryAnalysisJob", { jobId })
+  );
+
+  ipcMain.handle(
+    "analysis:retryAll",
+    (_event, sourceId?: number): Promise<RetryAnalysisResult> =>
+      catalog!.request<RetryAnalysisResult>("retryFailedAnalysisJobs", {
+        sourceId
+      })
+  );
+
   ipcMain.handle("analysis:getPipelineStatus", (): PipelineStatus => ({
     technical: { ...pipelineStatus.technical },
     thumbnails: { ...pipelineStatus.thumbnails },
@@ -337,9 +371,10 @@ function registerIpc(): void {
     (
       _event,
       candidateId: number,
-      name: string
+      name: string,
+      rejectedPetId?: number
     ): Promise<ConfirmPetResult> =>
-      petService!.confirmCandidate(candidateId, name)
+      petService!.confirmCandidate(candidateId, name, rejectedPetId)
   );
 
   ipcMain.handle(
@@ -568,6 +603,51 @@ app.whenReady().then(() => {
       });
     } catch {
       return new Response("Haustierausschnitt konnte nicht geladen werden.", {
+        status: 404
+      });
+    }
+  });
+
+  protocol.handle("image-sorter-preview", async (request) => {
+    try {
+      const url = new URL(request.url);
+      if (url.hostname !== "media") {
+        return new Response("Ungültige Vorschauadresse.", { status: 400 });
+      }
+
+      const mediaId = Number(url.pathname.replace(/^\//, ""));
+      if (!Number.isFinite(mediaId)) {
+        return new Response("Ungültige Medien-ID.", { status: 400 });
+      }
+
+      const info = await catalog!.request<MediaPreviewInfo | null>(
+        "getMediaPreviewInfo",
+        { mediaId }
+      );
+
+      if (!info) {
+        return new Response("Medium nicht gefunden.", { status: 404 });
+      }
+
+      const preview = await thumbnailService!.generatePreview(
+        info.absolutePath,
+        info.inputSha256
+      );
+
+      if (!isInsideDirectory(preview.path, thumbnailCacheRoot)) {
+        return new Response("Vorschau-Pfad abgelehnt.", { status: 403 });
+      }
+
+      const bytes = await readFile(preview.path);
+      return new Response(bytes, {
+        status: 200,
+        headers: {
+          "Content-Type": "image/jpeg",
+          "Cache-Control": "public, max-age=31536000, immutable"
+        }
+      });
+    } catch {
+      return new Response("Große Vorschau konnte nicht geladen werden.", {
         status: 404
       });
     }
