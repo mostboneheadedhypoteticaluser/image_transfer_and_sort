@@ -53,6 +53,8 @@ let thumbnailCacheRoot = "";
 let personRefreshTimer: NodeJS.Timeout | null = null;
 let personRefreshRunning = false;
 let isQuitting = false;
+let qwenBenchmarkMode = false;
+let qwenBenchmarkPreparing: Promise<void> | null = null;
 
 const EMPTY_QUEUE: AnalysisQueueStats = {
   pending: 0,
@@ -234,6 +236,53 @@ function createWindow(): BrowserWindow {
   return win;
 }
 
+async function enterQwenBenchmarkMode(): Promise<void> {
+  if (qwenBenchmarkPreparing) {
+    await qwenBenchmarkPreparing;
+    return;
+  }
+  if (qwenBenchmarkMode) return;
+
+  qwenBenchmarkMode = true;
+  qwenBenchmarkPreparing = (async () => {
+    if (analysisCoordinator) {
+      await analysisCoordinator.pauseForBenchmark();
+    } else {
+      analysis?.stopForBenchmark();
+    }
+  })();
+
+  try {
+    await qwenBenchmarkPreparing;
+  } catch (error) {
+    qwenBenchmarkMode = false;
+    throw error;
+  } finally {
+    qwenBenchmarkPreparing = null;
+  }
+}
+
+async function leaveQwenBenchmarkMode(): Promise<void> {
+  if (qwenBenchmarkPreparing) {
+    await qwenBenchmarkPreparing;
+  }
+  if (!qwenBenchmarkMode) return;
+
+  qwenBenchmarkMode = false;
+  analysisCoordinator?.endBenchmarkPause();
+
+  // Auch das Testmodell selbst wieder entladen, bevor die normale Queue
+  // fortgesetzt wird. So beginnt der Standardlauf aus einem sauberen Zustand.
+  analysis?.stopForBenchmark();
+
+  if (isQuitting || !analysis) return;
+
+  await analysis.start();
+  if (analysis.getStatus().state === "READY") {
+    await analysisCoordinator?.start();
+  }
+}
+
 function registerIpc(): void {
   ipcMain.handle("dialog:pickSource", async () => {
     const result = await dialog.showOpenDialog(windowRef!, {
@@ -396,7 +445,21 @@ function registerIpc(): void {
     };
   });
 
+  ipcMain.handle("analysis:prepareQwenBenchmark", async () => {
+    await enterQwenBenchmarkMode();
+    return { paused: true };
+  });
+
+  ipcMain.handle("analysis:finishQwenBenchmark", async () => {
+    await leaveQwenBenchmarkMode();
+    return { resumed: true };
+  });
+
   ipcMain.handle("analysis:pickQwenBenchmarkImage", async () => {
+    // Sicherheitsnetz: selbst bei direktem IPC-Aufruf ist der normale Qwen-
+    // Lauf beendet und llama.cpp entladen, bevor Windows den Dateidialog zeigt.
+    await enterQwenBenchmarkMode();
+
     const options: OpenDialogOptions = {
       title: "Bild für Qwen-Einzeltest auswählen",
       properties: ["openFile"],
@@ -443,28 +506,17 @@ function registerIpc(): void {
         throw new Error("Bitte mindestens eine Qwen-Teststufe auswählen.");
       }
 
-      analysisCoordinator?.stop();
+      await enterQwenBenchmarkMode();
 
-      try {
-        if (!analysis) throw new Error("Analyse-Worker ist nicht initialisiert.");
-        if (analysis.getStatus().state !== "READY") {
-          await analysis.start();
-        }
-        if (analysis.getStatus().state !== "READY") {
-          throw new Error("Analyse-Worker ist für den Qwen-Test nicht bereit.");
-        }
+      if (!analysis) throw new Error("Analyse-Worker ist nicht initialisiert.");
+      if (analysis.getStatus().state !== "READY") {
+        await analysis.start();
+      }
+      if (analysis.getStatus().state !== "READY") {
+        throw new Error("Analyse-Worker ist für den Qwen-Test nicht bereit.");
+      }
 
-        while (analysis.getStatus().activeJobs > 0) {
-          const status = analysis.getStatus();
-          analysis.setQueueState(
-            status.queuedJobs,
-            status.activeJobs,
-            "Qwen-Einzeltest wartet auf den aktuell laufenden Analysejob …"
-          );
-          await new Promise<void>((resolve) => setTimeout(resolve, 500));
-        }
-
-        const results: QwenBenchmarkStageResult[] = [];
+      const results: QwenBenchmarkStageResult[] = [];
 
         for (const profile of selected) {
           const stage = await analysis.request<QwenBenchmarkStageResult>(
@@ -480,15 +532,10 @@ function registerIpc(): void {
           sendToRenderer("analysis:qwenBenchmarkStage", stage);
         }
 
-        return {
-          path: normalizedPath,
-          results
-        };
-      } finally {
-        if (!isQuitting) {
-          void analysisCoordinator?.start();
-        }
-      }
+      return {
+        path: normalizedPath,
+        results
+      };
     }
   );
 
