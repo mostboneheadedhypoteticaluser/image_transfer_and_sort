@@ -264,6 +264,32 @@ def respond(request_id: str | None, *, result=None, error: str | None = None) ->
     print(json.dumps(message, ensure_ascii=False), flush=True)
 
 
+def report_progress(
+    request_id: str | None,
+    message: str,
+    *,
+    phase: str | None = None,
+    current: int | None = None,
+    total: int | None = None,
+) -> None:
+    if not request_id:
+        return
+
+    event = {
+        "event": "progress",
+        "requestId": request_id,
+        "message": str(message),
+    }
+    if phase:
+        event["phase"] = phase
+    if current is not None:
+        event["current"] = int(current)
+    if total is not None:
+        event["total"] = int(total)
+
+    print(json.dumps(event, ensure_ascii=False), flush=True)
+
+
 def require_file(payload: dict) -> str:
     file_path = os.path.abspath(str(payload.get("path", "")))
     if not file_path:
@@ -1824,6 +1850,20 @@ def unload_qwen3vl() -> None:
     release_torch_memory()
 
 
+def prepare_for_qwen() -> None:
+    global _dog_reid_session, _onnxruntime_module
+
+    # Qwen ist die letzte und speicherintensivste Pipeline-Stufe. Alle großen
+    # zuvor verwendeten Modellinstanzen werden deshalb explizit freigegeben.
+    unload_siglip2()
+
+    _dog_reid_session = None
+    _onnxruntime_module = None
+
+    release_torch_memory()
+    gc.collect()
+
+
 def siglip2_runtime():
     global _siglip2_model, _siglip2_processor
 
@@ -2331,7 +2371,11 @@ def qwen_bbox_to_pixels(
     return [x1, y1, x2, y2]
 
 
-def qwen_discover_region(image, region_name: str) -> list[dict]:
+def qwen_discover_region(
+    image,
+    region_name: str,
+    progress_request_id: str | None = None,
+) -> list[dict]:
     prompt = """
 Inspect this image extremely carefully and locate every clearly visible physical
 object. This is an archival image-indexing task where false positives are more
@@ -2472,7 +2516,11 @@ def qwen_annotated_candidate_crop(
     return crop
 
 
-def qwen_presence_check(crop, candidate_label: str) -> dict:
+def qwen_presence_check(
+    crop,
+    candidate_label: str,
+    progress_request_id: str | None = None,
+) -> dict:
     prompt = f"""
 The red rectangle marks a candidate object. Verify it conservatively.
 
@@ -2502,7 +2550,10 @@ Rules:
     }
 
 
-def qwen_blind_box_classification(crop) -> dict:
+def qwen_blind_box_classification(
+    crop,
+    progress_request_id: str | None = None,
+) -> dict:
     prompt = """
 Ignore any previous classification. Look only at the object inside the red
 rectangle and identify what it actually is.
@@ -2570,11 +2621,22 @@ def legacy_object_hints(hints: list[dict], image) -> list[dict]:
     return result
 
 
-def detect_qwen3vl_objects(file_path: str, hints: list[dict] | None = None) -> dict:
+def detect_qwen3vl_objects(
+    file_path: str,
+    hints: list[dict] | None = None,
+    progress_request_id: str | None = None,
+) -> dict:
     if Image is None or ImageOps is None:
         raise RuntimeError(
             "Pillow fehlt. Einmal 'npm.cmd run setup:ai' ausführen."
         )
+
+    report_progress(
+        progress_request_id,
+        "Qwen3-VL: andere große Modellinstanzen werden aus dem Speicher entfernt …",
+        phase="memory-cleanup",
+    )
+    prepare_for_qwen()
 
     try:
         with Image.open(file_path) as source:
@@ -2585,160 +2647,258 @@ def detect_qwen3vl_objects(file_path: str, hints: list[dict] | None = None) -> d
             f"Bild konnte für Qwen3-VL nicht gelesen werden: {exc}"
         ) from exc
 
-    candidates: list[dict] = []
-    region_count = 0
+    try:
+        candidates: list[dict] = []
+        regions = qwen_detection_regions(image)
+        region_count = len(regions)
+        file_name = os.path.basename(file_path)
 
-    # 1) Qwen sucht selbstständig im Gesamtbild UND in hochauflösenden Kacheln.
-    for left, top, right, bottom, kind in qwen_detection_regions(image):
-        region_count += 1
-        region = image.crop((left, top, right, bottom))
-        region_name = (
-            "qwen-whole-image"
-            if kind == "whole-image"
-            else f"qwen-tile-{left}-{top}-{right}-{bottom}"
+        report_progress(
+            progress_request_id,
+            (
+                f"Qwen3-VL: Modell wird vorbereitet · {region_count} "
+                f"{'Bildbereich' if region_count == 1 else 'Bildbereiche'} · {file_name}"
+            ),
+            phase="model-load",
+            current=0,
+            total=region_count,
         )
 
-        for found in qwen_discover_region(region, region_name):
-            local = found["box"]
-            global_box = [
-                float(local[0]) + left,
-                float(local[1]) + top,
-                float(local[2]) + left,
-                float(local[3]) + top,
-            ]
-            qwen_add_global_candidate(
-                candidates,
-                str(found["label"]),
-                global_box,
-                region_name,
-                str(found["certainty"]),
+        # 1) Qwen sucht selbstständig im Gesamtbild UND in hochauflösenden
+        # Kacheln. Es gibt dabei immer nur genau EIN Bild an llama.cpp.
+        for region_index, (left, top, right, bottom, kind) in enumerate(
+            regions,
+            start=1,
+        ):
+            region_name = (
+                "qwen-whole-image"
+                if kind == "whole-image"
+                else f"qwen-tile-{left}-{top}-{right}-{bottom}"
+            )
+            display_kind = "Gesamtbild" if kind == "whole-image" else "Kachel"
+
+            report_progress(
+                progress_request_id,
+                (
+                    f"Qwen3-VL: {display_kind} {region_index}/{region_count} "
+                    f"wird analysiert · {file_name}"
+                ),
+                phase="regions",
+                current=region_index,
+                total=region_count,
             )
 
-    # 2) Alte schnelle Detektoren dürfen zusätzliche Kandidaten vorschlagen,
-    #    aber nichts mehr selbst bestätigen. So geht Recall nicht verloren.
-    for hint in legacy_object_hints(hints or [], image):
-        qwen_add_global_candidate(
-            candidates,
-            str(hint["label"]),
-            list(hint["box"]),
-            str(hint["source"]),
-            str(hint["certainty"]),
-        )
+            # Beim Gesamtbild keine zusätzliche Vollbildkopie erzeugen.
+            owns_region = kind != "whole-image"
+            region = image.crop((left, top, right, bottom)) if owns_region else image
 
-    verified: list[dict] = []
-    rejected = 0
-
-    # 3) JEDER Kandidat wird mit einem eigenen Ausschnitt zweimal neu geprüft:
-    #    einmal gezielt und einmal blind, damit der ursprüngliche Klassenname
-    #    das Modell nicht einfach bestätigt.
-    for candidate in candidates:
-        crop = qwen_annotated_candidate_crop(image, candidate["box"])
-
-        presence = qwen_presence_check(crop, str(candidate["label"]))
-        blind = qwen_blind_box_classification(crop)
-
-        candidate_label = normalize_qwen_label(candidate["label"])
-        presence_label = normalize_qwen_label(presence["label"])
-        blind_label = normalize_qwen_label(blind["label"])
-
-        labels_agree = (
-            presence["present"]
-            and presence_label == candidate_label
-            and blind_label == candidate_label
-        )
-
-        high_high = (
-            presence["confidence"] == "high"
-            and blind["confidence"] == "high"
-        )
-        repeated_medium = (
-            int(candidate["votes"]) >= 2
-            and presence["confidence"] in ("high", "medium")
-            and blind["confidence"] in ("high", "medium")
-        )
-
-        if not labels_agree or not (high_high or repeated_medium):
-            rejected += 1
-            continue
-
-        # Hund/Katze bleiben absichtlich Sache der bewährten Haustierpipeline.
-        # Qwen dient hier nur dazu, Fehlklassen wie "teddy bear" zu verwerfen.
-        if candidate_label in ("dog", "cat"):
-            continue
-
-        x1, y1, x2, y2 = [float(value) for value in candidate["box"]]
-        class_id = (
-            int(COCO_CLASS_NAMES.index(candidate_label))
-            if candidate_label in COCO_CLASS_NAMES
-            else -1
-        )
-
-        score = 0.98 if high_high else 0.90
-        verified.append({
-            "label": candidate_label,
-            "classId": class_id,
-            "score": score,
-            "x": x1,
-            "y": y1,
-            "width": x2 - x1,
-            "height": y2 - y1,
-            "agreementCount": 2 + min(3, int(candidate["votes"])),
-            "sources": sorted({
-                QWEN3VL_MODEL_VERSION,
-                *candidate["sources"],
-                "qwen-crop-presence-check",
-                "qwen-blind-box-classification",
-            }),
-        })
-
-    # Gleiche Qwen-Funde aus überlappenden Kacheln nach der Verifikation noch
-    # einmal zusammenführen.
-    verified.sort(key=lambda item: float(item["score"]), reverse=True)
-    final: list[dict] = []
-
-    for item in verified:
-        box = [
-            float(item["x"]),
-            float(item["y"]),
-            float(item["x"]) + float(item["width"]),
-            float(item["y"]) + float(item["height"]),
-        ]
-
-        duplicate = False
-        for existing in final:
-            if existing["label"] != item["label"]:
-                continue
-            existing_box = [
-                float(existing["x"]),
-                float(existing["y"]),
-                float(existing["x"]) + float(existing["width"]),
-                float(existing["y"]) + float(existing["height"]),
-            ]
-            if xyxy_iou(box, existing_box) >= 0.50:
-                existing["agreementCount"] = max(
-                    int(existing["agreementCount"]),
-                    int(item["agreementCount"]),
+            try:
+                found_items = qwen_discover_region(
+                    region,
+                    region_name,
+                    progress_request_id,
                 )
-                existing["sources"] = sorted(set(
-                    list(existing["sources"]) + list(item["sources"])
-                ))
-                duplicate = True
-                break
+            finally:
+                if owns_region:
+                    region.close()
+                gc.collect()
 
-        if not duplicate:
-            final.append(item)
+            for found in found_items:
+                local = found["box"]
+                global_box = [
+                    float(local[0]) + left,
+                    float(local[1]) + top,
+                    float(local[2]) + left,
+                    float(local[3]) + top,
+                ]
+                qwen_add_global_candidate(
+                    candidates,
+                    str(found["label"]),
+                    global_box,
+                    region_name,
+                    str(found["certainty"]),
+                )
 
-    return {
-        "module": "object-detect-qwen3vl-gguf-v2",
-        "detector": QWEN3VL_MODEL_VERSION,
-        "imageWidth": int(image.width),
-        "imageHeight": int(image.height),
-        "regionCount": region_count,
-        "candidateCount": len(candidates),
-        "verifiedCount": len(final),
-        "rejectedCount": rejected,
-        "objects": final,
-    }
+        # 2) Alte schnelle Detektoren dürfen zusätzliche Kandidaten vorschlagen,
+        # aber nichts mehr selbst bestätigen. So geht Recall nicht verloren.
+        for hint in legacy_object_hints(hints or [], image):
+            qwen_add_global_candidate(
+                candidates,
+                str(hint["label"]),
+                list(hint["box"]),
+                str(hint["source"]),
+                str(hint["certainty"]),
+            )
+
+        verified: list[dict] = []
+        rejected = 0
+        candidate_count = len(candidates)
+
+        if candidate_count == 0:
+            report_progress(
+                progress_request_id,
+                f"Qwen3-VL: keine Objektkandidaten zur Detailprüfung · {file_name}",
+                phase="candidates",
+                current=0,
+                total=0,
+            )
+
+        # 3) JEDER Kandidat wird einzeln ausgeschnitten und zweimal seriell
+        # geprüft. Der Crop wird unmittelbar danach geschlossen.
+        for candidate_index, candidate in enumerate(candidates, start=1):
+            candidate_label = normalize_qwen_label(candidate["label"])
+            crop = qwen_annotated_candidate_crop(image, candidate["box"])
+
+            try:
+                report_progress(
+                    progress_request_id,
+                    (
+                        f"Qwen3-VL: Objekt {candidate_index}/{candidate_count} · "
+                        f"Prüfung 1/2 · {candidate_label}"
+                    ),
+                    phase="candidate-presence",
+                    current=candidate_index,
+                    total=candidate_count,
+                )
+                presence = qwen_presence_check(
+                    crop,
+                    str(candidate["label"]),
+                    progress_request_id,
+                )
+
+                report_progress(
+                    progress_request_id,
+                    (
+                        f"Qwen3-VL: Objekt {candidate_index}/{candidate_count} · "
+                        f"Prüfung 2/2 · blind klassifizieren"
+                    ),
+                    phase="candidate-blind",
+                    current=candidate_index,
+                    total=candidate_count,
+                )
+                blind = qwen_blind_box_classification(
+                    crop,
+                    progress_request_id,
+                )
+            finally:
+                crop.close()
+                gc.collect()
+
+            presence_label = normalize_qwen_label(presence["label"])
+            blind_label = normalize_qwen_label(blind["label"])
+
+            labels_agree = (
+                presence["present"]
+                and presence_label == candidate_label
+                and blind_label == candidate_label
+            )
+
+            high_high = (
+                presence["confidence"] == "high"
+                and blind["confidence"] == "high"
+            )
+            repeated_medium = (
+                int(candidate["votes"]) >= 2
+                and presence["confidence"] in ("high", "medium")
+                and blind["confidence"] in ("high", "medium")
+            )
+
+            if not labels_agree or not (high_high or repeated_medium):
+                rejected += 1
+                continue
+
+            # Hund/Katze bleiben absichtlich Sache der bewährten Haustierpipeline.
+            # Qwen dient hier nur dazu, Fehlklassen wie "teddy bear" zu verwerfen.
+            if candidate_label in ("dog", "cat"):
+                continue
+
+            x1, y1, x2, y2 = [float(value) for value in candidate["box"]]
+            class_id = (
+                int(COCO_CLASS_NAMES.index(candidate_label))
+                if candidate_label in COCO_CLASS_NAMES
+                else -1
+            )
+
+            score = 0.98 if high_high else 0.90
+            verified.append({
+                "label": candidate_label,
+                "classId": class_id,
+                "score": score,
+                "x": x1,
+                "y": y1,
+                "width": x2 - x1,
+                "height": y2 - y1,
+                "agreementCount": 2 + min(3, int(candidate["votes"])),
+                "sources": sorted({
+                    QWEN3VL_MODEL_VERSION,
+                    *candidate["sources"],
+                    "qwen-crop-presence-check",
+                    "qwen-blind-box-classification",
+                }),
+            })
+
+        # Gleiche Qwen-Funde aus überlappenden Kacheln nach der Verifikation
+        # noch einmal zusammenführen.
+        verified.sort(key=lambda item: float(item["score"]), reverse=True)
+        final: list[dict] = []
+
+        for item in verified:
+            box = [
+                float(item["x"]),
+                float(item["y"]),
+                float(item["x"]) + float(item["width"]),
+                float(item["y"]) + float(item["height"]),
+            ]
+
+            duplicate = False
+            for existing in final:
+                if existing["label"] != item["label"]:
+                    continue
+                existing_box = [
+                    float(existing["x"]),
+                    float(existing["y"]),
+                    float(existing["x"]) + float(existing["width"]),
+                    float(existing["y"]) + float(existing["height"]),
+                ]
+                if xyxy_iou(box, existing_box) >= 0.50:
+                    existing["agreementCount"] = max(
+                        int(existing["agreementCount"]),
+                        int(item["agreementCount"]),
+                    )
+                    existing["sources"] = sorted(set(
+                        list(existing["sources"]) + list(item["sources"])
+                    ))
+                    duplicate = True
+                    break
+
+            if not duplicate:
+                final.append(item)
+
+        report_progress(
+            progress_request_id,
+            (
+                f"Qwen3-VL: Bild fertig · {candidate_count} Kandidaten geprüft · "
+                f"{len(final)} Motive bestätigt · {file_name}"
+            ),
+            phase="done",
+            current=candidate_count,
+            total=candidate_count,
+        )
+
+        return {
+            "module": "object-detect-qwen3vl-gguf-v2",
+            "detector": QWEN3VL_MODEL_VERSION,
+            "imageWidth": int(image.width),
+            "imageHeight": int(image.height),
+            "regionCount": region_count,
+            "candidateCount": candidate_count,
+            "verifiedCount": len(final),
+            "rejectedCount": rejected,
+            "objects": final,
+        }
+    finally:
+        image.close()
+        gc.collect()
 
 
 def handle(message: dict) -> bool:
@@ -2885,7 +3045,11 @@ def handle(message: dict) -> bool:
             raise RuntimeError("Objekthinweise für Qwen3-VL sind ungültig.")
         respond(
             request_id,
-            result=detect_qwen3vl_objects(file_path, hints),
+            result=detect_qwen3vl_objects(
+                file_path,
+                hints,
+                progress_request_id=request_id,
+            ),
         )
         return True
 
