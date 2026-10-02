@@ -3698,6 +3698,8 @@ function listPets(sourceId: number) {
       p.name,
       p.pet_class,
       COUNT(*) AS detection_count,
+      SUM(CASE WHEN pa.assignment_source='CONFIRMED' THEN 1 ELSE 0 END) AS confirmed_count,
+      SUM(CASE WHEN pa.assignment_source='AUTO_HIGH_CONFIDENCE' THEN 1 ELSE 0 END) AS automatic_count,
       MIN(pd.id) AS representative_pet_id
     FROM pets p
     JOIN pet_assignments pa ON pa.pet_id=p.id
@@ -3713,13 +3715,16 @@ function listPets(sourceId: number) {
       pa.pet_detection_id,
       pd.media_id,
       m.relative_path,
-      pa.confidence
+      pa.confidence,
+      pa.assignment_source
     FROM pet_assignments pa
     JOIN pet_fused_detections pd ON pd.id=pa.pet_detection_id
     JOIN media_items m ON m.id=pd.media_id
     WHERE pa.pet_id=?
       AND m.source_id=?
-    ORDER BY pa.pet_detection_id ASC
+    ORDER BY
+      CASE WHEN pa.assignment_source='AUTO_HIGH_CONFIDENCE' THEN 0 ELSE 1 END,
+      pa.pet_detection_id ASC
     LIMIT 48
   `);
 
@@ -3728,6 +3733,8 @@ function listPets(sourceId: number) {
     name: String(row.name),
     petClass: String(row.pet_class),
     detectionCount: Number(row.detection_count),
+    confirmedCount: Number(row.confirmed_count ?? 0),
+    automaticCount: Number(row.automatic_count ?? 0),
     representativePetId:
       row.representative_pet_id === null ? null : Number(row.representative_pet_id),
     pets: itemQuery.all(Number(row.id), sourceId).map((pet) => ({
@@ -3737,7 +3744,11 @@ function listPets(sourceId: number) {
       confidence:
         pet.confidence === null || pet.confidence === undefined
           ? null
-          : Number(pet.confidence)
+          : Number(pet.confidence),
+      assignmentSource:
+        String(pet.assignment_source) === "AUTO_HIGH_CONFIDENCE"
+          ? "AUTO_HIGH_CONFIDENCE"
+          : "CONFIRMED"
     }))
   }));
 }
@@ -4035,6 +4046,61 @@ function removePetFromCandidate(
 
     db.exec("COMMIT");
     return { changed: true, affectedPets: removedIds.length };
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+}
+
+function confirmPetDetection(petId: number, petDetectionId: number) {
+  const assignment = db.prepare(`
+    SELECT
+      pa.assignment_source,
+      m.source_id
+    FROM pet_assignments pa
+    JOIN pet_fused_detections pd ON pd.id=pa.pet_detection_id
+    JOIN media_items m ON m.id=pd.media_id
+    WHERE pa.pet_id=?
+      AND pa.pet_detection_id=?
+  `).get(petId, petDetectionId);
+
+  if (!assignment) {
+    throw new Error("Diese Hundefundstelle ist dem Haustier nicht mehr zugeordnet.");
+  }
+
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    db.prepare(`
+      UPDATE pet_assignments
+      SET
+        assignment_source='CONFIRMED',
+        updated_at=CURRENT_TIMESTAMP
+      WHERE pet_id=?
+        AND pet_detection_id=?
+    `).run(petId, petDetectionId);
+
+    db.prepare(`
+      DELETE FROM pet_assignment_exclusions
+      WHERE pet_id=?
+        AND pet_detection_id=?
+    `).run(petId, petDetectionId);
+
+    db.prepare(`
+      UPDATE pets
+      SET updated_at=CURRENT_TIMESTAMP
+      WHERE id=?
+    `).run(petId);
+
+    db.prepare("DELETE FROM pet_cluster_runs WHERE source_id=?")
+      .run(Number(assignment.source_id));
+
+    db.exec("COMMIT");
+
+    return {
+      changed: true,
+      affectedPets:
+        String(assignment.assignment_source) === "CONFIRMED" ? 0 : 1
+    };
   } catch (error) {
     db.exec("ROLLBACK");
     throw error;
@@ -5612,6 +5678,11 @@ async function dispatch(method: CatalogMethod, payload: Record<string, unknown> 
       );
     case "removePetFromPet":
       return removePetFromPet(
+        asNumber(payload.petId, "petId"),
+        asNumber(payload.petDetectionId, "petDetectionId")
+      );
+    case "confirmPetDetection":
+      return confirmPetDetection(
         asNumber(payload.petId, "petId"),
         asNumber(payload.petDetectionId, "petDetectionId")
       );
