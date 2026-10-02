@@ -73,6 +73,10 @@ declare global {
           petId: number,
           petDetectionId: number
         ): Promise<PetCorrectionResult>;
+        confirmPetDetection(
+          petId: number,
+          petDetectionId: number
+        ): Promise<PetCorrectionResult>;
         mergePets(
           targetPetId: number,
           sourcePetId: number
