@@ -113,3 +113,12 @@ Nach `pet-fuse-ensemble-v1` folgt `pet-embed-dogreid-v1`. Nur fusionierte Fundst
 Die anschließende Gruppierung `dogreid-centroid-v1` ist bewusst konservativ und erzeugt nur Gruppen mit mindestens zwei ausreichend ähnlichen Hundefundstellen. Unbestätigte Gruppen liegen in `pet_candidates` / `pet_candidate_items`; erst die Nutzerbestätigung erzeugt einen Datensatz in `pets` und feste `pet_assignments`.
 
 Exakte Bilddubletten werden beim Clustering über `SHA-256 + detection_index` nicht mehrfach als unabhängige Evidenz gewichtet. Katzen werden von der Ensemble-Detektion erfasst, aber noch nicht durch dieses hundespezifische ReID-Modell verarbeitet.
+
+
+## Überprüfbare automatische Hundezuordnung
+
+Bekannte Hunde verwenden ausschließlich Nutzer-bestätigte `pet_assignments.assignment_source='CONFIRMED'` als ReID-Referenzen. Automatisch sehr sicher zugeordnete Fundstellen werden als `AUTO_HIGH_CONFIDENCE` gespeichert und sind damit sichtbar von bestätigten Referenzen getrennt.
+
+Die automatische Zuordnung ist absichtlich streng: mindestens drei bestätigte Referenzen, hohe Centroid- und Mindestähnlichkeit sowie Abstand zum zweitbesten bekannten Hund. Automatische Fundstellen werden nicht rekursiv als neue Referenzbasis verwendet.
+
+Im Haustier-Reiter werden bestätigte und automatische Fundstellen getrennt gezählt. Eine automatische Fundstelle kann einzeln bestätigt werden; erst dann wird sie zu einer echten Referenz. Wird sie entfernt, bleibt die negative Zuordnung bestehen und verhindert eine erneute automatische Zuordnung zum gleichen Hund.
