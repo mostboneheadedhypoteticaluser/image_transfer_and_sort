@@ -1731,6 +1731,7 @@ function listAnalysisErrors(sourceId?: number, requestedLimit = 200) {
   return db.prepare(`
     SELECT
       j.id,
+      j.status,
       j.media_id,
       j.module,
       j.attempts,
@@ -1741,7 +1742,7 @@ function listAnalysisErrors(sourceId?: number, requestedLimit = 200) {
       m.extension
     FROM analysis_jobs j
     JOIN media_items m ON m.id=j.media_id
-    WHERE j.status='FAILED'
+    WHERE j.status IN ('FAILED','UNAVAILABLE')
       ${sourceFilter}
     ORDER BY
       COALESCE(j.finished_at, j.updated_at) DESC,
@@ -1749,6 +1750,7 @@ function listAnalysisErrors(sourceId?: number, requestedLimit = 200) {
     LIMIT ?
   `).all(...args, limit).map((row) => ({
     id: Number(row.id),
+    status: String(row.status) === "UNAVAILABLE" ? "UNAVAILABLE" : "FAILED",
     mediaId: Number(row.media_id),
     module: String(row.module),
     relativePath: String(row.relative_path),
@@ -1762,15 +1764,31 @@ function listAnalysisErrors(sourceId?: number, requestedLimit = 200) {
 
 function resetAnalysisJob(jobId: number): number {
   const job = db.prepare(`
-    SELECT j.id, j.media_id, j.module, m.sha256
+    SELECT
+      j.id,
+      j.media_id,
+      j.module,
+      j.status,
+      m.sha256,
+      m.absolute_path
     FROM analysis_jobs j
     JOIN media_items m ON m.id=j.media_id
     WHERE j.id=?
-      AND j.status='FAILED'
-      AND m.availability='AVAILABLE'
+      AND j.status IN ('FAILED','UNAVAILABLE')
   `).get(jobId);
 
   if (!job) return 0;
+
+  if (String(job.status) === "UNAVAILABLE") {
+    const absolutePath = String(job.absolute_path);
+    if (!existsSync(absolutePath)) return 0;
+
+    db.prepare(`
+      UPDATE media_items
+      SET availability='AVAILABLE', last_seen_at=CURRENT_TIMESTAMP
+      WHERE id=?
+    `).run(Number(job.media_id));
+  }
 
   const mediaId = Number(job.media_id);
   const module = String(job.module);
@@ -1836,8 +1854,7 @@ function retryFailedAnalysisJobs(sourceId?: number) {
     SELECT j.id
     FROM analysis_jobs j
     JOIN media_items m ON m.id=j.media_id
-    WHERE j.status='FAILED'
-      AND m.availability='AVAILABLE'
+    WHERE j.status IN ('FAILED','UNAVAILABLE')
       ${sourceFilter}
     ORDER BY j.id
   `).all(...args).map((row) => Number(row.id));
