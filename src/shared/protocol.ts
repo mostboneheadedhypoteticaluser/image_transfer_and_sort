@@ -19,6 +19,52 @@ export type AnalysisWorkerStatus = {
   progress?: AnalysisWorkerProgress | null;
 };
 
+export type QwenBenchmarkProfile =
+  | "whole"
+  | "tiles4"
+  | "single-check"
+  | "full";
+
+export type QwenBenchmarkObject = {
+  label: string;
+  score: number;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  agreementCount: number;
+  sources: string[];
+};
+
+export type QwenBenchmarkTimings = {
+  prepareMs: number;
+  imageLoadMs: number;
+  modelReadyMs: number;
+  discoveryMs: number;
+  verificationMs: number;
+  totalMs: number;
+};
+
+export type QwenBenchmarkStageResult = {
+  path: string;
+  profile: QwenBenchmarkProfile;
+  label: string;
+  description: string;
+  imageWidth: number;
+  imageHeight: number;
+  regionCount: number;
+  candidateCount: number;
+  verifiedCount: number;
+  rejectedCount: number;
+  timings: QwenBenchmarkTimings;
+  objects: QwenBenchmarkObject[];
+};
+
+export type QwenBenchmarkRunResult = {
+  path: string;
+  results: QwenBenchmarkStageResult[];
+};
+
 export type AnalysisQueueStats = {
   pending: number;
   running: number;
