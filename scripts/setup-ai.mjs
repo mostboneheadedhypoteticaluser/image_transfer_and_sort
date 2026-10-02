@@ -163,8 +163,18 @@ for (const model of models) {
 }
 
 console.log("");
+console.log("Prüfe/lade SigLIP2 So400m NaFlex für die semantische Analyse …");
+run(venvPython(), [
+  path.join(root, "workers", "python-ai", "setup_siglip2.py")
+]);
+
+console.log("");
 console.log("AI-Umgebung ist bereit.");
 console.log(`Python: ${venvPython()}`);
 for (const model of models) {
   console.log(`${model.name}: ${model.path}`);
 }
+console.log(
+  "SigLIP2 So400m NaFlex: " +
+  path.join(modelDir, "siglip2-so400m-patch16-naflex")
+);
