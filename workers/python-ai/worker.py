@@ -1905,8 +1905,47 @@ def siglip2_runtime():
     return _siglip2_processor, _siglip2_model
 
 
+def siglip2_feature_tensor(features):
+    # Transformers liefert bei SigLIP2 je nach Version entweder direkt einen
+    # Tensor oder ein BaseModelOutputWithPooling. Für Ähnlichkeitssuche ist
+    # dessen trainierter pooler_output der richtige einzelne Bild-/Textvektor.
+    if torch.is_tensor(features):
+        return features
+
+    pooled = getattr(features, "pooler_output", None)
+    if torch.is_tensor(pooled):
+        return pooled
+
+    # Kompatibilität mit return_dict=False bzw. älteren Transformers-Versionen.
+    if isinstance(features, (tuple, list)):
+        for candidate in reversed(features):
+            if torch.is_tensor(candidate) and candidate.ndim == 2:
+                return candidate
+
+    raise RuntimeError(
+        "SigLIP2 hat keinen auswertbaren gepoolten Merkmalsvektor geliefert "
+        f"(Typ: {type(features).__name__})."
+    )
+
+
 def normalized_torch_vector(features) -> list[float]:
-    vector = features.detach().to(device="cpu", dtype=torch.float32).reshape(-1)
+    tensor = siglip2_feature_tensor(features)
+
+    if tensor.ndim == 2:
+        if int(tensor.shape[0]) != 1:
+            raise RuntimeError(
+                "SigLIP2 hat unerwartet mehrere Merkmalsvektoren geliefert: "
+                f"{tuple(tensor.shape)}."
+            )
+        tensor = tensor[0]
+
+    if tensor.ndim != 1:
+        raise RuntimeError(
+            "SigLIP2-Merkmalsvektor hat eine unerwartete Form: "
+            f"{tuple(tensor.shape)}."
+        )
+
+    vector = tensor.detach().to(device="cpu", dtype=torch.float32).reshape(-1)
     norm = torch.linalg.vector_norm(vector)
     norm_value = float(norm.item())
 
@@ -1929,16 +1968,19 @@ def extract_semantic_image_embedding(file_path: str) -> dict:
             f"Bild konnte für SigLIP2 nicht gelesen werden: {exc}"
         ) from exc
 
-    inputs = processor(
-        images=image,
-        max_num_patches=SIGLIP2_MAX_NUM_PATCHES,
-        return_tensors="pt",
-    )
+    try:
+        inputs = processor(
+            images=image,
+            max_num_patches=SIGLIP2_MAX_NUM_PATCHES,
+            return_tensors="pt",
+        )
 
-    with torch.inference_mode():
-        features = model.get_image_features(**inputs)
+        with torch.inference_mode():
+            features = model.get_image_features(**inputs)
 
-    vector = normalized_torch_vector(features)
+        vector = normalized_torch_vector(features)
+    finally:
+        image.close()
 
     return {
         "module": "semantic-embed-siglip2-v1",
