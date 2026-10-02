@@ -6438,8 +6438,13 @@ function resetCatalog(): { reset: true } {
 
   db.exec("BEGIN IMMEDIATE");
   try {
+    // Bewusst vollständig: Nach einem Reset sollen weder alte KI-Ergebnisse
+    // noch Kandidaten, Suchvektoren oder alte IDs in der neuen Datenbank
+    // weiterleben. Die eigentlichen Bild-/Videodateien und Modellgewichte
+    // werden nicht verändert.
     db.exec(`
       DELETE FROM analysis_jobs;
+
       DELETE FROM person_candidate_faces;
       DELETE FROM person_candidates;
       DELETE FROM person_cluster_runs;
@@ -6447,6 +6452,7 @@ function resetCatalog(): { reset: true } {
       DELETE FROM person_face_exclusions;
       DELETE FROM person_face_assignments;
       DELETE FROM persons;
+
       DELETE FROM pet_candidate_items;
       DELETE FROM pet_candidates;
       DELETE FROM pet_cluster_runs;
@@ -6457,17 +6463,21 @@ function resetCatalog(): { reset: true } {
       DELETE FROM pet_embeddings;
       DELETE FROM pet_fused_detections;
       DELETE FROM pet_detections;
+
+      DELETE FROM object_fused_detections;
       DELETE FROM object_detections;
+      DELETE FROM semantic_embeddings;
       DELETE FROM face_embeddings;
       DELETE FROM face_detections;
+
       DELETE FROM media_image_metadata;
       DELETE FROM media_thumbnails;
       DELETE FROM media_items;
       DELETE FROM media_directories;
       DELETE FROM scans;
       DELETE FROM media_sources;
-      DELETE FROM sqlite_sequence
-      WHERE name IN ('analysis_jobs', 'person_candidate_faces', 'person_candidates', 'person_cluster_runs', 'person_face_assignments', 'persons', 'pet_candidate_items', 'pet_candidates', 'pet_cluster_runs', 'pet_cluster_exclusions', 'pet_assignment_exclusions', 'pet_assignments', 'pets', 'pet_embeddings', 'pet_fused_detections', 'pet_detections', 'object_detections', 'face_embeddings', 'face_detections', 'media_image_metadata', 'media_thumbnails', 'media_items', 'media_directories', 'scans', 'media_sources');
+
+      DELETE FROM sqlite_sequence;
     `);
     db.exec("COMMIT");
   } catch (error) {
@@ -6497,7 +6507,8 @@ async function dispatch(method: CatalogMethod, payload: Record<string, unknown> 
       return listMedia(
         asNumber(payload.sourceId, "sourceId"),
         payload.limit === undefined ? 500 : asNumber(payload.limit, "limit"),
-        payload.filter as SearchFilter | undefined
+        payload.filter as SearchFilter | undefined,
+        payload.semantic as SemanticTextEmbedding | null | undefined
       );
     case "listDuplicateGroups":
       return listDuplicateGroups(
