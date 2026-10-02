@@ -16,3 +16,6 @@ workers/python-ai/.venv/
 workers/python-ai/models/*.onnx
 
 workers/python-ai/models/siglip2-so400m-patch16-naflex/
+
+workers/python-ai/models/grounding-dino-base/
+workers/python-ai/models/rfdetr/
