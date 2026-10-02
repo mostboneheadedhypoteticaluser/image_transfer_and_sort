@@ -1418,3 +1418,50 @@ td .badge + .badge {
   color: #25653c !important;
   font-weight: 700;
 }
+
+
+.person-face.auto-assigned {
+  outline: 2px solid #d59b2a;
+  outline-offset: -2px;
+}
+
+.pet-auto-badge {
+  position: absolute;
+  left: 5px;
+  bottom: 5px;
+  z-index: 2;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: rgba(117, 82, 15, .88);
+  color: #fff;
+  font-size: 9px;
+  font-weight: 800;
+  line-height: 1.35;
+  pointer-events: none;
+}
+
+.pet-auto-confirm-button {
+  position: absolute;
+  right: 5px;
+  bottom: 5px;
+  z-index: 3;
+  width: 25px;
+  height: 25px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(37, 101, 60, .92);
+  color: #fff;
+  font-size: 15px;
+  font-weight: 800;
+  line-height: 25px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, .2);
+}
+
+.pet-auto-confirm-button:hover {
+  background: rgba(29, 82, 48, .98);
+}
+
+.pet-auto-confirm-button:disabled {
+  opacity: .45;
+}
