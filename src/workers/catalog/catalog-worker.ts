@@ -1944,13 +1944,49 @@ function completeAnalysisJob(jobId: number, result: unknown) {
 
 function failAnalysisJob(jobId: number, errorMessage: string) {
   const job = db.prepare(`
-    SELECT media_id, module
-    FROM analysis_jobs
-    WHERE id=?
+    SELECT j.media_id, j.module, m.absolute_path
+    FROM analysis_jobs j
+    JOIN media_items m ON m.id=j.media_id
+    WHERE j.id=?
   `).get(jobId);
+
+  const normalizedError = errorMessage.toLowerCase();
+  const unavailable =
+    normalizedError.startsWith("datei ist nicht erreichbar:") ||
+    normalizedError.includes("no such file or directory") ||
+    normalizedError.includes("enoent") ||
+    normalizedError.includes("input file is missing");
 
   db.exec("BEGIN IMMEDIATE");
   try {
+    if (job && unavailable) {
+      const mediaId = Number(job.media_id);
+      const absolutePath = String(job.absolute_path);
+
+      db.prepare(`
+        UPDATE media_items
+        SET availability='MISSING'
+        WHERE id=?
+      `).run(mediaId);
+
+      db.prepare(`
+        UPDATE analysis_jobs
+        SET
+          status='UNAVAILABLE',
+          error_message=?,
+          finished_at=CURRENT_TIMESTAMP,
+          updated_at=CURRENT_TIMESTAMP
+        WHERE media_id=?
+          AND status<>'DONE'
+      `).run(
+        `Datei aktuell nicht erreichbar: ${absolutePath}`,
+        mediaId
+      );
+
+      db.exec("COMMIT");
+      return { failed: false, unavailable: true };
+    }
+
     db.prepare(`
       UPDATE analysis_jobs
       SET
