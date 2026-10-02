@@ -27,6 +27,7 @@ export type PipelineStatus = {
   petDetection: AnalysisQueueStats;
   petFusion: AnalysisQueueStats;
   petEmbeddings: AnalysisQueueStats;
+  semanticEmbeddings: AnalysisQueueStats;
 };
 
 export type AnalysisJob = {
@@ -54,6 +55,16 @@ export type AnalysisErrorRecord = {
 
 export type RetryAnalysisResult = {
   retried: number;
+};
+
+export type SemanticTextEmbedding = {
+  model: string;
+  query: string;
+  prompt: string;
+  dimension: number;
+  vector: number[];
+  logitScale: number;
+  logitBias: number;
 };
 
 export type MediaPreviewInfo = {
@@ -322,6 +333,9 @@ export type MediaRecord = {
   petSingleModelCount: number;
   objectCount: number;
   objectLabels: string[];
+  semanticReady: boolean;
+  semanticModel: string | null;
+  semanticScore: number | null;
   lastSeenAt: string;
 };
 
@@ -331,6 +345,8 @@ export type SearchFilter = {
   objectLabels: string[];
   minDogs: number;
   minCats: number;
+  semanticQuery: string;
+  semanticMinProbability: number;
 };
 
 export type SearchFacets = {
@@ -413,6 +429,7 @@ export type CatalogMethod =
   | "completePetFusionJob"
   | "getPetDetectionsForEmbedding"
   | "completePetEmbeddingJob"
+  | "completeSemanticEmbeddingJob"
   | "getPetEmbeddingsForClustering"
   | "replacePetCandidates"
   | "autoAssignKnownPetCandidates"
