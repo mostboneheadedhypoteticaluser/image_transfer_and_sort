@@ -1960,13 +1960,26 @@ def qwen3vl_generate(image, prompt: str, max_new_tokens: int) -> str:
         }
     ]
 
-    inputs = processor.apply_chat_template(
-        messages,
-        tokenize=True,
-        add_generation_prompt=True,
-        return_dict=True,
-        return_tensors="pt",
-    )
+    try:
+        inputs = processor.apply_chat_template(
+            messages,
+            tokenize=True,
+            add_generation_prompt=True,
+            return_dict=True,
+            return_tensors="pt",
+            enable_thinking=True,
+        )
+    except TypeError:
+        # Fallback für Transformers-Versionen, die den Schalter noch nicht
+        # explizit im multimodalen Template exponieren.
+        inputs = processor.apply_chat_template(
+            messages,
+            tokenize=True,
+            add_generation_prompt=True,
+            return_dict=True,
+            return_tensors="pt",
+        )
+
     inputs.pop("token_type_ids", None)
 
     device = next(model.parameters()).device
@@ -1976,7 +1989,10 @@ def qwen3vl_generate(image, prompt: str, max_new_tokens: int) -> str:
         generated = model.generate(
             **inputs,
             max_new_tokens=max_new_tokens,
-            do_sample=False,
+            do_sample=True,
+            temperature=0.6,
+            top_p=0.95,
+            top_k=20,
             use_cache=True,
         )
 
@@ -2164,7 +2180,7 @@ Return ONLY a JSON array:
 If no physical object can be identified, return [].
 """.strip()
 
-    output = qwen3vl_generate(image, prompt, max_new_tokens=4096)
+    output = qwen3vl_generate(image, prompt, max_new_tokens=6144)
     raw = last_json_value(output, list)
     result: list[dict] = []
 
@@ -2300,7 +2316,7 @@ Rules:
 - confidence is "high", "medium" or "low".
 """.strip()
 
-    output = qwen3vl_generate(crop, prompt, max_new_tokens=768)
+    output = qwen3vl_generate(crop, prompt, max_new_tokens=2048)
     value = last_json_value(output, dict)
 
     return {
@@ -2325,7 +2341,7 @@ Return ONLY one JSON object:
 Use a short singular English noun. confidence must be "high", "medium" or "low".
 """.strip()
 
-    output = qwen3vl_generate(crop, prompt, max_new_tokens=768)
+    output = qwen3vl_generate(crop, prompt, max_new_tokens=2048)
     value = last_json_value(output, dict)
     return {
         "label": normalize_qwen_label(value.get("label", "")),
