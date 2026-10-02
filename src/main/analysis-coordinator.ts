@@ -113,7 +113,7 @@ type PythonPipelineStats = Pick<
 >;
 
 function emptyStats(): AnalysisQueueStats {
-  return { pending: 0, running: 0, done: 0, failed: 0 };
+  return { pending: 0, running: 0, done: 0, failed: 0, unavailable: 0 };
 }
 
 function addStats(
@@ -124,7 +124,8 @@ function addStats(
     pending: left.pending + right.pending,
     running: left.running + right.running,
     done: left.done + right.done,
-    failed: left.failed + right.failed
+    failed: left.failed + right.failed,
+    unavailable: left.unavailable + right.unavailable
   };
 }
 
