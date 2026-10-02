@@ -33,6 +33,9 @@ Aktuell unterstützt der Worker:
 - `detect_pets_yolox`
 - `fuse_pet_detections`
 - `extract_dog_embeddings`
+- `detect_qwen3vl_objects`
+- `extract_semantic_image_embedding`
+- `extract_semantic_text_embedding`
 - `cluster_pet_embeddings`
 - `shutdown`
 
@@ -47,6 +50,34 @@ Damit können Analysemodelle später ersetzt oder erweitert werden, ohne Katalog
 
 `pet-embed-dogreid-v1` nutzt das externe ONNX-Modell **DogReID DINOv2-B14 0.2.0**. Die Session wird lazy geladen; Bilder ohne fusionierten Hundefund schließen den Job ohne Bilddekodierung und ohne Modellinferenz ab. Eingabe: RGB 224×224, ImageNet-Normalisierung, NCHW. Ausgabe: L2-normalisierter Merkmalsvektor.
 
+
+## Allgemeine Motiverkennung mit Qwen3-VL-8B-Thinking
+
+Die allgemeine Motiverkennung ist von der funktionierenden Gesichts- und
+Haustierpipeline getrennt. Sie nutzt lokal `Qwen/Qwen3-VL-8B-Thinking`
+(ungefähr 17,5 GB Modellgewichte) ohne 4-/8-Bit-Quantisierung.
+
+Ablauf pro Bild:
+
+1. Qwen analysiert zuerst das vollständige Bild.
+2. Große Bilder werden zusätzlich in überlappenden Kacheln analysiert.
+3. NanoDet/YOLOX dürfen zusätzliche Objektkandidaten als Hinweise liefern;
+   diese Hinweise gelangen niemals ungeprüft in die Suchdatenbank.
+4. Jeder Kandidat wird als Ausschnitt mit markierter Box erneut geprüft.
+5. Ein zweiter Qwen-Durchlauf klassifiziert dieselbe Box blind, ohne den
+   ursprünglichen Klassennamen zu kennen.
+6. Nur wenn beide Ausschnittprüfungen übereinstimmen, wird das Motiv gespeichert.
+   Einzeltreffer benötigen dabei hohe Sicherheit; mittlere Sicherheit wird nur
+   bei mehrfach unabhängiger Sichtung akzeptiert.
+7. Hund und Katze werden aus der allgemeinen Motivliste herausgehalten, weil
+   dafür weiterhin die bestehende Haustier-/Dog-ReID-Pipeline zuständig ist.
+
+Das Modell liegt nach `npm.cmd run setup:ai` unter
+`workers/python-ai/models/qwen3-vl-8b-thinking`.
+
+Weil Qwen3-VL-8B und SigLIP2 zusammen viel Arbeitsspeicher benötigen, werden
+die Analysephasen stapelweise abgearbeitet. Qwen wird für seine Bildserie im RAM
+gehalten und vor der SigLIP2-Phase wieder freigegeben.
 
 ## Semantikanalyse mit SigLIP2 So400m NaFlex
 
