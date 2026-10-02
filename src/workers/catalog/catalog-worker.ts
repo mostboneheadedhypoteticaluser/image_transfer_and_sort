@@ -260,6 +260,30 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_object_detection_label
     ON object_detections(label);
 
+  CREATE TABLE IF NOT EXISTS object_fused_detections (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    media_id INTEGER NOT NULL REFERENCES media_items(id) ON DELETE CASCADE,
+    fusion_version TEXT NOT NULL,
+    detection_index INTEGER NOT NULL,
+    input_sha256 TEXT NOT NULL,
+    class_id INTEGER NOT NULL,
+    label TEXT NOT NULL,
+    x REAL NOT NULL,
+    y REAL NOT NULL,
+    width REAL NOT NULL,
+    height REAL NOT NULL,
+    score REAL NOT NULL,
+    agreement_count INTEGER NOT NULL DEFAULT 1,
+    sources_json TEXT NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(media_id, fusion_version, detection_index)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_object_fused_media
+    ON object_fused_detections(media_id);
+  CREATE INDEX IF NOT EXISTS idx_object_fused_label
+    ON object_fused_detections(label);
+
   CREATE TABLE IF NOT EXISTS pet_fused_detections (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     media_id INTEGER NOT NULL REFERENCES media_items(id) ON DELETE CASCADE,
@@ -541,11 +565,29 @@ db.prepare(`
     started_at=NULL,
     finished_at=NULL,
     updated_at=CURRENT_TIMESTAMP
-  WHERE module='pet-detect-yolox-v1'
+  WHERE module IN ('pet-detect-nanodet-v1', 'pet-detect-yolox-v1')
     AND status='DONE'
     AND (
       result_json IS NULL
-      OR result_json NOT LIKE '%"objectCount"%'
+      OR result_json NOT LIKE '%"objectDetectorVersion":"motif-raw-v2"%'
+    )
+`).run();
+
+db.prepare(`
+  UPDATE analysis_jobs
+  SET
+    status='PENDING',
+    attempts=0,
+    result_json=NULL,
+    error_message=NULL,
+    started_at=NULL,
+    finished_at=NULL,
+    updated_at=CURRENT_TIMESTAMP
+  WHERE module='pet-fuse-ensemble-v1'
+    AND status='DONE'
+    AND (
+      result_json IS NULL
+      OR result_json NOT LIKE '%"objectFusionVersion":"NanoDet+YOLOX-S consensus-v1"%'
     )
 `).run();
 
@@ -842,13 +884,13 @@ function listMedia(sourceId: number, requestedLimit: number) {
       ) AS pet_single_model_count,
       (
         SELECT COUNT(DISTINCT od.label)
-        FROM object_detections od
+        FROM object_fused_detections od
         WHERE od.media_id=m.id
           AND od.input_sha256=m.sha256
       ) AS object_count,
       (
         SELECT GROUP_CONCAT(DISTINCT od.label)
-        FROM object_detections od
+        FROM object_fused_detections od
         WHERE od.media_id=m.id
           AND od.input_sha256=m.sha256
       ) AS object_labels,
@@ -971,13 +1013,13 @@ function listRecycleMedia(sourceId: number, requestedLimit: number) {
       ) AS pet_single_model_count,
       (
         SELECT COUNT(DISTINCT od.label)
-        FROM object_detections od
+        FROM object_fused_detections od
         WHERE od.media_id=m.id
           AND od.input_sha256=m.sha256
       ) AS object_count,
       (
         SELECT GROUP_CONCAT(DISTINCT od.label)
-        FROM object_detections od
+        FROM object_fused_detections od
         WHERE od.media_id=m.id
           AND od.input_sha256=m.sha256
       ) AS object_labels
@@ -3046,53 +3088,51 @@ function completePetDetectionJob(jobId: number, result: unknown) {
       written += 1;
     }
 
-    if (module === "pet-detect-yolox-v1") {
-      for (const rawObject of rawObjects) {
-        if (!rawObject || typeof rawObject !== "object") continue;
+    for (const rawObject of rawObjects) {
+      if (!rawObject || typeof rawObject !== "object") continue;
 
-        const item = rawObject as Record<string, unknown>;
-        const classId = Number(item.classId);
-        const label =
-          typeof item.label === "string" ? item.label.trim() : "";
-        const x = Number(item.x);
-        const y = Number(item.y);
-        const width = Number(item.width);
-        const height = Number(item.height);
-        const score = Number(item.score);
+      const item = rawObject as Record<string, unknown>;
+      const classId = Number(item.classId);
+      const label =
+        typeof item.label === "string" ? item.label.trim() : "";
+      const x = Number(item.x);
+      const y = Number(item.y);
+      const width = Number(item.width);
+      const height = Number(item.height);
+      const score = Number(item.score);
 
-        if (
-          !Number.isInteger(classId) ||
-          !label ||
-          ![x, y, width, height, score].every(Number.isFinite) ||
-          width <= 0 ||
-          height <= 0
-        ) {
-          continue;
-        }
-
-        objectUpsert.run(
-          mediaId,
-          detectorVersion,
-          objectWritten,
-          inputSha256,
-          classId,
-          label,
-          x,
-          y,
-          width,
-          height,
-          score
-        );
-        objectWritten += 1;
+      if (
+        !Number.isInteger(classId) ||
+        !label ||
+        ![x, y, width, height, score].every(Number.isFinite) ||
+        width <= 0 ||
+        height <= 0
+      ) {
+        continue;
       }
 
-      db.prepare(`
-        DELETE FROM object_detections
-        WHERE media_id=?
-          AND detector_version=?
-          AND detection_index>=?
-      `).run(mediaId, detectorVersion, objectWritten);
+      objectUpsert.run(
+        mediaId,
+        detectorVersion,
+        objectWritten,
+        inputSha256,
+        classId,
+        label,
+        x,
+        y,
+        width,
+        height,
+        score
+      );
+      objectWritten += 1;
     }
+
+    db.prepare(`
+      DELETE FROM object_detections
+      WHERE media_id=?
+        AND detector_version=?
+        AND detection_index>=?
+    `).run(mediaId, detectorVersion, objectWritten);
 
     db.prepare(`
       DELETE FROM pet_detections
@@ -3114,10 +3154,28 @@ function completePetDetectionJob(jobId: number, result: unknown) {
       JSON.stringify({
         detector: detectorVersion,
         petCount: written,
-        objectCount: objectWritten
+        objectCount: objectWritten,
+        objectDetectorVersion: "motif-raw-v2"
       }),
       jobId
     );
+
+    // Jede neue Rohdetektion macht die bisherige Ensemble-Fusion ungültig.
+    db.prepare(`
+      UPDATE analysis_jobs
+      SET
+        status='PENDING',
+        attempts=0,
+        input_sha256=?,
+        result_json=NULL,
+        error_message=NULL,
+        started_at=NULL,
+        finished_at=NULL,
+        updated_at=CURRENT_TIMESTAMP
+      WHERE media_id=?
+        AND module='pet-fuse-ensemble-v1'
+        AND status<>'RUNNING'
+    `).run(inputSha256, mediaId);
 
     db.exec("COMMIT");
   } catch (error) {
@@ -3163,6 +3221,37 @@ function getPetDetectionsForFusion(
   }));
 }
 
+function getObjectDetectionsForFusion(
+  mediaId: number,
+  inputSha256: string
+) {
+  return db.prepare(`
+    SELECT
+      detector_version,
+      class_id,
+      label,
+      x,
+      y,
+      width,
+      height,
+      score
+    FROM object_detections
+    WHERE media_id=?
+      AND input_sha256=?
+      AND detector_version IN ('NanoDet 2022nov', 'YOLOX-S 2022nov')
+    ORDER BY detector_version, detection_index
+  `).all(mediaId, inputSha256).map((row) => ({
+    detector: String(row.detector_version),
+    classId: Number(row.class_id),
+    label: String(row.label),
+    x: Number(row.x),
+    y: Number(row.y),
+    width: Number(row.width),
+    height: Number(row.height),
+    score: Number(row.score)
+  }));
+}
+
 function completePetFusionJob(jobId: number, result: unknown) {
   if (!result || typeof result !== "object") {
     throw new Error("Haustierfusions-Ergebnis ist ungültig.");
@@ -3170,16 +3259,21 @@ function completePetFusionJob(jobId: number, result: unknown) {
 
   const value = result as Record<string, unknown>;
   const rawPets = Array.isArray(value.pets) ? value.pets : [];
+  const rawObjects = Array.isArray(value.objects) ? value.objects : [];
   const fusionVersion =
     typeof value.fusion === "string" && value.fusion.trim()
       ? value.fusion.trim()
       : "NanoDet+YOLOX-S weighted-box-v1";
+  const objectFusionVersion =
+    typeof value.objectFusion === "string" && value.objectFusion.trim()
+      ? value.objectFusion.trim()
+      : "NanoDet+YOLOX-S consensus-v1";
 
   const job = jobForModule(jobId, "pet-fuse-ensemble-v1");
   const mediaId = Number(job.media_id);
   const inputSha256 = String(job.input_sha256 ?? "");
 
-  const insert = db.prepare(`
+  const insertPet = db.prepare(`
     INSERT INTO pet_fused_detections(
       media_id,
       fusion_version,
@@ -3211,7 +3305,40 @@ function completePetFusionJob(jobId: number, result: unknown) {
       updated_at=CURRENT_TIMESTAMP
   `);
 
+  const insertObject = db.prepare(`
+    INSERT INTO object_fused_detections(
+      media_id,
+      fusion_version,
+      detection_index,
+      input_sha256,
+      class_id,
+      label,
+      x,
+      y,
+      width,
+      height,
+      score,
+      agreement_count,
+      sources_json,
+      updated_at
+    )
+    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)
+    ON CONFLICT(media_id, fusion_version, detection_index) DO UPDATE SET
+      input_sha256=excluded.input_sha256,
+      class_id=excluded.class_id,
+      label=excluded.label,
+      x=excluded.x,
+      y=excluded.y,
+      width=excluded.width,
+      height=excluded.height,
+      score=excluded.score,
+      agreement_count=excluded.agreement_count,
+      sources_json=excluded.sources_json,
+      updated_at=CURRENT_TIMESTAMP
+  `);
+
   let written = 0;
+  let objectWritten = 0;
 
   db.exec("BEGIN IMMEDIATE");
   try {
@@ -3245,7 +3372,7 @@ function completePetFusionJob(jobId: number, result: unknown) {
         continue;
       }
 
-      insert.run(
+      insertPet.run(
         mediaId,
         fusionVersion,
         written,
@@ -3263,6 +3390,50 @@ function completePetFusionJob(jobId: number, result: unknown) {
       written += 1;
     }
 
+    for (const rawObject of rawObjects) {
+      if (!rawObject || typeof rawObject !== "object") continue;
+
+      const item = rawObject as Record<string, unknown>;
+      const classId = Number(item.classId);
+      const label = typeof item.label === "string" ? item.label.trim() : "";
+      const x = Number(item.x);
+      const y = Number(item.y);
+      const width = Number(item.width);
+      const height = Number(item.height);
+      const score = Number(item.score);
+      const agreementCount = Math.max(1, Math.trunc(Number(item.agreementCount)));
+      const sources = Array.isArray(item.sources)
+        ? item.sources.filter((source) => typeof source === "string")
+        : [];
+
+      if (
+        !Number.isInteger(classId) ||
+        !label ||
+        ![x, y, width, height, score].every(Number.isFinite) ||
+        width <= 0 ||
+        height <= 0
+      ) {
+        continue;
+      }
+
+      insertObject.run(
+        mediaId,
+        objectFusionVersion,
+        objectWritten,
+        inputSha256,
+        classId,
+        label,
+        x,
+        y,
+        width,
+        height,
+        score,
+        Number.isFinite(agreementCount) ? agreementCount : 1,
+        JSON.stringify(sources)
+      );
+      objectWritten += 1;
+    }
+
     db.prepare(`
       DELETE FROM pet_fused_detections
       WHERE media_id=?
@@ -3277,6 +3448,19 @@ function completePetFusionJob(jobId: number, result: unknown) {
     `).run(mediaId, fusionVersion);
 
     db.prepare(`
+      DELETE FROM object_fused_detections
+      WHERE media_id=?
+        AND fusion_version=?
+        AND detection_index>=?
+    `).run(mediaId, objectFusionVersion, objectWritten);
+
+    db.prepare(`
+      DELETE FROM object_fused_detections
+      WHERE media_id=?
+        AND fusion_version<>?
+    `).run(mediaId, objectFusionVersion);
+
+    db.prepare(`
       UPDATE analysis_jobs
       SET
         status='DONE',
@@ -3286,9 +3470,31 @@ function completePetFusionJob(jobId: number, result: unknown) {
         updated_at=CURRENT_TIMESTAMP
       WHERE id=?
     `).run(
-      JSON.stringify({ fusion: fusionVersion, petCount: written }),
+      JSON.stringify({
+        fusion: fusionVersion,
+        petCount: written,
+        objectCount: objectWritten,
+        objectFusionVersion
+      }),
       jobId
     );
+
+    // Neue Haustierfusionen machen vorhandene Dog-ReID-Merkmale ungültig.
+    db.prepare(`
+      UPDATE analysis_jobs
+      SET
+        status='PENDING',
+        attempts=0,
+        input_sha256=?,
+        result_json=NULL,
+        error_message=NULL,
+        started_at=NULL,
+        finished_at=NULL,
+        updated_at=CURRENT_TIMESTAMP
+      WHERE media_id=?
+        AND module='pet-embed-dogreid-v1'
+        AND status<>'RUNNING'
+    `).run(inputSha256, mediaId);
 
     db.exec("COMMIT");
   } catch (error) {
@@ -3296,7 +3502,11 @@ function completePetFusionJob(jobId: number, result: unknown) {
     throw error;
   }
 
-  return { completed: true, petCount: written };
+  return {
+    completed: true,
+    petCount: written,
+    objectCount: objectWritten
+  };
 }
 
 function getPetDetectionsForEmbedding(
@@ -5961,6 +6171,11 @@ async function dispatch(method: CatalogMethod, payload: Record<string, unknown> 
       );
     case "getPetDetectionsForFusion":
       return getPetDetectionsForFusion(
+        asNumber(payload.mediaId, "mediaId"),
+        typeof payload.inputSha256 === "string" ? payload.inputSha256 : ""
+      );
+    case "getObjectDetectionsForFusion":
+      return getObjectDetectionsForFusion(
         asNumber(payload.mediaId, "mediaId"),
         typeof payload.inputSha256 === "string" ? payload.inputSha256 : ""
       );
