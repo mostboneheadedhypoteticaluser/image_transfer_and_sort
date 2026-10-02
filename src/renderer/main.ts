@@ -83,6 +83,7 @@ const semanticStageState = document.querySelector<HTMLSpanElement>("#semanticSta
 const semanticStageCounts = document.querySelector<HTMLElement>("#semanticStageCounts")!;
 const analysisErrorsButton = document.querySelector<HTMLButtonElement>("#analysisErrorsButton")!;
 const analysisDevLogButton = document.querySelector<HTMLButtonElement>("#analysisDevLogButton")!;
+const analysisCopyDevLogButton = document.querySelector<HTMLButtonElement>("#analysisCopyDevLogButton")!;
 const analysisErrorCount = document.querySelector<HTMLSpanElement>("#analysisErrorCount")!;
 const analysisErrorDialog = document.querySelector<HTMLDialogElement>("#analysisErrorDialog")!;
 const closeAnalysisErrorsButton = document.querySelector<HTMLButtonElement>("#closeAnalysisErrors")!;
@@ -2293,6 +2294,21 @@ analysisDevLogButton.addEventListener("click", () => {
   void runSafely(async () => {
     const result = await window.imageSorter.analysis.openDevLog();
     progressText.textContent = "Dev-Protokoll geöffnet: " + result.path;
+  });
+});
+
+analysisCopyDevLogButton.addEventListener("click", () => {
+  void runSafely(async () => {
+    analysisCopyDevLogButton.disabled = true;
+    try {
+      const result = await window.imageSorter.analysis.copyDevLog();
+      progressText.textContent =
+        "Dev-Protokoll in die Zwischenablage kopiert · " +
+        result.characters.toLocaleString("de-DE") +
+        " Zeichen.";
+    } finally {
+      analysisCopyDevLogButton.disabled = false;
+    }
   });
 });
 
