@@ -1737,9 +1737,29 @@ def unload_siglip2() -> None:
 
 
 def unload_qwen3vl() -> None:
-    global _qwen3vl_model, _qwen3vl_processor
-    _qwen3vl_model = None
-    _qwen3vl_processor = None
+    global _qwen_server_process, _qwen_server_port, _qwen_server_log_handle
+
+    process = _qwen_server_process
+    _qwen_server_process = None
+    _qwen_server_port = None
+
+    if process is not None and process.poll() is None:
+        try:
+            process.terminate()
+            process.wait(timeout=8)
+        except Exception:
+            try:
+                process.kill()
+            except Exception:
+                pass
+
+    if _qwen_server_log_handle is not None:
+        try:
+            _qwen_server_log_handle.close()
+        except Exception:
+            pass
+        _qwen_server_log_handle = None
+
     release_torch_memory()
 
 
@@ -1900,122 +1920,206 @@ def xyxy_iou(left: list[float], right: list[float]) -> float:
     return intersection / union if union > 0.0 else 0.0
 
 
-def qwen3vl_runtime():
-    global _qwen3vl_model, _qwen3vl_processor
+def qwen_server_log_tail(max_bytes: int = 6000) -> str:
+    try:
+        with open(QWEN_SERVER_LOG, "rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            size = handle.tell()
+            handle.seek(max(0, size - max_bytes), os.SEEK_SET)
+            data = handle.read()
+        return data.decode("utf-8", errors="replace").strip()
+    except Exception:
+        return ""
+
+
+def free_local_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
+
+
+def qwen_server_healthy(port: int, timeout: float = 1.0) -> bool:
+    try:
+        with urllib_request.urlopen(
+            f"http://127.0.0.1:{port}/health",
+            timeout=timeout,
+        ) as response:
+            return int(response.status) == 200
+    except Exception:
+        return False
+
+
+def qwen3vl_runtime() -> int:
+    global _qwen_server_process, _qwen_server_port, _qwen_server_log_handle
 
     if Image is None or ImageDraw is None or ImageOps is None:
         raise RuntimeError(
             "Pillow fehlt. Einmal 'npm.cmd run setup:ai' ausführen."
         )
+
+    if not qwen_gguf_ready():
+        raise RuntimeError(
+            "Qwen3-VL-8B-Thinking GGUF Q8_0 oder der FP16-Vision-Projektor "
+            "fehlt. Einmal 'npm.cmd run setup:ai' ausführen."
+        )
+
+    executable = find_llama_server()
+    if executable is None:
+        raise RuntimeError(
+            "llama-server wurde nicht gefunden. Unter Windows bitte "
+            "'winget install llama.cpp' ausführen und die App neu starten."
+        )
+
     if (
-        torch is None
-        or AutoModelForImageTextToText is None
-        or AutoProcessor is None
+        _qwen_server_process is not None
+        and _qwen_server_process.poll() is None
+        and _qwen_server_port is not None
+        and qwen_server_healthy(int(_qwen_server_port))
     ):
-        raise RuntimeError(
-            "Qwen3-VL-Laufzeit fehlt. Einmal 'npm.cmd run setup:ai' ausführen."
-        )
+        return int(_qwen_server_port)
 
-    required = (
-        "config.json",
-        "model.safetensors.index.json",
-        "model-00001-of-00004.safetensors",
-        "model-00002-of-00004.safetensors",
-        "model-00003-of-00004.safetensors",
-        "model-00004-of-00004.safetensors",
+    unload_qwen3vl()
+    unload_siglip2()
+
+    port = free_local_port()
+    os.makedirs(os.path.dirname(QWEN_SERVER_LOG), exist_ok=True)
+    _qwen_server_log_handle = open(
+        QWEN_SERVER_LOG,
+        "w",
+        encoding="utf-8",
+        buffering=1,
     )
-    if not all(
-        os.path.isfile(os.path.join(QWEN3VL_MODEL_DIR, name))
-        for name in required
-    ):
-        raise RuntimeError(
-            "Qwen3-VL-8B-Thinking fehlt oder ist unvollständig. "
-            "Einmal 'npm.cmd run setup:ai' ausführen."
-        )
 
-    if _qwen3vl_processor is None:
-        _qwen3vl_processor = AutoProcessor.from_pretrained(
-            QWEN3VL_MODEL_DIR,
-            local_files_only=True,
-            min_pixels=QWEN3VL_MIN_PIXELS,
-            max_pixels=QWEN3VL_MAX_PIXELS,
-        )
+    args = [
+        executable,
+        "-m",
+        QWEN3VL_MODEL_FILE,
+        "--mmproj",
+        QWEN3VL_MMPROJ_FILE,
+        "--host",
+        "127.0.0.1",
+        "--port",
+        str(port),
+        "-c",
+        str(QWEN3VL_CONTEXT_SIZE),
+        "-ngl",
+        "0",
+        "--no-mmproj-offload",
+    ]
 
-    if _qwen3vl_model is None:
-        # Das 8B-Modell belegt bereits rund 17,5 GB als BF16-Checkpoint.
-        # SigLIP wird freigegeben, damit der 32-GB-Rechner nicht unnötig zwei
-        # große Vision-Modelle gleichzeitig im RAM halten muss.
-        unload_siglip2()
+    creationflags = 0
+    if os.name == "nt":
+        creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
-        _qwen3vl_model = AutoModelForImageTextToText.from_pretrained(
-            QWEN3VL_MODEL_DIR,
-            local_files_only=True,
-            torch_dtype="auto",
-            low_cpu_mem_usage=True,
-            device_map={"": "cpu"},
-            attn_implementation="sdpa",
-        )
-        _qwen3vl_model.eval()
+    _qwen_server_process = subprocess.Popen(
+        args,
+        stdin=subprocess.DEVNULL,
+        stdout=_qwen_server_log_handle,
+        stderr=subprocess.STDOUT,
+        creationflags=creationflags,
+    )
+    _qwen_server_port = port
 
-    return _qwen3vl_processor, _qwen3vl_model
+    deadline = time.monotonic() + 240.0
+    while time.monotonic() < deadline:
+        if _qwen_server_process.poll() is not None:
+            detail = qwen_server_log_tail()
+            unload_qwen3vl()
+            raise RuntimeError(
+                "llama.cpp konnte Qwen3-VL nicht starten."
+                + (f" Log: {detail}" if detail else "")
+            )
+
+        if qwen_server_healthy(port, timeout=1.0):
+            return port
+
+        time.sleep(0.75)
+
+    detail = qwen_server_log_tail()
+    unload_qwen3vl()
+    raise RuntimeError(
+        "llama.cpp hat Qwen3-VL nicht innerhalb von 240 Sekunden geladen."
+        + (f" Log: {detail}" if detail else "")
+    )
+
+
+def image_data_uri(image) -> str:
+    buffer = io.BytesIO()
+    image.save(buffer, format="PNG", optimize=False)
+    encoded = base64.b64encode(buffer.getvalue()).decode("ascii")
+    return "data:image/png;base64," + encoded
 
 
 def qwen3vl_generate(image, prompt: str, max_new_tokens: int) -> str:
-    processor, model = qwen3vl_runtime()
+    port = qwen3vl_runtime()
 
-    messages = [
-        {
-            "role": "user",
-            "content": [
-                {"type": "image", "image": image},
-                {"type": "text", "text": prompt},
-            ],
-        }
-    ]
+    payload = {
+        "model": "Qwen3-VL-8B-Thinking",
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": image_data_uri(image)},
+                    },
+                    {"type": "text", "text": prompt},
+                ],
+            }
+        ],
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20,
+        "max_tokens": int(max_new_tokens),
+        "stream": False,
+    }
+
+    body = json.dumps(payload).encode("utf-8")
+    request = urllib_request.Request(
+        f"http://127.0.0.1:{port}/v1/chat/completions",
+        data=body,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
 
     try:
-        inputs = processor.apply_chat_template(
-            messages,
-            tokenize=True,
-            add_generation_prompt=True,
-            return_dict=True,
-            return_tensors="pt",
-            enable_thinking=True,
-        )
-    except TypeError:
-        # Fallback für Transformers-Versionen, die den Schalter noch nicht
-        # explizit im multimodalen Template exponieren.
-        inputs = processor.apply_chat_template(
-            messages,
-            tokenize=True,
-            add_generation_prompt=True,
-            return_dict=True,
-            return_tensors="pt",
-        )
+        with urllib_request.urlopen(request, timeout=7200.0) as response:
+            raw = response.read().decode("utf-8", errors="replace")
+    except urllib_error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(
+            f"llama.cpp/Qwen3-VL HTTP {exc.code}: {detail[:1200]}"
+        ) from exc
+    except Exception as exc:
+        raise RuntimeError(
+            f"llama.cpp/Qwen3-VL Anfrage fehlgeschlagen: {exc}"
+        ) from exc
 
-    inputs.pop("token_type_ids", None)
+    try:
+        value = json.loads(raw)
+        choices = value.get("choices") or []
+        message = choices[0].get("message") if choices else None
+        if not isinstance(message, dict):
+            raise ValueError("choices[0].message fehlt")
 
-    device = next(model.parameters()).device
-    inputs = inputs.to(device)
+        content = message.get("content")
+        reasoning = message.get("reasoning_content")
 
-    with torch.inference_mode():
-        generated = model.generate(
-            **inputs,
-            max_new_tokens=max_new_tokens,
-            do_sample=True,
-            temperature=0.6,
-            top_p=0.95,
-            top_k=20,
-            use_cache=True,
-        )
+        parts = []
+        if isinstance(reasoning, str) and reasoning.strip():
+            parts.append(reasoning)
+        if isinstance(content, str) and content.strip():
+            parts.append(content)
 
-    prompt_length = int(inputs["input_ids"].shape[-1])
-    trimmed = generated[:, prompt_length:]
-    return processor.batch_decode(
-        trimmed,
-        skip_special_tokens=True,
-        clean_up_tokenization_spaces=False,
-    )[0]
+        result = "\n".join(parts).strip()
+        if not result:
+            raise ValueError("leere Modellantwort")
+        return result
+    except Exception as exc:
+        raise RuntimeError(
+            "llama.cpp hat keine auswertbare Chat-Antwort geliefert: "
+            f"{raw[:1000]}"
+        ) from exc
 
 
 def last_json_value(text: str, expected_type):
