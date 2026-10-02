@@ -4,7 +4,15 @@ import {
   spawnSync,
   type ChildProcessWithoutNullStreams
 } from "node:child_process";
-import { existsSync, readdirSync } from "node:fs";
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  renameSync,
+  statSync,
+  unlinkSync
+} from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import readline from "node:readline";
@@ -19,6 +27,8 @@ type Pending = {
   timeout: NodeJS.Timeout;
   timeoutMs: number;
   method: string;
+  startedAtMs: number;
+  target: string | null;
 };
 
 type WorkerResponse = {
@@ -95,8 +105,71 @@ export class AnalysisService {
 
   constructor(
     private readonly workerPath: string,
-    private readonly onStatus: (status: AnalysisWorkerStatus) => void
-  ) {}
+    private readonly onStatus: (status: AnalysisWorkerStatus) => void,
+    private readonly devLogPath: string
+  ) {
+    this.prepareDevLog();
+    this.devLog("ELECTRON_SERVICE_CREATED", {
+      workerPath: this.workerPath,
+      node: process.version,
+      platform: process.platform,
+      arch: process.arch
+    });
+  }
+
+  getDevLogPath(): string {
+    return this.devLogPath;
+  }
+
+  private prepareDevLog(): void {
+    try {
+      mkdirSync(path.dirname(this.devLogPath), { recursive: true });
+
+      if (existsSync(this.devLogPath)) {
+        const maxBytes = 8 * 1024 * 1024;
+        const size = statSync(this.devLogPath).size;
+
+        if (size >= maxBytes) {
+          const rotated = this.devLogPath + ".1";
+          try {
+            if (existsSync(rotated)) unlinkSync(rotated);
+          } catch {
+            // Rotation ist nur Komfort; Logging selbst soll weiterlaufen.
+          }
+          try {
+            renameSync(this.devLogPath, rotated);
+          } catch {
+            // Falls AV/Editor die Datei kurz blockiert, hängen wir weiter an.
+          }
+        }
+      }
+    } catch {
+      // Ein Diagnoseprotokoll darf den eigentlichen Worker niemals verhindern.
+    }
+  }
+
+  private devLog(
+    event: string,
+    fields: Record<string, unknown> = {}
+  ): void {
+    try {
+      const line = JSON.stringify({
+        ts: new Date().toISOString(),
+        source: "electron-analysis",
+        pid: process.pid,
+        event,
+        ...fields
+      });
+      appendFileSync(this.devLogPath, line + "\n", "utf8");
+    } catch {
+      // Diagnose darf die Anwendung nicht beeinflussen.
+    }
+  }
+
+  private requestTarget(payload: Record<string, unknown>): string | null {
+    const value = payload.path;
+    return typeof value === "string" && value.trim() ? value : null;
+  }
 
   getStatus(): AnalysisWorkerStatus {
     return { ...this.status };
@@ -146,7 +219,15 @@ export class AnalysisService {
   }
 
   async start(): Promise<void> {
-    if (this.child) return;
+    if (this.child) {
+      this.devLog("START_SKIPPED_CHILD_ALREADY_PRESENT", {
+        childPid: this.child.pid ?? null
+      });
+      return;
+    }
+
+    const startAt = Date.now();
+    this.devLog("START_BEGIN");
 
     this.stopping = false;
     this.publish({
@@ -157,13 +238,28 @@ export class AnalysisService {
     let lastError: Error | null = null;
 
     for (const candidate of this.candidates()) {
+      const candidateAt = Date.now();
+      this.devLog("PYTHON_CANDIDATE_BEGIN", {
+        label: candidate.label,
+        command: candidate.command
+      });
       try {
         await this.launch(candidate);
+        this.devLog("PYTHON_SPAWN_READY", {
+          label: candidate.label,
+          childPid: this.child?.pid ?? null,
+          elapsedMs: Date.now() - candidateAt
+        });
+
+        const pingAt = Date.now();
         const ping = await this.request<Record<string, unknown>>(
           "ping",
           {},
           60000
         );
+        this.devLog("PING_OK", {
+          elapsedMs: Date.now() - pingAt
+        });
 
         const capabilities =
           ping.capabilities && typeof ping.capabilities === "object"
@@ -260,6 +356,7 @@ export class AnalysisService {
           );
         }
 
+        const configureAt = Date.now();
         const configured = await this.request<Record<string, unknown>>(
           "configure",
           {
@@ -269,18 +366,36 @@ export class AnalysisService {
           },
           15000
         );
+        this.devLog("CONFIGURE_OK", {
+          elapsedMs: Date.now() - configureAt
+        });
 
         this.applyWorkerResult(configured);
         this.publish({
           state: "READY",
           message: "Analyse-Worker läuft getrennt im Hintergrund."
         });
+        this.devLog("START_READY", {
+          totalElapsedMs: Date.now() - startAt,
+          childPid: this.child?.pid ?? null,
+          python: candidate.label
+        });
         return;
       } catch (error) {
         lastError = error instanceof Error ? error : new Error(String(error));
+        this.devLog("PYTHON_CANDIDATE_ERROR", {
+          label: candidate.label,
+          elapsedMs: Date.now() - candidateAt,
+          error: lastError.message
+        });
         this.killChild();
       }
     }
+
+    this.devLog("START_FAILED", {
+      totalElapsedMs: Date.now() - startAt,
+      error: lastError?.message ?? "Keine passende Python-Installation gefunden."
+    });
 
     this.publish({
       state: "ERROR",
@@ -294,9 +409,19 @@ export class AnalysisService {
 
   private launch(candidate: PythonCandidate): Promise<void> {
     return new Promise((resolve, reject) => {
+      const launchAt = Date.now();
+      this.devLog("SPAWN_BEGIN", {
+        label: candidate.label,
+        command: candidate.command
+      });
+
       const child = spawn(candidate.command, candidate.args, {
         stdio: ["pipe", "pipe", "pipe"],
-        windowsHide: true
+        windowsHide: true,
+        env: {
+          ...process.env,
+          IMAGE_SORTER_DEV_LOG: this.devLogPath
+        }
       });
 
       let settled = false;
@@ -304,6 +429,11 @@ export class AnalysisService {
       const fail = (error: Error) => {
         if (settled) return;
         settled = true;
+        this.devLog("SPAWN_ERROR", {
+          label: candidate.label,
+          elapsedMs: Date.now() - launchAt,
+          error: error.message
+        });
         reject(error);
       };
 
@@ -315,6 +445,11 @@ export class AnalysisService {
 
         this.child = child;
         this.attachChild(child);
+        this.devLog("SPAWN_EVENT", {
+          label: candidate.label,
+          childPid: child.pid ?? null,
+          elapsedMs: Date.now() - launchAt
+        });
 
         try {
           if (child.pid !== undefined) {
@@ -383,6 +518,14 @@ export class AnalysisService {
           const pending = this.pending.get(requestId);
           if (pending) this.armPendingTimeout(requestId, pending);
 
+          this.devLog("WORKER_PROGRESS", {
+            requestId,
+            phase: progress.phase,
+            current: progress.current,
+            total: progress.total,
+            message: progress.message
+          });
+
           this.publish({
             message: progress.message,
             progress
@@ -398,13 +541,32 @@ export class AnalysisService {
       clearTimeout(pending.timeout);
       this.pending.delete(message.id);
 
-      if (message.ok) pending.resolve(message.result);
-      else pending.reject(new Error(message.error ?? "Analyse-Worker meldet einen Fehler."));
+      const elapsedMs = Date.now() - pending.startedAtMs;
+      if (message.ok) {
+        this.devLog("REQUEST_OK", {
+          requestId: message.id,
+          method: pending.method,
+          target: pending.target,
+          elapsedMs
+        });
+        pending.resolve(message.result);
+      } else {
+        const error = message.error ?? "Analyse-Worker meldet einen Fehler.";
+        this.devLog("REQUEST_ERROR", {
+          requestId: message.id,
+          method: pending.method,
+          target: pending.target,
+          elapsedMs,
+          error
+        });
+        pending.reject(new Error(error));
+      }
     });
 
     child.stderr.on("data", (chunk: Buffer) => {
       const message = chunk.toString("utf8").trim();
       if (!message) return;
+      this.devLog("WORKER_STDERR", { message });
       this.publish({ message: `Analyse-Worker: ${message}` });
     });
 
@@ -417,6 +579,13 @@ export class AnalysisService {
           ? `Analyse-Worker wurde beendet (Signal ${signal}).`
           : `Analyse-Worker wurde beendet (Code ${code ?? "unbekannt"}).`
       );
+
+      this.devLog("WORKER_EXIT", {
+        childPid: child.pid ?? null,
+        code: code ?? null,
+        signal: signal ?? null,
+        wasCurrentChild
+      });
 
       if (wasCurrentChild) {
         for (const pending of this.pending.values()) {
@@ -482,6 +651,13 @@ export class AnalysisService {
       const error = new Error(
         `Zeitüberschreitung bei Analyse-Worker-Methode ${current.method}.`
       );
+      this.devLog("REQUEST_TIMEOUT", {
+        requestId: id,
+        method: current.method,
+        target: current.target,
+        elapsedMs: Date.now() - current.startedAtMs,
+        inactivityTimeoutMs: current.timeoutMs
+      });
       current.reject(error);
 
       // Ein abgelaufener Qwen-Aufruf darf nicht im Python-Prozess weiterlaufen
@@ -523,11 +699,20 @@ export class AnalysisService {
         reject,
         timeout: setTimeout(() => {}, 1),
         timeoutMs,
-        method
+        method,
+        startedAtMs: Date.now(),
+        target: this.requestTarget(payload)
       };
 
       this.pending.set(id, pending);
       this.armPendingTimeout(id, pending);
+
+      this.devLog("REQUEST_BEGIN", {
+        requestId: id,
+        method,
+        target: pending.target,
+        timeoutMs
+      });
     });
 
     child.stdin.write(JSON.stringify({ id, method, payload }) + "\n");
@@ -548,6 +733,9 @@ export class AnalysisService {
   }
 
   stop(): void {
+    this.devLog("STOP_GRACEFUL_BEGIN", {
+      childPid: this.child?.pid ?? null
+    });
     this.stopping = true;
     const child = this.child;
     if (!child) {
@@ -580,6 +768,10 @@ export class AnalysisService {
    * Python + dessen llama-server-Kindprozess beendet.
    */
   stopImmediately(): void {
+    const stopAt = Date.now();
+    this.devLog("STOP_IMMEDIATE_BEGIN", {
+      childPid: this.child?.pid ?? null
+    });
     this.stopping = true;
     const child = this.child;
 
@@ -630,6 +822,10 @@ export class AnalysisService {
       }
     }
 
+    this.devLog("STOP_IMMEDIATE_DONE", {
+      elapsedMs: Date.now() - stopAt
+    });
+
     this.publish({
       state: "STOPPED",
       pid: null,
@@ -643,6 +839,10 @@ export class AnalysisService {
   private killChild(): void {
     const child = this.child;
     if (!child) return;
+
+    this.devLog("KILL_CHILD_BEGIN", {
+      childPid: child.pid ?? null
+    });
 
     this.child = null;
 
