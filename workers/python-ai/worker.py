@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gc
 import importlib.util
 import json
 import math
@@ -12,21 +13,24 @@ from datetime import datetime
 from typing import Any
 
 try:
-    from PIL import Image, ImageOps
+    from PIL import Image, ImageDraw, ImageOps
 except Exception:
     Image = None
+    ImageDraw = None
     ImageOps = None
 
 try:
     import torch
     from transformers import (
         AutoModel,
+        AutoModelForImageTextToText,
         AutoModelForZeroShotObjectDetection,
         AutoProcessor,
     )
 except Exception:
     torch = None
     AutoModel = None
+    AutoModelForImageTextToText = None
     AutoModelForZeroShotObjectDetection = None
     AutoProcessor = None
 
@@ -88,6 +92,15 @@ VERIFIED_OBJECT_VERSION = (
     "RF-DETR Large + Grounding DINO Base + SigLIP2 So400m crop verifier v2"
 )
 
+QWEN3VL_MODEL_DIR = os.path.join(
+    WORKER_DIR,
+    "models",
+    "qwen3-vl-8b-thinking",
+)
+QWEN3VL_MODEL_VERSION = "Qwen3-VL-8B-Thinking BF16 open-vocabulary v1"
+QWEN3VL_MAX_PIXELS = 2048 * 32 * 32
+QWEN3VL_MIN_PIXELS = 128 * 32 * 32
+
 COCO_CLASS_NAMES = (
     "person", "bicycle", "car", "motorcycle", "airplane", "bus", "train",
     "truck", "boat", "traffic light", "fire hydrant", "stop sign",
@@ -112,6 +125,8 @@ _siglip2_coco_text_features = None
 _rfdetr_model = None
 _grounding_dino_model = None
 _grounding_dino_processor = None
+_qwen3vl_model = None
+_qwen3vl_processor = None
 
 
 @dataclass
@@ -157,6 +172,18 @@ def snapshot() -> dict:
                 for name in files
             ),
             "rfdetr": importlib.util.find_spec("rfdetr") is not None,
+            "qwen3vlModel": all(
+                os.path.isfile(os.path.join(QWEN3VL_MODEL_DIR, name))
+                for name in (
+                    "config.json",
+                    "model.safetensors.index.json",
+                    "model-00001-of-00004.safetensors",
+                    "model-00002-of-00004.safetensors",
+                    "model-00003-of-00004.safetensors",
+                    "model-00004-of-00004.safetensors",
+                )
+            ),
+            "qwen3vlRuntime": AutoModelForImageTextToText is not None,
             "torch": torch is not None,
             "transformers": AutoModel is not None and AutoProcessor is not None,
             "onnxRuntime": importlib.util.find_spec("onnxruntime") is not None,
@@ -202,6 +229,25 @@ def snapshot() -> dict:
                     name == "rf-detr-large-2026.pth"
                     for _root, _dirs, files in os.walk(RFDETR_MODEL_DIR)
                     for name in files
+                )
+            ),
+            "qwenObjectDetection": (
+                Image is not None
+                and ImageDraw is not None
+                and ImageOps is not None
+                and torch is not None
+                and AutoModelForImageTextToText is not None
+                and AutoProcessor is not None
+                and all(
+                    os.path.isfile(os.path.join(QWEN3VL_MODEL_DIR, name))
+                    for name in (
+                        "config.json",
+                        "model.safetensors.index.json",
+                        "model-00001-of-00004.safetensors",
+                        "model-00002-of-00004.safetensors",
+                        "model-00003-of-00004.safetensors",
+                        "model-00004-of-00004.safetensors",
+                    )
                 )
             ),
         },
