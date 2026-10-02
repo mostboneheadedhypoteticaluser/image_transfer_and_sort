@@ -166,6 +166,17 @@
             <article class="pipeline-stage">
               <div>
                 <small>Stufe 9</small>
+                <strong>Semantikanalyse · SigLIP2 So400m NaFlex</strong>
+              </div>
+              <div class="pipeline-stage-status">
+                <span id="semanticStageState" class="stage-state waiting">Wartet</span>
+                <small id="semanticStageCounts">0 fertig · 0 offen</small>
+              </div>
+            </article>
+
+            <article class="pipeline-stage">
+              <div>
+                <small>Stufe 10</small>
                 <strong>Personen bestätigen</strong>
               </div>
               <div class="pipeline-stage-status">
@@ -176,7 +187,7 @@
 
             <article class="pipeline-stage">
               <div>
-                <small>Stufe 10</small>
+                <small>Stufe 11</small>
                 <strong>Haustiere bestätigen</strong>
               </div>
               <div class="pipeline-stage-status">
@@ -188,7 +199,7 @@
             <article class="pipeline-stage future">
               <div>
                 <small>Danach</small>
-                <strong>Katzen-ID · kombinierte Suche</strong>
+                <strong>Katzen-ID · weitere Open-Vocabulary-Erkennung</strong>
               </div>
               <div class="pipeline-stage-status">
                 <span class="stage-state future">Noch nicht aktiv</span>
@@ -202,7 +213,7 @@
               <button id="analysisErrorsButton" class="ghost analysis-errors-button" type="button" hidden>
                 Fehler anzeigen <span id="analysisErrorCount" class="tab-count">0</span>
               </button>
-              <span class="analysis-note">NanoDet + YOLOX-S prüfen Tiere und allgemeine Motive gemeinsam. Für Motive werden übereinstimmende Treffer bevorzugt und nur sehr sichere Einzeltreffer übernommen. Fusionierte Hundefundstellen erhalten anschließend Dog-ReID-Merkmale.</span>
+              <span class="analysis-note">NanoDet + YOLOX-S prüfen konkrete Objekte gemeinsam. SigLIP2 So400m NaFlex analysiert zusätzlich den semantischen Bildinhalt mit hoher Auflösung; die Laufzeit ist bewusst der Genauigkeit untergeordnet.</span>
             </div>
           </div>
         </section>
@@ -260,9 +271,25 @@
                   <div id="searchPets" class="search-facets"></div>
                 </section>
 
+                <section class="search-group search-group-wide semantic-search-group">
+                  <h4>Semantischer Bildinhalt · SigLIP2</h4>
+                  <p>Freier Suchtext, z. B. „Hund im Schnee“, „Wald“, „Rettungshundetraining“ oder „Person mit Hund neben einem Fahrzeug“. Der Score ist ein SigLIP2-Ähnlichkeitswert und keine statistische Wahrscheinlichkeit.</p>
+                  <div class="semantic-search-row">
+                    <input id="searchSemanticQuery" type="text" maxlength="300" autocomplete="off" placeholder="Semantischen Bildinhalt beschreiben …" />
+                    <label for="searchSemanticMinProbability">
+                      Mindest-Score
+                      <span class="semantic-score-input">
+                        <input id="searchSemanticMinProbability" type="number" min="0" max="99" step="1" value="65" />
+                        <span>%</span>
+                      </span>
+                    </label>
+                  </div>
+                  <small class="semantic-search-note">Standard 65 % ist bewusst streng gewählt. Niedriger erhöht die Trefferzahl, aber auch mögliche Fehlzuordnungen.</small>
+                </section>
+
                 <section class="search-group search-group-wide">
                   <h4>Motive</h4>
-                  <p>Nur Motive aus der neuen NanoDet/YOLOX-Ensemble-Erkennung.</p>
+                  <p>Konkrete Objekte aus der NanoDet/YOLOX-Ensemble-Erkennung.</p>
                   <div id="searchObjects" class="search-facets motif-facets"></div>
                 </section>
 
