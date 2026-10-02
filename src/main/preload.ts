@@ -29,6 +29,8 @@ const api = {
   analysis: {
     getStatus: (): Promise<AnalysisWorkerStatus> => ipcRenderer.invoke("analysis:getStatus"),
     getPipelineStatus: (): Promise<PipelineStatus> => ipcRenderer.invoke("analysis:getPipelineStatus"),
+    openDevLog: (): Promise<{ opened: true; path: string }> =>
+      ipcRenderer.invoke("analysis:openDevLog"),
     listErrors: (sourceId?: number, limit = 200): Promise<AnalysisErrorRecord[]> =>
       ipcRenderer.invoke("analysis:listErrors", sourceId, limit),
     retryJob: (jobId: number): Promise<RetryAnalysisResult> =>
