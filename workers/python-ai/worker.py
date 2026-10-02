@@ -1754,6 +1754,27 @@ def cluster_face_embeddings(
     }
 
 
+def release_torch_memory() -> None:
+    gc.collect()
+    if torch is not None and torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
+
+def unload_siglip2() -> None:
+    global _siglip2_model, _siglip2_processor, _siglip2_coco_text_features
+    _siglip2_model = None
+    _siglip2_processor = None
+    _siglip2_coco_text_features = None
+    release_torch_memory()
+
+
+def unload_qwen3vl() -> None:
+    global _qwen3vl_model, _qwen3vl_processor
+    _qwen3vl_model = None
+    _qwen3vl_processor = None
+    release_torch_memory()
+
+
 def siglip2_runtime():
     global _siglip2_model, _siglip2_processor
 
@@ -1781,6 +1802,10 @@ def siglip2_runtime():
         )
 
     if _siglip2_model is None:
+        # Qwen3-VL ist deutlich größer. Die beiden großen Modelle werden
+        # absichtlich nicht gleichzeitig im RAM gehalten.
+        unload_qwen3vl()
+
         # Genauigkeit ist hier wichtiger als Laufzeit: kein INT8/INT4 und keine
         # aggressive Quantisierung. FP32 ist auch auf CPU reproduzierbar.
         _siglip2_model = AutoModel.from_pretrained(
@@ -1887,6 +1912,669 @@ def extract_semantic_text_embedding(text: str) -> dict:
         "logitBias": logit_bias,
     }
 
+
+
+
+def qwen3vl_runtime():
+    global _qwen3vl_model, _qwen3vl_processor
+
+    if Image is None or ImageDraw is None or ImageOps is None:
+        raise RuntimeError(
+            "Pillow fehlt. Einmal 'npm.cmd run setup:ai' ausführen."
+        )
+    if (
+        torch is None
+        or AutoModelForImageTextToText is None
+        or AutoProcessor is None
+    ):
+        raise RuntimeError(
+            "Qwen3-VL-Laufzeit fehlt. Einmal 'npm.cmd run setup:ai' ausführen."
+        )
+
+    required = (
+        "config.json",
+        "model.safetensors.index.json",
+        "model-00001-of-00004.safetensors",
+        "model-00002-of-00004.safetensors",
+        "model-00003-of-00004.safetensors",
+        "model-00004-of-00004.safetensors",
+    )
+    if not all(
+        os.path.isfile(os.path.join(QWEN3VL_MODEL_DIR, name))
+        for name in required
+    ):
+        raise RuntimeError(
+            "Qwen3-VL-8B-Thinking fehlt oder ist unvollständig. "
+            "Einmal 'npm.cmd run setup:ai' ausführen."
+        )
+
+    if _qwen3vl_processor is None:
+        _qwen3vl_processor = AutoProcessor.from_pretrained(
+            QWEN3VL_MODEL_DIR,
+            local_files_only=True,
+            min_pixels=QWEN3VL_MIN_PIXELS,
+            max_pixels=QWEN3VL_MAX_PIXELS,
+        )
+
+    if _qwen3vl_model is None:
+        # Das 8B-Modell belegt bereits rund 17,5 GB als BF16-Checkpoint.
+        # SigLIP wird freigegeben, damit der 32-GB-Rechner nicht unnötig zwei
+        # große Vision-Modelle gleichzeitig im RAM halten muss.
+        unload_siglip2()
+
+        _qwen3vl_model = AutoModelForImageTextToText.from_pretrained(
+            QWEN3VL_MODEL_DIR,
+            local_files_only=True,
+            torch_dtype="auto",
+            low_cpu_mem_usage=True,
+            device_map={"": "cpu"},
+            attn_implementation="sdpa",
+        )
+        _qwen3vl_model.eval()
+
+    return _qwen3vl_processor, _qwen3vl_model
+
+
+def qwen3vl_generate(image, prompt: str, max_new_tokens: int) -> str:
+    processor, model = qwen3vl_runtime()
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "image", "image": image},
+                {"type": "text", "text": prompt},
+            ],
+        }
+    ]
+
+    inputs = processor.apply_chat_template(
+        messages,
+        tokenize=True,
+        add_generation_prompt=True,
+        return_dict=True,
+        return_tensors="pt",
+    )
+    inputs.pop("token_type_ids", None)
+
+    device = next(model.parameters()).device
+    inputs = inputs.to(device)
+
+    with torch.inference_mode():
+        generated = model.generate(
+            **inputs,
+            max_new_tokens=max_new_tokens,
+            do_sample=False,
+            use_cache=True,
+        )
+
+    prompt_length = int(inputs["input_ids"].shape[-1])
+    trimmed = generated[:, prompt_length:]
+    return processor.batch_decode(
+        trimmed,
+        skip_special_tokens=True,
+        clean_up_tokenization_spaces=False,
+    )[0]
+
+
+def last_json_value(text: str, expected_type):
+    decoder = json.JSONDecoder()
+    values = []
+
+    for index, char in enumerate(text):
+        if char not in "[{":
+            continue
+        try:
+            value, _end = decoder.raw_decode(text[index:])
+        except Exception:
+            continue
+        if isinstance(value, expected_type):
+            values.append(value)
+
+    if values:
+        return values[-1]
+
+    raise RuntimeError(
+        "Qwen3-VL hat keine auswertbare JSON-Antwort geliefert. "
+        f"Antwortanfang: {text[:300]!r}"
+    )
+
+
+def normalize_qwen_label(raw: str) -> str:
+    value = " ".join(str(raw).strip().lower().split())
+    value = value.strip(" .,:;!?\"'()[]{}")
+
+    for article in ("a ", "an ", "the "):
+        if value.startswith(article):
+            value = value[len(article):].strip()
+
+    aliases = {
+        "human": "person",
+        "man": "person",
+        "woman": "person",
+        "boy": "person",
+        "girl": "person",
+        "child": "person",
+        "adult": "person",
+        "puppy": "dog",
+        "puppy dog": "dog",
+        "canine": "dog",
+        "kitten": "cat",
+        "feline": "cat",
+        "teddy": "teddy bear",
+        "stuffed bear": "teddy bear",
+        "plush bear": "teddy bear",
+        "stuffed animal": "plush toy",
+        "stuffed toy": "plush toy",
+        "mobile phone": "cell phone",
+        "smartphone": "cell phone",
+        "motorbike": "motorcycle",
+        "sofa": "couch",
+    }
+    return aliases.get(value, value)
+
+
+def qwen_detection_regions(
+    image,
+    tile_size: int = 1600,
+    overlap_fraction: float = 0.22,
+    max_tiles: int = 12,
+) -> list[tuple[int, int, int, int, str]]:
+    width, height = image.size
+    regions: list[tuple[int, int, int, int, str]] = [
+        (0, 0, width, height, "whole-image")
+    ]
+
+    if max(width, height) <= 1800:
+        return regions
+
+    tile_width = min(tile_size, width)
+    tile_height = min(tile_size, height)
+    step_x = max(512, int(tile_width * (1.0 - overlap_fraction)))
+    step_y = max(512, int(tile_height * (1.0 - overlap_fraction)))
+
+    def starts(length: int, tile: int, step: int) -> list[int]:
+        if length <= tile:
+            return [0]
+        values = list(range(0, max(1, length - tile + 1), step))
+        end = length - tile
+        if not values or values[-1] != end:
+            values.append(end)
+        return sorted(set(values))
+
+    tile_regions = []
+    for top in starts(height, tile_height, step_y):
+        for left in starts(width, tile_width, step_x):
+            tile_regions.append((
+                left,
+                top,
+                min(width, left + tile_width),
+                min(height, top + tile_height),
+                "tile",
+            ))
+
+    # Bei sehr großen Bildern werden gleichmäßig verteilte Kacheln gewählt,
+    # statt hunderte Durchläufe zu erzeugen.
+    if len(tile_regions) > max_tiles:
+        if max_tiles == 1:
+            tile_regions = [tile_regions[len(tile_regions) // 2]]
+        else:
+            indices = [
+                round(index * (len(tile_regions) - 1) / (max_tiles - 1))
+                for index in range(max_tiles)
+            ]
+            tile_regions = [tile_regions[index] for index in sorted(set(indices))]
+
+    regions.extend(tile_regions)
+    return regions
+
+
+def qwen_bbox_to_pixels(
+    bbox,
+    region_width: int,
+    region_height: int,
+) -> list[float] | None:
+    if not isinstance(bbox, list) or len(bbox) != 4:
+        return None
+
+    try:
+        values = [float(value) for value in bbox]
+    except Exception:
+        return None
+
+    if not all(math.isfinite(value) for value in values):
+        return None
+
+    # Qwen3-VL-Grounding wird auf relative 0..1000-Koordinaten gepromptet.
+    # Falls es trotzdem Pixelkoordinaten >1000 liefert, werden diese robust
+    # als lokale Pixelkoordinaten interpretiert.
+    if max(values) <= 1000.0 and min(values) >= -10.0:
+        x1 = values[0] / 1000.0 * region_width
+        y1 = values[1] / 1000.0 * region_height
+        x2 = values[2] / 1000.0 * region_width
+        y2 = values[3] / 1000.0 * region_height
+    else:
+        x1, y1, x2, y2 = values
+
+    x1 = max(0.0, min(float(region_width), x1))
+    y1 = max(0.0, min(float(region_height), y1))
+    x2 = max(0.0, min(float(region_width), x2))
+    y2 = max(0.0, min(float(region_height), y2))
+
+    if x2 <= x1 + 2.0 or y2 <= y1 + 2.0:
+        return None
+
+    return [x1, y1, x2, y2]
+
+
+def qwen_discover_region(image, region_name: str) -> list[dict]:
+    prompt = """
+Inspect this image extremely carefully and locate every clearly visible physical
+object. This is an archival image-indexing task where false positives are more
+harmful than omissions.
+
+Important rules:
+- Work independently; do not assume any COCO class list.
+- Include ordinary objects, animals, vehicles, equipment and people.
+- Do not output scene concepts such as "outdoors", "forest", "grass" or "sky".
+- Never infer an object merely because a texture or shape resembles it.
+- Be especially conservative with bird, teddy bear, plush toy and small distant
+  objects. A dog is not a teddy bear. Leaves, signs and patterns are not birds.
+- Use a short singular English noun as label.
+- bbox_2d must be [x1,y1,x2,y2] in relative coordinates 0..1000 for THIS image.
+- certainty must be "high" or "medium". Omit low-certainty guesses.
+- Return every separate instance as its own item.
+
+Return ONLY a JSON array:
+[
+  {"label":"dog","bbox_2d":[100,120,450,800],"certainty":"high"}
+]
+If no physical object can be identified, return [].
+""".strip()
+
+    output = qwen3vl_generate(image, prompt, max_new_tokens=4096)
+    raw = last_json_value(output, list)
+    result: list[dict] = []
+
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+
+        label = normalize_qwen_label(item.get("label", ""))
+        certainty = str(item.get("certainty", "")).strip().lower()
+        box = qwen_bbox_to_pixels(item.get("bbox_2d"), image.width, image.height)
+
+        if (
+            not label
+            or label in ("none", "unknown", "object")
+            or certainty not in ("high", "medium")
+            or box is None
+        ):
+            continue
+
+        result.append({
+            "label": label,
+            "box": box,
+            "certainty": certainty,
+            "source": region_name,
+        })
+
+    return result
+
+
+def qwen_add_global_candidate(
+    candidates: list[dict],
+    label: str,
+    box: list[float],
+    source: str,
+    certainty: str,
+) -> None:
+    label = normalize_qwen_label(label)
+    if not label or label in ("none", "unknown", "object"):
+        return
+
+    for existing in candidates:
+        if existing["label"] != label:
+            continue
+        if xyxy_iou(existing["box"], box) < 0.45:
+            continue
+
+        # Mehrere unabhängige Sichtfenster desselben Modells erhöhen die
+        # Evidenz, ohne automatisch einen Treffer zu bestätigen.
+        existing["votes"] += 1
+        existing["sources"].add(source)
+
+        if certainty == "high" and existing["certainty"] != "high":
+            existing["certainty"] = "high"
+
+        # Die größere Box wird beibehalten, damit die spätere Crop-Prüfung
+        # ausreichend Objektkontext erhält.
+        old_area = (
+            (existing["box"][2] - existing["box"][0])
+            * (existing["box"][3] - existing["box"][1])
+        )
+        new_area = (box[2] - box[0]) * (box[3] - box[1])
+        if new_area > old_area:
+            existing["box"] = box
+        return
+
+    candidates.append({
+        "label": label,
+        "box": box,
+        "certainty": certainty,
+        "votes": 1,
+        "sources": {source},
+    })
+
+
+def qwen_annotated_candidate_crop(
+    image,
+    box: list[float],
+    margin_fraction: float = 0.65,
+):
+    x1, y1, x2, y2 = [float(value) for value in box]
+    width = max(1.0, x2 - x1)
+    height = max(1.0, y2 - y1)
+    margin_x = max(48.0, width * margin_fraction)
+    margin_y = max(48.0, height * margin_fraction)
+
+    left = max(0, int(math.floor(x1 - margin_x)))
+    top = max(0, int(math.floor(y1 - margin_y)))
+    right = min(image.width, int(math.ceil(x2 + margin_x)))
+    bottom = min(image.height, int(math.ceil(y2 + margin_y)))
+
+    crop = image.crop((left, top, right, bottom)).copy()
+    local = [
+        int(round(x1 - left)),
+        int(round(y1 - top)),
+        int(round(x2 - left)),
+        int(round(y2 - top)),
+    ]
+
+    draw = ImageDraw.Draw(crop)
+    stroke = max(3, int(round(min(crop.size) / 140.0)))
+    for offset in range(stroke):
+        draw.rectangle(
+            (
+                local[0] - offset,
+                local[1] - offset,
+                local[2] + offset,
+                local[3] + offset,
+            ),
+            outline=(255, 0, 0),
+            width=1,
+        )
+
+    return crop
+
+
+def qwen_presence_check(crop, candidate_label: str) -> dict:
+    prompt = f"""
+The red rectangle marks a candidate object. Verify it conservatively.
+
+Candidate label: {candidate_label}
+
+Decide whether the red rectangle clearly contains a real {candidate_label}.
+Do not accept resemblance, background texture, printed pictures, shadows or
+ambiguous shapes. In particular, do not call a dog a teddy bear and do not call
+foliage, signs or random details a bird.
+
+Return ONLY one JSON object:
+{{"present":true,"label":"{candidate_label}","confidence":"high"}}
+
+Rules:
+- present is true only when the object is visibly identifiable in the red box.
+- If false, label should be the actual clearly identifiable object, or "none".
+- confidence is "high", "medium" or "low".
+""".strip()
+
+    output = qwen3vl_generate(crop, prompt, max_new_tokens=768)
+    value = last_json_value(output, dict)
+
+    return {
+        "present": bool(value.get("present", False)),
+        "label": normalize_qwen_label(value.get("label", "")),
+        "confidence": str(value.get("confidence", "")).strip().lower(),
+    }
+
+
+def qwen_blind_box_classification(crop) -> dict:
+    prompt = """
+Ignore any previous classification. Look only at the object inside the red
+rectangle and identify what it actually is.
+
+Be conservative. If the rectangle does not contain one clearly identifiable
+physical object, answer "none". Do not turn dogs into teddy bears and do not
+invent birds from foliage, signs or background patterns.
+
+Return ONLY one JSON object:
+{"label":"dog","confidence":"high"}
+
+Use a short singular English noun. confidence must be "high", "medium" or "low".
+""".strip()
+
+    output = qwen3vl_generate(crop, prompt, max_new_tokens=768)
+    value = last_json_value(output, dict)
+    return {
+        "label": normalize_qwen_label(value.get("label", "")),
+        "confidence": str(value.get("confidence", "")).strip().lower(),
+    }
+
+
+def legacy_object_hints(hints: list[dict], image) -> list[dict]:
+    result = []
+
+    for raw in hints:
+        if not isinstance(raw, dict):
+            continue
+
+        label = normalize_qwen_label(raw.get("label", ""))
+        try:
+            x = float(raw.get("x", 0.0))
+            y = float(raw.get("y", 0.0))
+            width = float(raw.get("width", 0.0))
+            height = float(raw.get("height", 0.0))
+            score = float(raw.get("score", 0.0))
+        except Exception:
+            continue
+
+        if (
+            not label
+            or width <= 2.0
+            or height <= 2.0
+            or not math.isfinite(score)
+            or score < 0.35
+        ):
+            continue
+
+        box = [
+            max(0.0, x),
+            max(0.0, y),
+            min(float(image.width), x + width),
+            min(float(image.height), y + height),
+        ]
+        if box[2] <= box[0] + 2.0 or box[3] <= box[1] + 2.0:
+            continue
+
+        result.append({
+            "label": label,
+            "box": box,
+            "certainty": "medium",
+            "source": "legacy-detector-hint",
+        })
+
+    return result
+
+
+def detect_qwen3vl_objects(file_path: str, hints: list[dict] | None = None) -> dict:
+    if Image is None or ImageOps is None:
+        raise RuntimeError(
+            "Pillow fehlt. Einmal 'npm.cmd run setup:ai' ausführen."
+        )
+
+    try:
+        with Image.open(file_path) as source:
+            source.load()
+            image = ImageOps.exif_transpose(source).convert("RGB")
+    except Exception as exc:
+        raise RuntimeError(
+            f"Bild konnte für Qwen3-VL nicht gelesen werden: {exc}"
+        ) from exc
+
+    candidates: list[dict] = []
+    region_count = 0
+
+    # 1) Qwen sucht selbstständig im Gesamtbild UND in hochauflösenden Kacheln.
+    for left, top, right, bottom, kind in qwen_detection_regions(image):
+        region_count += 1
+        region = image.crop((left, top, right, bottom))
+        region_name = (
+            "qwen-whole-image"
+            if kind == "whole-image"
+            else f"qwen-tile-{left}-{top}-{right}-{bottom}"
+        )
+
+        for found in qwen_discover_region(region, region_name):
+            local = found["box"]
+            global_box = [
+                float(local[0]) + left,
+                float(local[1]) + top,
+                float(local[2]) + left,
+                float(local[3]) + top,
+            ]
+            qwen_add_global_candidate(
+                candidates,
+                str(found["label"]),
+                global_box,
+                region_name,
+                str(found["certainty"]),
+            )
+
+    # 2) Alte schnelle Detektoren dürfen zusätzliche Kandidaten vorschlagen,
+    #    aber nichts mehr selbst bestätigen. So geht Recall nicht verloren.
+    for hint in legacy_object_hints(hints or [], image):
+        qwen_add_global_candidate(
+            candidates,
+            str(hint["label"]),
+            list(hint["box"]),
+            str(hint["source"]),
+            str(hint["certainty"]),
+        )
+
+    verified: list[dict] = []
+    rejected = 0
+
+    # 3) JEDER Kandidat wird mit einem eigenen Ausschnitt zweimal neu geprüft:
+    #    einmal gezielt und einmal blind, damit der ursprüngliche Klassenname
+    #    das Modell nicht einfach bestätigt.
+    for candidate in candidates:
+        crop = qwen_annotated_candidate_crop(image, candidate["box"])
+
+        presence = qwen_presence_check(crop, str(candidate["label"]))
+        blind = qwen_blind_box_classification(crop)
+
+        candidate_label = normalize_qwen_label(candidate["label"])
+        presence_label = normalize_qwen_label(presence["label"])
+        blind_label = normalize_qwen_label(blind["label"])
+
+        labels_agree = (
+            presence["present"]
+            and presence_label == candidate_label
+            and blind_label == candidate_label
+        )
+
+        high_high = (
+            presence["confidence"] == "high"
+            and blind["confidence"] == "high"
+        )
+        repeated_medium = (
+            int(candidate["votes"]) >= 2
+            and presence["confidence"] in ("high", "medium")
+            and blind["confidence"] in ("high", "medium")
+        )
+
+        if not labels_agree or not (high_high or repeated_medium):
+            rejected += 1
+            continue
+
+        # Hund/Katze bleiben absichtlich Sache der bewährten Haustierpipeline.
+        # Qwen dient hier nur dazu, Fehlklassen wie "teddy bear" zu verwerfen.
+        if candidate_label in ("dog", "cat"):
+            continue
+
+        x1, y1, x2, y2 = [float(value) for value in candidate["box"]]
+        class_id = (
+            int(COCO_CLASS_NAMES.index(candidate_label))
+            if candidate_label in COCO_CLASS_NAMES
+            else -1
+        )
+
+        score = 0.98 if high_high else 0.90
+        verified.append({
+            "label": candidate_label,
+            "classId": class_id,
+            "score": score,
+            "x": x1,
+            "y": y1,
+            "width": x2 - x1,
+            "height": y2 - y1,
+            "agreementCount": 2 + min(3, int(candidate["votes"])),
+            "sources": sorted({
+                QWEN3VL_MODEL_VERSION,
+                *candidate["sources"],
+                "qwen-crop-presence-check",
+                "qwen-blind-box-classification",
+            }),
+        })
+
+    # Gleiche Qwen-Funde aus überlappenden Kacheln nach der Verifikation noch
+    # einmal zusammenführen.
+    verified.sort(key=lambda item: float(item["score"]), reverse=True)
+    final: list[dict] = []
+
+    for item in verified:
+        box = [
+            float(item["x"]),
+            float(item["y"]),
+            float(item["x"]) + float(item["width"]),
+            float(item["y"]) + float(item["height"]),
+        ]
+
+        duplicate = False
+        for existing in final:
+            if existing["label"] != item["label"]:
+                continue
+            existing_box = [
+                float(existing["x"]),
+                float(existing["y"]),
+                float(existing["x"]) + float(existing["width"]),
+                float(existing["y"]) + float(existing["height"]),
+            ]
+            if xyxy_iou(box, existing_box) >= 0.50:
+                existing["agreementCount"] = max(
+                    int(existing["agreementCount"]),
+                    int(item["agreementCount"]),
+                )
+                existing["sources"] = sorted(set(
+                    list(existing["sources"]) + list(item["sources"])
+                ))
+                duplicate = True
+                break
+
+        if not duplicate:
+            final.append(item)
+
+    return {
+        "module": "object-detect-qwen3vl-v1",
+        "detector": QWEN3VL_MODEL_VERSION,
+        "imageWidth": int(image.width),
+        "imageHeight": int(image.height),
+        "regionCount": region_count,
+        "candidateCount": len(candidates),
+        "verifiedCount": len(final),
+        "rejectedCount": rejected,
+        "objects": final,
+    }
 
 
 def rfdetr_runtime():
@@ -2576,6 +3264,18 @@ def handle(message: dict) -> bool:
         respond(
             request_id,
             result=detect_verified_objects(file_path),
+        )
+        return True
+
+    if method == "detect_qwen3vl_objects":
+        file_path = require_file(payload)
+        verify_expected_size(file_path, payload)
+        hints = payload.get("hints") or []
+        if not isinstance(hints, list):
+            raise RuntimeError("Objekthinweise für Qwen3-VL sind ungültig.")
+        respond(
+            request_id,
+            result=detect_qwen3vl_objects(file_path, hints),
         )
         return True
 
