@@ -1336,19 +1336,32 @@ def dog_reid_session():
         )
 
     if _onnxruntime_module is None:
+        started = time.perf_counter()
+        dev_log("DOG_REID_ONNXRUNTIME_IMPORT_BEGIN")
         try:
             import onnxruntime as runtime
         except Exception as exc:
+            dev_log(
+                "DOG_REID_ONNXRUNTIME_IMPORT_ERROR",
+                elapsedMs=round((time.perf_counter() - started) * 1000, 1),
+                error=str(exc),
+            )
             raise RuntimeError(
                 "ONNX Runtime konnte für Dog-ReID nicht geladen werden: "
                 f"{exc}"
             ) from exc
 
         _onnxruntime_module = runtime
+        dev_log(
+            "DOG_REID_ONNXRUNTIME_IMPORT_OK",
+            elapsedMs=round((time.perf_counter() - started) * 1000, 1),
+        )
 
     runtime = _onnxruntime_module
 
     if _dog_reid_session is None:
+        started = time.perf_counter()
+        dev_log("DOG_REID_MODEL_LOAD_BEGIN", model=DOG_REID_MODEL)
         options = runtime.SessionOptions()
         options.intra_op_num_threads = 4
         options.inter_op_num_threads = 1
@@ -1357,6 +1370,10 @@ def dog_reid_session():
             DOG_REID_MODEL,
             sess_options=options,
             providers=["CPUExecutionProvider"],
+        )
+        dev_log(
+            "DOG_REID_MODEL_LOAD_OK",
+            elapsedMs=round((time.perf_counter() - started) * 1000, 1),
         )
 
     return _dog_reid_session
@@ -1839,6 +1856,8 @@ def ensure_torch_transformers() -> None:
             + _torch_transformers_import_error
         )
 
+    started = time.perf_counter()
+    dev_log("TORCH_TRANSFORMERS_IMPORT_BEGIN")
     try:
         import torch as torch_module
         from transformers import AutoModel as AutoModelClass
@@ -1847,8 +1866,18 @@ def ensure_torch_transformers() -> None:
         torch = torch_module
         AutoModel = AutoModelClass
         AutoProcessor = AutoProcessorClass
+        dev_log(
+            "TORCH_TRANSFORMERS_IMPORT_OK",
+            elapsedMs=round((time.perf_counter() - started) * 1000, 1),
+            torchVersion=getattr(torch_module, "__version__", None),
+        )
     except Exception as exc:
         _torch_transformers_import_error = str(exc)
+        dev_log(
+            "TORCH_TRANSFORMERS_IMPORT_ERROR",
+            elapsedMs=round((time.perf_counter() - started) * 1000, 1),
+            error=str(exc),
+        )
         raise RuntimeError(
             "PyTorch/Transformers konnte für SigLIP2 nicht geladen werden: "
             + str(exc)
@@ -1863,16 +1892,27 @@ def release_torch_memory() -> None:
 
 def unload_siglip2() -> None:
     global _siglip2_model, _siglip2_processor, _siglip2_coco_text_features
+    had_model = _siglip2_model is not None or _siglip2_processor is not None
+    if had_model:
+        dev_log("SIGLIP2_UNLOAD_BEGIN")
     _siglip2_model = None
     _siglip2_processor = None
     _siglip2_coco_text_features = None
     release_torch_memory()
+    if had_model:
+        dev_log("SIGLIP2_UNLOAD_DONE")
 
 
 def unload_qwen3vl() -> None:
     global _qwen_server_process, _qwen_server_port, _qwen_server_log_handle
 
     process = _qwen_server_process
+    if process is not None:
+        dev_log(
+            "QWEN_SERVER_UNLOAD_BEGIN",
+            serverPid=process.pid,
+            running=process.poll() is None,
+        )
     _qwen_server_process = None
     _qwen_server_port = None
 
@@ -1894,6 +1934,8 @@ def unload_qwen3vl() -> None:
         _qwen_server_log_handle = None
 
     release_torch_memory()
+    if process is not None:
+        dev_log("QWEN_SERVER_UNLOAD_DONE", serverPid=process.pid)
 
 
 def prepare_for_qwen() -> None:
@@ -1928,10 +1970,16 @@ def siglip2_runtime():
         )
 
     if _siglip2_processor is None:
+        started = time.perf_counter()
+        dev_log("SIGLIP2_PROCESSOR_LOAD_BEGIN")
         _siglip2_processor = AutoProcessor.from_pretrained(
             SIGLIP2_MODEL_DIR,
             local_files_only=True,
             use_fast=False,
+        )
+        dev_log(
+            "SIGLIP2_PROCESSOR_LOAD_OK",
+            elapsedMs=round((time.perf_counter() - started) * 1000, 1),
         )
 
     if _siglip2_model is None:
@@ -1941,12 +1989,18 @@ def siglip2_runtime():
 
         # Genauigkeit ist hier wichtiger als Laufzeit: kein INT8/INT4 und keine
         # aggressive Quantisierung. FP32 ist auch auf CPU reproduzierbar.
+        started = time.perf_counter()
+        dev_log("SIGLIP2_MODEL_LOAD_BEGIN", model=SIGLIP2_MODEL_VERSION)
         _siglip2_model = AutoModel.from_pretrained(
             SIGLIP2_MODEL_DIR,
             local_files_only=True,
             torch_dtype=torch.float32,
         )
         _siglip2_model.eval()
+        dev_log(
+            "SIGLIP2_MODEL_LOAD_OK",
+            elapsedMs=round((time.perf_counter() - started) * 1000, 1),
+        )
 
     return _siglip2_processor, _siglip2_model
 
@@ -2163,6 +2217,11 @@ def qwen3vl_runtime() -> int:
         and _qwen_server_port is not None
         and qwen_server_healthy(int(_qwen_server_port))
     ):
+        dev_log(
+            "QWEN_SERVER_REUSE",
+            serverPid=_qwen_server_process.pid,
+            port=int(_qwen_server_port),
+        )
         return int(_qwen_server_port)
 
     unload_qwen3vl()
@@ -2198,6 +2257,16 @@ def qwen3vl_runtime() -> int:
     if os.name == "nt":
         creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
+    server_started = time.perf_counter()
+    dev_log(
+        "QWEN_SERVER_START_BEGIN",
+        executable=executable,
+        port=port,
+        context=QWEN3VL_CONTEXT_SIZE,
+        model=QWEN3VL_MODEL_FILE,
+        mmproj=QWEN3VL_MMPROJ_FILE,
+    )
+
     _qwen_server_process = subprocess.Popen(
         args,
         stdin=subprocess.DEVNULL,
@@ -2206,11 +2275,21 @@ def qwen3vl_runtime() -> int:
         creationflags=creationflags,
     )
     _qwen_server_port = port
+    dev_log(
+        "QWEN_SERVER_PROCESS_SPAWNED",
+        serverPid=_qwen_server_process.pid,
+        elapsedMs=round((time.perf_counter() - server_started) * 1000, 1),
+    )
 
     deadline = time.monotonic() + 240.0
     while time.monotonic() < deadline:
         if _qwen_server_process.poll() is not None:
             detail = qwen_server_log_tail()
+            dev_log(
+                "QWEN_SERVER_START_ERROR",
+                elapsedMs=round((time.perf_counter() - server_started) * 1000, 1),
+                detail=detail[-1200:],
+            )
             unload_qwen3vl()
             raise RuntimeError(
                 "llama.cpp konnte Qwen3-VL nicht starten."
@@ -2218,11 +2297,22 @@ def qwen3vl_runtime() -> int:
             )
 
         if qwen_server_healthy(port, timeout=1.0):
+            dev_log(
+                "QWEN_SERVER_READY",
+                serverPid=_qwen_server_process.pid,
+                port=port,
+                elapsedMs=round((time.perf_counter() - server_started) * 1000, 1),
+            )
             return port
 
         time.sleep(0.75)
 
     detail = qwen_server_log_tail()
+    dev_log(
+        "QWEN_SERVER_START_TIMEOUT",
+        elapsedMs=round((time.perf_counter() - server_started) * 1000, 1),
+        detail=detail[-1200:],
+    )
     unload_qwen3vl()
     raise RuntimeError(
         "llama.cpp hat Qwen3-VL nicht innerhalb von 240 Sekunden geladen."
