@@ -77,6 +77,8 @@ const petFusionStageState = document.querySelector<HTMLSpanElement>("#petFusionS
 const petFusionStageCounts = document.querySelector<HTMLElement>("#petFusionStageCounts")!;
 const petEmbeddingStageState = document.querySelector<HTMLSpanElement>("#petEmbeddingStageState")!;
 const petEmbeddingStageCounts = document.querySelector<HTMLElement>("#petEmbeddingStageCounts")!;
+const semanticStageState = document.querySelector<HTMLSpanElement>("#semanticStageState")!;
+const semanticStageCounts = document.querySelector<HTMLElement>("#semanticStageCounts")!;
 const analysisErrorsButton = document.querySelector<HTMLButtonElement>("#analysisErrorsButton")!;
 const analysisErrorCount = document.querySelector<HTMLSpanElement>("#analysisErrorCount")!;
 const analysisErrorDialog = document.querySelector<HTMLDialogElement>("#analysisErrorDialog")!;
@@ -93,6 +95,8 @@ const searchPanel = document.querySelector<HTMLElement>("#searchPanel")!;
 const searchPersons = document.querySelector<HTMLDivElement>("#searchPersons")!;
 const searchPets = document.querySelector<HTMLDivElement>("#searchPets")!;
 const searchObjects = document.querySelector<HTMLDivElement>("#searchObjects")!;
+const searchSemanticQuery = document.querySelector<HTMLInputElement>("#searchSemanticQuery")!;
+const searchSemanticMinProbability = document.querySelector<HTMLInputElement>("#searchSemanticMinProbability")!;
 const searchMinDogs = document.querySelector<HTMLInputElement>("#searchMinDogs")!;
 const searchMinCats = document.querySelector<HTMLInputElement>("#searchMinCats")!;
 const runSearchButton = document.querySelector<HTMLButtonElement>("#runSearch")!;
@@ -111,6 +115,7 @@ let lastFaceEmbeddingDone = -1;
 let lastPetDone = -1;
 let lastPetFusionDone = -1;
 let lastPetEmbeddingDone = -1;
+let lastSemanticDone = -1;
 let analysisRefreshTimer: number | null = null;
 let searchFacetsSourceId: number | null = null;
 
@@ -193,6 +198,11 @@ function renderPipelineStatus(status: PipelineStatus): void {
     petEmbeddingStageCounts,
     status.petEmbeddings
   );
+  renderStage(
+    semanticStageState,
+    semanticStageCounts,
+    status.semanticEmbeddings
+  );
 
   const visualDataChanged =
     status.thumbnails.done !== lastThumbnailDone ||
@@ -201,7 +211,8 @@ function renderPipelineStatus(status: PipelineStatus): void {
     status.faceEmbeddings.done !== lastFaceEmbeddingDone ||
     status.petDetection.done !== lastPetDone ||
     status.petFusion.done !== lastPetFusionDone ||
-    status.petEmbeddings.done !== lastPetEmbeddingDone;
+    status.petEmbeddings.done !== lastPetEmbeddingDone ||
+    status.semanticEmbeddings.done !== lastSemanticDone;
 
   lastThumbnailDone = status.thumbnails.done;
   lastMetadataDone = status.imageMetadata.done;
@@ -210,6 +221,7 @@ function renderPipelineStatus(status: PipelineStatus): void {
   lastPetDone = status.petDetection.done;
   lastPetFusionDone = status.petFusion.done;
   lastPetEmbeddingDone = status.petEmbeddings.done;
+  lastSemanticDone = status.semanticEmbeddings.done;
 
   const stages = [
     status.technical,
@@ -219,7 +231,8 @@ function renderPipelineStatus(status: PipelineStatus): void {
     status.faceEmbeddings,
     status.petDetection,
     status.petFusion,
-    status.petEmbeddings
+    status.petEmbeddings,
+    status.semanticEmbeddings
   ];
 
   const totalIssues = stages.reduce(
@@ -458,7 +471,12 @@ function currentSearchFilter(): SearchFilter {
       .filter((value) => Number.isInteger(value) && value > 0),
     objectLabels: checkedValues(searchObjects),
     minDogs: boundedCount(searchMinDogs),
-    minCats: boundedCount(searchMinCats)
+    minCats: boundedCount(searchMinCats),
+    semanticQuery: searchSemanticQuery.value.trim(),
+    semanticMinProbability: Math.max(
+      0,
+      Math.min(0.99, (Number(searchSemanticMinProbability.value) || 0) / 100)
+    )
   };
 }
 
@@ -468,7 +486,8 @@ function searchCriterionCount(filter: SearchFilter): number {
     filter.petIds.length +
     filter.objectLabels.length +
     (filter.minDogs > 0 ? 1 : 0) +
-    (filter.minCats > 0 ? 1 : 0)
+    (filter.minCats > 0 ? 1 : 0) +
+    (filter.semanticQuery ? 1 : 0)
   );
 }
 
@@ -581,6 +600,8 @@ function clearSearchControls(): void {
   }
   searchMinDogs.value = "0";
   searchMinCats.value = "0";
+  searchSemanticQuery.value = "";
+  searchSemanticMinProbability.value = "65";
 }
 
 function setView(view: CatalogView): void {
@@ -759,6 +780,24 @@ function renderRows(rows: MediaRecord[], emptyText = "Noch keine Medien katalogi
       motifBadge.title =
         "Ensemble aus NanoDet + YOLOX-S: " + motifLabels.join(", ");
       stateCell.appendChild(motifBadge);
+    }
+
+    if (row.availability === "AVAILABLE" && row.semanticReady) {
+      const semanticBadge = document.createElement("span");
+      semanticBadge.className = "badge semantic";
+
+      if (row.semanticScore !== null) {
+        semanticBadge.textContent =
+          "Semantik " + Math.round(row.semanticScore * 100).toLocaleString("de-DE") + " %";
+        semanticBadge.title =
+          "SigLIP2-Suchscore für den eingegebenen semantischen Inhalt · " +
+          (row.semanticModel ?? "SigLIP2");
+      } else {
+        semanticBadge.textContent = "Semantik bereit";
+        semanticBadge.title = row.semanticModel ?? "SigLIP2-Semantikanalyse abgeschlossen";
+      }
+
+      stateCell.appendChild(semanticBadge);
     }
 
     const actionCell = document.createElement("td");
@@ -1781,7 +1820,8 @@ const analysisModuleLabels: Record<string, string> = {
   "pet-detect-nanodet-v1": "Haustierdetektor NanoDet",
   "pet-detect-yolox-v1": "Haustierdetektor YOLOX-S",
   "pet-fuse-ensemble-v1": "Haustier-Ergebnisse fusionieren",
-  "pet-embed-dogreid-v1": "Individuelle Hundemerkmale"
+  "pet-embed-dogreid-v1": "Individuelle Hundemerkmale",
+  "semantic-embed-siglip2-v1": "Semantikanalyse (SigLIP2 So400m NaFlex)"
 };
 
 function analysisModuleLabel(module: string): string {
@@ -2284,6 +2324,12 @@ runSearchButton.addEventListener("click", () => {
   });
 });
 
+searchSemanticQuery.addEventListener("keydown", (event) => {
+  if (event.key !== "Enter") return;
+  event.preventDefault();
+  runSearchButton.click();
+});
+
 resetSearchButton.addEventListener("click", () => {
   const sourceId = selectedSourceId();
   clearSearchControls();
@@ -2343,7 +2389,8 @@ void window.imageSorter.analysis
       faceEmbeddings: { pending: 0, running: 0, done: 0, failed: 0, unavailable: 0 },
       petDetection: { pending: 0, running: 0, done: 0, failed: 0, unavailable: 0 },
       petFusion: { pending: 0, running: 0, done: 0, failed: 0, unavailable: 0 },
-      petEmbeddings: { pending: 0, running: 0, done: 0, failed: 0, unavailable: 0 }
+      petEmbeddings: { pending: 0, running: 0, done: 0, failed: 0, unavailable: 0 },
+      semanticEmbeddings: { pending: 0, running: 0, done: 0, failed: 0, unavailable: 0 }
     });
   });
 
