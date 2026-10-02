@@ -93,7 +93,7 @@ QWEN3VL_MMPROJ_FILE = os.path.join(
     "mmproj-Qwen3VL-8B-Thinking-F16.gguf",
 )
 QWEN3VL_MODEL_VERSION = (
-    "Qwen3-VL-8B-Thinking GGUF Q8_0 + mmproj F16 open-vocabulary v2"
+    "Qwen3-VL-8B-Thinking GGUF Q8_0 + mmproj F16 structured non-thinking v3"
 )
 QWEN3VL_CONTEXT_SIZE = 16384
 
@@ -2191,9 +2191,20 @@ def image_data_uri(image) -> str:
     return "data:image/png;base64," + encoded
 
 
-def qwen3vl_generate(image, prompt: str, max_new_tokens: int) -> str:
+def qwen3vl_generate(
+    image,
+    prompt: str,
+    max_new_tokens: int,
+    progress_request_id: str | None = None,
+    progress_label: str = "Qwen3-VL",
+) -> str:
     port = qwen3vl_runtime()
 
+    # Für diese streng strukturierte Objektaufgabe brauchen wir keine langen
+    # sichtbaren Denkprotokolle. Das gleiche 8B-Modell bleibt aktiv, aber die
+    # Chat-Vorlage wird auf Non-Thinking gesetzt. Das reduziert Laufzeit und
+    # verhindert, dass tausende Reasoning-Tokens vor dem eigentlichen JSON
+    # erzeugt werden.
     payload = {
         "model": "Qwen3-VL-8B-Thinking",
         "messages": [
@@ -2208,11 +2219,12 @@ def qwen3vl_generate(image, prompt: str, max_new_tokens: int) -> str:
                 ],
             }
         ],
-        "temperature": 1.0,
-        "top_p": 0.95,
+        "temperature": 0.7,
+        "top_p": 0.8,
         "top_k": 20,
         "max_tokens": int(max_new_tokens),
-        "stream": False,
+        "stream": True,
+        "chat_template_kwargs": {"enable_thinking": False},
     }
 
     body = json.dumps(payload).encode("utf-8")
@@ -2223,9 +2235,64 @@ def qwen3vl_generate(image, prompt: str, max_new_tokens: int) -> str:
         method="POST",
     )
 
+    content_parts: list[str] = []
+    reasoning_parts: list[str] = []
+    fallback_lines: list[str] = []
+    streamed = False
+    chunk_count = 0
+    last_progress_at = time.monotonic()
+
     try:
-        with urllib_request.urlopen(request, timeout=7200.0) as response:
-            raw = response.read().decode("utf-8", errors="replace")
+        # Das ist der Watchdog für EINEN Modellaufruf. Durch Streaming sehen
+        # wir fortlaufend Aktivität. 30 Minuten ohne ein einziges Datenstück
+        # gelten als echter Hänger und nicht als "nur langsam".
+        with urllib_request.urlopen(request, timeout=1800.0) as response:
+            for raw_line in response:
+                line = raw_line.decode("utf-8", errors="replace").strip()
+                if not line:
+                    continue
+
+                if not line.startswith("data:"):
+                    fallback_lines.append(line)
+                    continue
+
+                streamed = True
+                data = line[5:].strip()
+                if data == "[DONE]":
+                    break
+                if not data:
+                    continue
+
+                try:
+                    event = json.loads(data)
+                except Exception:
+                    continue
+
+                choices = event.get("choices") or []
+                if not choices:
+                    continue
+
+                delta = choices[0].get("delta") or {}
+                content = delta.get("content")
+                reasoning = delta.get("reasoning_content")
+
+                if isinstance(content, str) and content:
+                    content_parts.append(content)
+                if isinstance(reasoning, str) and reasoning:
+                    reasoning_parts.append(reasoning)
+
+                chunk_count += 1
+                now = time.monotonic()
+                if now - last_progress_at >= 15.0:
+                    report_progress(
+                        progress_request_id,
+                        (
+                            f"Qwen3-VL: {progress_label} · Modellantwort läuft "
+                            f"({chunk_count} Datenblöcke)"
+                        ),
+                        phase="generation",
+                    )
+                    last_progress_at = now
     except urllib_error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")
         raise RuntimeError(
@@ -2236,6 +2303,20 @@ def qwen3vl_generate(image, prompt: str, max_new_tokens: int) -> str:
             f"llama.cpp/Qwen3-VL Anfrage fehlgeschlagen: {exc}"
         ) from exc
 
+    if streamed:
+        parts = []
+        if reasoning_parts:
+            parts.append("".join(reasoning_parts))
+        if content_parts:
+            parts.append("".join(content_parts))
+        result = "\n".join(parts).strip()
+        if result:
+            return result
+        raise RuntimeError("llama.cpp/Qwen3-VL hat eine leere Streaming-Antwort geliefert.")
+
+    # Rückwärtskompatibler Fallback für llama.cpp-Builds, die trotz stream=True
+    # eine normale JSON-Antwort senden.
+    raw = "\n".join(fallback_lines).strip()
     try:
         value = json.loads(raw)
         choices = value.get("choices") or []
@@ -2442,7 +2523,13 @@ Return ONLY a JSON array:
 If no physical object can be identified, return [].
 """.strip()
 
-    output = qwen3vl_generate(image, prompt, max_new_tokens=6144)
+    output = qwen3vl_generate(
+        image,
+        prompt,
+        max_new_tokens=1536,
+        progress_request_id=progress_request_id,
+        progress_label=region_name,
+    )
     raw = last_json_value(output, list)
     result: list[dict] = []
 
@@ -2582,7 +2669,13 @@ Rules:
 - confidence is "high", "medium" or "low".
 """.strip()
 
-    output = qwen3vl_generate(crop, prompt, max_new_tokens=2048)
+    output = qwen3vl_generate(
+        crop,
+        prompt,
+        max_new_tokens=384,
+        progress_request_id=progress_request_id,
+        progress_label=f"Prüfung: {candidate_label}",
+    )
     value = last_json_value(output, dict)
 
     return {
@@ -2610,7 +2703,13 @@ Return ONLY one JSON object:
 Use a short singular English noun. confidence must be "high", "medium" or "low".
 """.strip()
 
-    output = qwen3vl_generate(crop, prompt, max_new_tokens=2048)
+    output = qwen3vl_generate(
+        crop,
+        prompt,
+        max_new_tokens=384,
+        progress_request_id=progress_request_id,
+        progress_label="Blindprüfung",
+    )
     value = last_json_value(output, dict)
     return {
         "label": normalize_qwen_label(value.get("label", "")),
