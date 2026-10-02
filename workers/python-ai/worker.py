@@ -2781,6 +2781,7 @@ def qwen_discover_region(
     region_name: str,
     progress_request_id: str | None = None,
     progress_label: str | None = None,
+    max_new_tokens: int = 1536,
 ) -> list[dict]:
     prompt = """
 Inspect this image extremely carefully and locate every clearly visible physical
@@ -2809,7 +2810,7 @@ If no physical object can be identified, return [].
     output = qwen3vl_generate(
         image,
         prompt,
-        max_new_tokens=1536,
+        max_new_tokens=max_new_tokens,
         progress_request_id=progress_request_id,
         progress_label=progress_label or region_name,
     )
@@ -2932,6 +2933,7 @@ def qwen_presence_check(
     crop,
     candidate_label: str,
     progress_request_id: str | None = None,
+    max_new_tokens: int = 384,
 ) -> dict:
     prompt = f"""
 The red rectangle marks a candidate object. Verify it conservatively.
@@ -2955,7 +2957,7 @@ Rules:
     output = qwen3vl_generate(
         crop,
         prompt,
-        max_new_tokens=384,
+        max_new_tokens=max_new_tokens,
         progress_request_id=progress_request_id,
         progress_label=f"Prüfung: {candidate_label}",
     )
@@ -2971,6 +2973,7 @@ Rules:
 def qwen_blind_box_classification(
     crop,
     progress_request_id: str | None = None,
+    max_new_tokens: int = 384,
 ) -> dict:
     prompt = """
 Ignore any previous classification. Look only at the object inside the red
@@ -2989,7 +2992,7 @@ Use a short singular English noun. confidence must be "high", "medium" or "low".
     output = qwen3vl_generate(
         crop,
         prompt,
-        max_new_tokens=384,
+        max_new_tokens=max_new_tokens,
         progress_request_id=progress_request_id,
         progress_label="Blindprüfung",
     )
@@ -3043,6 +3046,399 @@ def legacy_object_hints(hints: list[dict], image) -> list[dict]:
         })
 
     return result
+
+
+
+QWEN_BENCHMARK_PROFILES = {
+    "whole": {
+        "label": "1 · Gesamtbild",
+        "description": "Nur das Gesamtbild, keine Kacheln und keine Einzelprüfung.",
+        "tile_size": 1600,
+        "overlap_fraction": 0.0,
+        "max_tiles": 0,
+        "verification_passes": 0,
+        "discovery_tokens": 768,
+        "verification_tokens": 256,
+    },
+    "tiles4": {
+        "label": "2 · Gesamtbild + 4 Kacheln",
+        "description": "Gesamtbild plus bis zu vier Kacheln, noch ohne Crop-Prüfung.",
+        "tile_size": 2000,
+        "overlap_fraction": 0.12,
+        "max_tiles": 4,
+        "verification_passes": 0,
+        "discovery_tokens": 1024,
+        "verification_tokens": 256,
+    },
+    "single-check": {
+        "label": "3 · Bis 6 Kacheln + 1 Prüfung",
+        "description": "Gesamtbild plus bis zu sechs Kacheln und eine konservative Crop-Prüfung pro Kandidat.",
+        "tile_size": 1800,
+        "overlap_fraction": 0.18,
+        "max_tiles": 6,
+        "verification_passes": 1,
+        "discovery_tokens": 1024,
+        "verification_tokens": 256,
+    },
+    "full": {
+        "label": "4 · Vollanalyse",
+        "description": "Aktuelles Produktionsniveau: Gesamtbild, bis zu zwölf Kacheln und zwei unabhängige Crop-Prüfungen.",
+        "tile_size": 1600,
+        "overlap_fraction": 0.22,
+        "max_tiles": 12,
+        "verification_passes": 2,
+        "discovery_tokens": 1536,
+        "verification_tokens": 384,
+    },
+}
+
+
+def benchmark_qwen3vl(
+    file_path: str,
+    profile_name: str,
+    progress_request_id: str | None = None,
+) -> dict:
+    if Image is None or ImageOps is None:
+        raise RuntimeError(
+            "Pillow fehlt. Einmal 'npm.cmd run setup:ai' ausführen."
+        )
+
+    profile = QWEN_BENCHMARK_PROFILES.get(profile_name)
+    if profile is None:
+        raise RuntimeError(f"Unbekannte Qwen-Benchmark-Stufe: {profile_name}")
+
+    total_started = time.perf_counter()
+    file_name = os.path.basename(file_path)
+    label = str(profile["label"])
+
+    dev_log(
+        "QWEN_BENCHMARK_BEGIN",
+        profile=profile_name,
+        label=label,
+        target=file_path,
+    )
+
+    report_progress(
+        progress_request_id,
+        f"Qwen-Test {label}: Speicher wird vorbereitet · {file_name}",
+        phase="benchmark-prepare",
+    )
+    prepare_started = time.perf_counter()
+    prepare_for_qwen()
+    prepare_ms = (time.perf_counter() - prepare_started) * 1000.0
+
+    load_started = time.perf_counter()
+    try:
+        with Image.open(file_path) as source:
+            source.load()
+            image = ImageOps.exif_transpose(source).convert("RGB")
+    except Exception as exc:
+        raise RuntimeError(
+            f"Bild konnte für den Qwen-Test nicht gelesen werden: {exc}"
+        ) from exc
+    image_load_ms = (time.perf_counter() - load_started) * 1000.0
+
+    try:
+        report_progress(
+            progress_request_id,
+            f"Qwen-Test {label}: Modell wird geladen/bereitgestellt · {file_name}",
+            phase="benchmark-model",
+        )
+        model_started = time.perf_counter()
+        qwen3vl_runtime()
+        model_ready_ms = (time.perf_counter() - model_started) * 1000.0
+
+        if int(profile["max_tiles"]) <= 0:
+            regions = [(0, 0, image.width, image.height, "whole-image")]
+        else:
+            regions = qwen_detection_regions(
+                image,
+                tile_size=int(profile["tile_size"]),
+                overlap_fraction=float(profile["overlap_fraction"]),
+                max_tiles=int(profile["max_tiles"]),
+            )
+
+        candidates: list[dict] = []
+        region_count = len(regions)
+
+        discovery_started = time.perf_counter()
+        for region_index, (left, top, right, bottom, kind) in enumerate(
+            regions,
+            start=1,
+        ):
+            region_name = (
+                "qwen-whole-image"
+                if kind == "whole-image"
+                else f"qwen-tile-{left}-{top}-{right}-{bottom}"
+            )
+            display_kind = "Gesamtbild" if kind == "whole-image" else "Kachel"
+
+            report_progress(
+                progress_request_id,
+                (
+                    f"Qwen-Test {label}: {display_kind} "
+                    f"{region_index}/{region_count} · {file_name}"
+                ),
+                phase="benchmark-regions",
+                current=region_index,
+                total=region_count,
+            )
+
+            owns_region = kind != "whole-image"
+            region = image.crop((left, top, right, bottom)) if owns_region else image
+            try:
+                found_items = qwen_discover_region(
+                    region,
+                    region_name,
+                    progress_request_id,
+                    progress_label=(
+                        f"Test {label} · {display_kind} "
+                        f"{region_index}/{region_count}"
+                    ),
+                    max_new_tokens=int(profile["discovery_tokens"]),
+                )
+            finally:
+                if owns_region:
+                    region.close()
+                gc.collect()
+
+            for found in found_items:
+                local = found["box"]
+                global_box = [
+                    float(local[0]) + left,
+                    float(local[1]) + top,
+                    float(local[2]) + left,
+                    float(local[3]) + top,
+                ]
+                qwen_add_global_candidate(
+                    candidates,
+                    str(found["label"]),
+                    global_box,
+                    region_name,
+                    str(found["certainty"]),
+                )
+
+        discovery_ms = (time.perf_counter() - discovery_started) * 1000.0
+
+        verification_passes = int(profile["verification_passes"])
+        verification_tokens = int(profile["verification_tokens"])
+        verified: list[dict] = []
+        rejected = 0
+        candidate_count = len(candidates)
+
+        verification_started = time.perf_counter()
+
+        for candidate_index, candidate in enumerate(candidates, start=1):
+            candidate_label = normalize_qwen_label(candidate["label"])
+            x1, y1, x2, y2 = [float(value) for value in candidate["box"]]
+            class_id = (
+                int(COCO_CLASS_NAMES.index(candidate_label))
+                if candidate_label in COCO_CLASS_NAMES
+                else -1
+            )
+
+            if verification_passes == 0:
+                verified.append({
+                    "label": candidate_label,
+                    "classId": class_id,
+                    "score": 0.88 if candidate["certainty"] == "high" else 0.74,
+                    "x": x1,
+                    "y": y1,
+                    "width": x2 - x1,
+                    "height": y2 - y1,
+                    "agreementCount": int(candidate["votes"]),
+                    "sources": sorted(candidate["sources"]),
+                })
+                continue
+
+            crop = qwen_annotated_candidate_crop(image, candidate["box"])
+            try:
+                report_progress(
+                    progress_request_id,
+                    (
+                        f"Qwen-Test {label}: Objekt "
+                        f"{candidate_index}/{candidate_count} · Prüfung 1/"
+                        f"{verification_passes} · {candidate_label}"
+                    ),
+                    phase="benchmark-check-1",
+                    current=candidate_index,
+                    total=candidate_count,
+                )
+                presence = qwen_presence_check(
+                    crop,
+                    candidate_label,
+                    progress_request_id,
+                    max_new_tokens=verification_tokens,
+                )
+
+                presence_label = normalize_qwen_label(presence["label"])
+                if (
+                    not presence["present"]
+                    or presence_label != candidate_label
+                    or presence["confidence"] not in ("high", "medium")
+                ):
+                    rejected += 1
+                    continue
+
+                if verification_passes == 1:
+                    verified.append({
+                        "label": candidate_label,
+                        "classId": class_id,
+                        "score": 0.94 if presence["confidence"] == "high" else 0.84,
+                        "x": x1,
+                        "y": y1,
+                        "width": x2 - x1,
+                        "height": y2 - y1,
+                        "agreementCount": 1 + min(3, int(candidate["votes"])),
+                        "sources": sorted(
+                            set(candidate["sources"]) |
+                            {"qwen-crop-presence-check"}
+                        ),
+                    })
+                    continue
+
+                report_progress(
+                    progress_request_id,
+                    (
+                        f"Qwen-Test {label}: Objekt "
+                        f"{candidate_index}/{candidate_count} · Prüfung 2/2 · "
+                        "blind klassifizieren"
+                    ),
+                    phase="benchmark-check-2",
+                    current=candidate_index,
+                    total=candidate_count,
+                )
+                blind = qwen_blind_box_classification(
+                    crop,
+                    progress_request_id,
+                    max_new_tokens=verification_tokens,
+                )
+                blind_label = normalize_qwen_label(blind["label"])
+
+                labels_agree = blind_label == candidate_label
+                high_high = (
+                    presence["confidence"] == "high"
+                    and blind["confidence"] == "high"
+                )
+                repeated_medium = (
+                    int(candidate["votes"]) >= 2
+                    and presence["confidence"] in ("high", "medium")
+                    and blind["confidence"] in ("high", "medium")
+                )
+
+                if not labels_agree or not (high_high or repeated_medium):
+                    rejected += 1
+                    continue
+
+                verified.append({
+                    "label": candidate_label,
+                    "classId": class_id,
+                    "score": 0.98 if high_high else 0.90,
+                    "x": x1,
+                    "y": y1,
+                    "width": x2 - x1,
+                    "height": y2 - y1,
+                    "agreementCount": 2 + min(3, int(candidate["votes"])),
+                    "sources": sorted(
+                        set(candidate["sources"]) |
+                        {
+                            "qwen-crop-presence-check",
+                            "qwen-blind-box-classification",
+                        }
+                    ),
+                })
+            finally:
+                crop.close()
+                gc.collect()
+
+        verification_ms = (time.perf_counter() - verification_started) * 1000.0
+
+        verified.sort(key=lambda item: float(item["score"]), reverse=True)
+        final: list[dict] = []
+
+        for item in verified:
+            box = [
+                float(item["x"]),
+                float(item["y"]),
+                float(item["x"]) + float(item["width"]),
+                float(item["y"]) + float(item["height"]),
+            ]
+            duplicate = False
+
+            for existing in final:
+                if existing["label"] != item["label"]:
+                    continue
+                existing_box = [
+                    float(existing["x"]),
+                    float(existing["y"]),
+                    float(existing["x"]) + float(existing["width"]),
+                    float(existing["y"]) + float(existing["height"]),
+                ]
+                if xyxy_iou(box, existing_box) >= 0.50:
+                    existing["agreementCount"] = max(
+                        int(existing["agreementCount"]),
+                        int(item["agreementCount"]),
+                    )
+                    existing["sources"] = sorted(set(
+                        list(existing["sources"]) + list(item["sources"])
+                    ))
+                    duplicate = True
+                    break
+
+            if not duplicate:
+                final.append(item)
+
+        total_ms = (time.perf_counter() - total_started) * 1000.0
+
+        report_progress(
+            progress_request_id,
+            (
+                f"Qwen-Test {label}: fertig · {region_count} Bildbereiche · "
+                f"{candidate_count} Kandidaten · {len(final)} Ergebnisse · "
+                f"{format_live_duration(total_ms / 1000.0)}"
+            ),
+            phase="benchmark-done",
+            current=candidate_count,
+            total=candidate_count,
+        )
+
+        result = {
+            "path": file_path,
+            "profile": profile_name,
+            "label": label,
+            "description": str(profile["description"]),
+            "imageWidth": int(image.width),
+            "imageHeight": int(image.height),
+            "regionCount": region_count,
+            "candidateCount": candidate_count,
+            "verifiedCount": len(final),
+            "rejectedCount": rejected,
+            "timings": {
+                "prepareMs": round(prepare_ms, 1),
+                "imageLoadMs": round(image_load_ms, 1),
+                "modelReadyMs": round(model_ready_ms, 1),
+                "discoveryMs": round(discovery_ms, 1),
+                "verificationMs": round(verification_ms, 1),
+                "totalMs": round(total_ms, 1),
+            },
+            "objects": final,
+        }
+
+        dev_log(
+            "QWEN_BENCHMARK_DONE",
+            profile=profile_name,
+            label=label,
+            target=file_path,
+            regionCount=region_count,
+            candidateCount=candidate_count,
+            verifiedCount=len(final),
+            rejectedCount=rejected,
+            timings=result["timings"],
+        )
+        return result
+    finally:
+        image.close()
+        gc.collect()
 
 
 def detect_qwen3vl_objects(
@@ -3463,6 +3859,19 @@ def handle(message: dict) -> bool:
         )
         return True
 
+
+    if method == "benchmark_qwen3vl":
+        file_path = require_file(payload)
+        profile = str(payload.get("profile", "")).strip()
+        respond(
+            request_id,
+            result=benchmark_qwen3vl(
+                file_path,
+                profile,
+                progress_request_id=request_id,
+            ),
+        )
+        return True
 
     if method == "detect_qwen3vl_objects":
         file_path = require_file(payload)
