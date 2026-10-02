@@ -6480,15 +6480,15 @@ function resetCatalog(): { reset: true } {
       DELETE FROM sqlite_sequence;
     `);
     db.exec("COMMIT");
-
-    // Freie Seiten und WAL-Reste ebenfalls entfernen, damit ein
-    // Entwicklungs-Reset wirklich mit einer kompakten Datenbank neu startet.
-    db.exec("PRAGMA wal_checkpoint(TRUNCATE);");
-    db.exec("VACUUM;");
   } catch (error) {
     db.exec("ROLLBACK");
     throw error;
   }
+
+  // Freie Seiten und WAL-Reste ebenfalls entfernen, damit ein
+  // Entwicklungs-Reset wirklich mit einer kompakten Datenbank neu startet.
+  db.exec("PRAGMA wal_checkpoint(TRUNCATE);");
+  db.exec("VACUUM;");
 
   return { reset: true };
 }
