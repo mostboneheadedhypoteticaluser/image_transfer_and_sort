@@ -157,6 +157,7 @@ export class AnalysisCoordinator {
   private timer: NodeJS.Timeout | null = null;
   private pumping = false;
   private stopped = true;
+  private benchmarkPaused = false;
 
   constructor(
     private readonly catalog: CatalogService,
@@ -186,6 +187,31 @@ export class AnalysisCoordinator {
     this.stopped = true;
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
+  }
+
+  async pauseForBenchmark(): Promise<void> {
+    this.benchmarkPaused = true;
+    this.stop();
+
+    // Wichtig: nicht nur keine neuen Jobs starten, sondern einen bereits
+    // laufenden Qwen/llama.cpp-Prozess wirklich beenden. Sonst bleibt der PC
+    // so ausgelastet, dass selbst der Dateidialog des Einzeltests stockt.
+    this.analysis.stopForBenchmark();
+
+    const deadline = Date.now() + 15000;
+    while (this.pumping && Date.now() < deadline) {
+      await new Promise<void>((resolve) => setTimeout(resolve, 50));
+    }
+
+    this.analysis.setQueueState(
+      0,
+      0,
+      "Standardanalyse für Qwen-Einzelbildtest pausiert."
+    );
+  }
+
+  endBenchmarkPause(): void {
+    this.benchmarkPaused = false;
   }
 
   private async enqueueExistingSources(): Promise<void> {
@@ -405,10 +431,21 @@ export class AnalysisCoordinator {
           result
         });
       } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
         await this.catalog.request("failAnalysisJob", {
           jobId: job.id,
-          error: error instanceof Error ? error.message : String(error)
+          error: message
         });
+
+        // Der Einzelbildtest darf den gerade unterbrochenen Standardjob nicht
+        // als echten Analysefehler hinterlassen. Nach dem kontrollierten Kill
+        // wird er sofort wieder auf PENDING gesetzt und erst nach Testende neu
+        // gestartet.
+        if (this.benchmarkPaused) {
+          await this.catalog.request("retryAnalysisJob", {
+            jobId: job.id
+          });
+        }
       }
 
       await this.refreshAllStats();
