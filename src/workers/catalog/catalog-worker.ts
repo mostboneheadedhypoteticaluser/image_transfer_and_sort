@@ -610,6 +610,25 @@ db.prepare(`
     )
 `).run();
 
+// Ein früherer SigLIP2-Adapter hat BaseModelOutputWithPooling fälschlich wie
+// einen Tensor behandelt. Nur genau diese bekannte, inzwischen behobene
+// Fehlersignatur wird unabhängig vom ausgeschöpften Versuchszähler erneut
+// eingeplant. Andere echte Fehler bleiben weiterhin nach 3 Versuchen stehen.
+db.prepare(`
+  UPDATE analysis_jobs
+  SET
+    status='PENDING',
+    attempts=0,
+    result_json=NULL,
+    error_message=NULL,
+    started_at=NULL,
+    finished_at=NULL,
+    updated_at=CURRENT_TIMESTAMP
+  WHERE module='semantic-embed-siglip2-v1'
+    AND status='FAILED'
+    AND error_message LIKE '%BaseModelOutputWithPooling%object has no attribute%detach%'
+`).run();
+
 let scanRunning = false;
 
 function post(message: WorkerResponse): void {
