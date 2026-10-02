@@ -27,6 +27,7 @@ export type PipelineStatus = {
   petDetection: AnalysisQueueStats;
   petFusion: AnalysisQueueStats;
   petEmbeddings: AnalysisQueueStats;
+  objectVerification: AnalysisQueueStats;
   semanticEmbeddings: AnalysisQueueStats;
 };
 
@@ -427,6 +428,7 @@ export type CatalogMethod =
   | "getPetDetectionsForFusion"
   | "getObjectDetectionsForFusion"
   | "completePetFusionJob"
+  | "completeVerifiedObjectDetectionJob"
   | "getPetDetectionsForEmbedding"
   | "completePetEmbeddingJob"
   | "completeSemanticEmbeddingJob"
