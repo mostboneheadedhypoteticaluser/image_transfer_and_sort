@@ -27,13 +27,14 @@ except Exception:
     ImageDraw = None
     ImageOps = None
 
-try:
-    import torch
-    from transformers import AutoModel, AutoProcessor
-except Exception:
-    torch = None
-    AutoModel = None
-    AutoProcessor = None
+# PyTorch/Transformers werden bewusst erst bei der SigLIP2-Stufe geladen.
+# Der Worker muss auf ping sofort antworten können; insbesondere unter Windows
+# kann der Import dieser großen Bibliotheken sonst bereits den Start-Timeout
+# überschreiten.
+torch = None
+AutoModel = None
+AutoProcessor = None
+_torch_transformers_import_error = None
 
 try:
     import cv2
@@ -213,8 +214,8 @@ def snapshot() -> dict:
             ),
             "qwen3vlModel": qwen_gguf_ready(),
             "qwen3vlRuntime": find_llama_server() is not None,
-            "torch": torch is not None,
-            "transformers": AutoModel is not None and AutoProcessor is not None,
+            "torch": importlib.util.find_spec("torch") is not None,
+            "transformers": importlib.util.find_spec("transformers") is not None,
             "onnxRuntime": importlib.util.find_spec("onnxruntime") is not None,
             "imageMetadata": Image is not None,
             "faceDetection": cv2 is not None and os.path.isfile(YUNET_MODEL),
@@ -237,9 +238,8 @@ def snapshot() -> dict:
             ),
             "semanticEmbeddings": (
                 Image is not None
-                and torch is not None
-                and AutoModel is not None
-                and AutoProcessor is not None
+                and importlib.util.find_spec("torch") is not None
+                and importlib.util.find_spec("transformers") is not None
                 and os.path.isfile(
                     os.path.join(SIGLIP2_MODEL_DIR, "model.safetensors")
                 )
@@ -1755,6 +1755,34 @@ def cluster_face_embeddings(
     }
 
 
+def ensure_torch_transformers() -> None:
+    global torch, AutoModel, AutoProcessor, _torch_transformers_import_error
+
+    if torch is not None and AutoModel is not None and AutoProcessor is not None:
+        return
+
+    if _torch_transformers_import_error is not None:
+        raise RuntimeError(
+            "PyTorch/Transformers konnte zuvor nicht geladen werden: "
+            + _torch_transformers_import_error
+        )
+
+    try:
+        import torch as torch_module
+        from transformers import AutoModel as AutoModelClass
+        from transformers import AutoProcessor as AutoProcessorClass
+
+        torch = torch_module
+        AutoModel = AutoModelClass
+        AutoProcessor = AutoProcessorClass
+    except Exception as exc:
+        _torch_transformers_import_error = str(exc)
+        raise RuntimeError(
+            "PyTorch/Transformers konnte für SigLIP2 nicht geladen werden: "
+            + str(exc)
+        ) from exc
+
+
 def release_torch_memory() -> None:
     gc.collect()
     if torch is not None and torch.cuda.is_available():
@@ -1803,10 +1831,8 @@ def siglip2_runtime():
         raise RuntimeError(
             "Pillow fehlt. Einmal 'npm.cmd run setup:ai' ausführen."
         )
-    if torch is None or AutoModel is None or AutoProcessor is None:
-        raise RuntimeError(
-            "PyTorch/Transformers fehlt. Einmal 'npm.cmd run setup:ai' ausführen."
-        )
+
+    ensure_torch_transformers()
 
     weights = os.path.join(SIGLIP2_MODEL_DIR, "model.safetensors")
     if not os.path.isfile(weights):
