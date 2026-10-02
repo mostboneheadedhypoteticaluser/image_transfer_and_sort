@@ -117,7 +117,9 @@ const MODULES: ModuleSpec[] = [
     workerMethod: "detect_qwen3vl_objects",
     completeMethod: "completeVerifiedObjectDetectionJob",
     label: "Motive · Qwen3-VL-8B Q8_0 Vollbild/Kacheln",
-    timeoutMs: 7200000
+    // Inaktivitäts-Watchdog statt absoluter Jobdauer. Fortschrittsereignisse
+    // aus dem Worker setzen diese Frist jeweils neu.
+    timeoutMs: 1800000
   }
 ];
 
