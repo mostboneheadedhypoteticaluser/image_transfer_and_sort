@@ -388,6 +388,7 @@ export type CatalogMethod =
   | "completeFaceEmbeddingJob"
   | "completePetDetectionJob"
   | "getPetDetectionsForFusion"
+  | "getObjectDetectionsForFusion"
   | "completePetFusionJob"
   | "getPetDetectionsForEmbedding"
   | "completePetEmbeddingJob"
