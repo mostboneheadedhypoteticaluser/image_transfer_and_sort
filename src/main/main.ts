@@ -1,6 +1,6 @@
 import path from "node:path";
 import { readFile } from "node:fs/promises";
-import { app, BrowserWindow, dialog, ipcMain, protocol } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, protocol, shell } from "electron";
 import { CatalogService } from "./catalog-service";
 import { AnalysisService } from "./analysis-service";
 import { AnalysisCoordinator } from "./analysis-coordinator";
@@ -293,6 +293,45 @@ function registerIpc(): void {
         sourceId
       })
   );
+
+  ipcMain.handle("analysis:openFile", async (_event, mediaId: number) => {
+    const info = await catalog!.request<{
+      absolutePath: string;
+      relativePath: string;
+      availability: string;
+    } | null>("getMediaPath", { mediaId });
+
+    if (!info) throw new Error("Datei wurde im Katalog nicht gefunden.");
+
+    const result = await shell.openPath(info.absolutePath);
+    if (result) {
+      throw new Error(
+        "Datei konnte nicht geöffnet werden: " + result
+      );
+    }
+
+    return { opened: true };
+  });
+
+  ipcMain.handle("analysis:openFolder", async (_event, mediaId: number) => {
+    const info = await catalog!.request<{
+      absolutePath: string;
+      relativePath: string;
+      availability: string;
+    } | null>("getMediaPath", { mediaId });
+
+    if (!info) throw new Error("Datei wurde im Katalog nicht gefunden.");
+
+    const folder = path.dirname(info.absolutePath);
+    const result = await shell.openPath(folder);
+    if (result) {
+      throw new Error(
+        "Ordner konnte nicht geöffnet werden: " + result
+      );
+    }
+
+    return { opened: true };
+  });
 
   ipcMain.handle("analysis:getPipelineStatus", (): PipelineStatus => ({
     technical: { ...pipelineStatus.technical },
