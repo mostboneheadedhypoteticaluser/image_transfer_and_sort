@@ -18,6 +18,8 @@ import type {
   RetryAnalysisResult,
   ScanProgress,
   ScanResult,
+  SearchFacets,
+  SearchFilter,
   SourceRecord
 } from "../shared/protocol";
 
@@ -94,6 +96,12 @@ declare global {
         addSource(sourcePath: string): Promise<SourceRecord>;
         getStats(sourceId: number): Promise<CatalogStats>;
         listMedia(sourceId: number, limit?: number): Promise<MediaRecord[]>;
+        getSearchFacets(sourceId: number): Promise<SearchFacets>;
+        searchMedia(
+          sourceId: number,
+          filter: SearchFilter,
+          limit?: number
+        ): Promise<MediaRecord[]>;
         listDuplicateGroups(sourceId: number, limit?: number): Promise<DuplicateGroup[]>;
         listRecycleMedia(sourceId: number, limit?: number): Promise<MediaRecord[]>;
         scanSource(sourceId: number): Promise<ScanResult>;
