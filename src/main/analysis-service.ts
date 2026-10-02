@@ -217,6 +217,18 @@ export class AnalysisService {
           );
         }
 
+        if (
+          capabilities.rfdetr !== true ||
+          capabilities.rfdetrModel !== true ||
+          capabilities.groundingDinoModel !== true ||
+          capabilities.verifiedObjectDetection !== true
+        ) {
+          throw new Error(
+            "RF-DETR Large oder Grounding DINO Base für die Präzisions-Motiverkennung fehlt. " +
+            "Bitte 'npm.cmd run setup:ai' ausführen."
+          );
+        }
+
         const configured = await this.request<Record<string, unknown>>(
           "configure",
           {
