@@ -2842,6 +2842,7 @@ function completePetDetectionJob(jobId: number, result: unknown) {
 
   const value = result as Record<string, unknown>;
   const rawPets = Array.isArray(value.pets) ? value.pets : [];
+  const rawObjects = Array.isArray(value.objects) ? value.objects : [];
   const detectorVersion =
     typeof value.detector === "string" && value.detector.trim()
       ? value.detector.trim()
@@ -2861,6 +2862,34 @@ function completePetDetectionJob(jobId: number, result: unknown) {
   const job = jobForModule(jobId, module);
   const mediaId = Number(job.media_id);
   const inputSha256 = String(job.input_sha256 ?? "");
+
+  const objectUpsert = db.prepare(`
+    INSERT INTO object_detections(
+      media_id,
+      detector_version,
+      detection_index,
+      input_sha256,
+      class_id,
+      label,
+      x,
+      y,
+      width,
+      height,
+      score,
+      updated_at
+    )
+    VALUES(?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)
+    ON CONFLICT(media_id, detector_version, detection_index) DO UPDATE SET
+      input_sha256=excluded.input_sha256,
+      class_id=excluded.class_id,
+      label=excluded.label,
+      x=excluded.x,
+      y=excluded.y,
+      width=excluded.width,
+      height=excluded.height,
+      score=excluded.score,
+      updated_at=CURRENT_TIMESTAMP
+  `);
 
   const upsert = db.prepare(`
     INSERT INTO pet_detections(
@@ -2891,6 +2920,7 @@ function completePetDetectionJob(jobId: number, result: unknown) {
   `);
 
   let written = 0;
+  let objectWritten = 0;
 
   db.exec("BEGIN IMMEDIATE");
   try {
@@ -2936,6 +2966,54 @@ function completePetDetectionJob(jobId: number, result: unknown) {
       written += 1;
     }
 
+    if (module === "pet-detect-yolox-v1") {
+      for (const rawObject of rawObjects) {
+        if (!rawObject || typeof rawObject !== "object") continue;
+
+        const item = rawObject as Record<string, unknown>;
+        const classId = Number(item.classId);
+        const label =
+          typeof item.label === "string" ? item.label.trim() : "";
+        const x = Number(item.x);
+        const y = Number(item.y);
+        const width = Number(item.width);
+        const height = Number(item.height);
+        const score = Number(item.score);
+
+        if (
+          !Number.isInteger(classId) ||
+          !label ||
+          ![x, y, width, height, score].every(Number.isFinite) ||
+          width <= 0 ||
+          height <= 0
+        ) {
+          continue;
+        }
+
+        objectUpsert.run(
+          mediaId,
+          detectorVersion,
+          objectWritten,
+          inputSha256,
+          classId,
+          label,
+          x,
+          y,
+          width,
+          height,
+          score
+        );
+        objectWritten += 1;
+      }
+
+      db.prepare(`
+        DELETE FROM object_detections
+        WHERE media_id=?
+          AND detector_version=?
+          AND detection_index>=?
+      `).run(mediaId, detectorVersion, objectWritten);
+    }
+
     db.prepare(`
       DELETE FROM pet_detections
       WHERE media_id=?
@@ -2953,7 +3031,11 @@ function completePetDetectionJob(jobId: number, result: unknown) {
         updated_at=CURRENT_TIMESTAMP
       WHERE id=?
     `).run(
-      JSON.stringify({ detector: detectorVersion, petCount: written }),
+      JSON.stringify({
+        detector: detectorVersion,
+        petCount: written,
+        objectCount: objectWritten
+      }),
       jobId
     );
 
@@ -2963,7 +3045,11 @@ function completePetDetectionJob(jobId: number, result: unknown) {
     throw error;
   }
 
-  return { completed: true, petCount: written };
+  return {
+    completed: true,
+    petCount: written,
+    objectCount: objectWritten
+  };
 }
 
 function getPetDetectionsForFusion(
