@@ -1483,3 +1483,9 @@ td .badge + .badge {
   background: #fff7e6;
   color: #8a6217;
 }
+
+
+.badge.motif {
+  background: #eef3f7;
+  color: #41576a;
+}
