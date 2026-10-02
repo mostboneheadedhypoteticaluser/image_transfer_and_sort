@@ -133,7 +133,7 @@
             <article class="pipeline-stage">
               <div>
                 <small>Stufe 6</small>
-                <strong>Haustier- &amp; Motivdetektion</strong>
+                <strong>Haustierdetektion · NanoDet + YOLOX-S</strong>
               </div>
               <div class="pipeline-stage-status">
                 <span id="petStageState" class="stage-state waiting">Wartet</span>
@@ -166,6 +166,17 @@
             <article class="pipeline-stage">
               <div>
                 <small>Stufe 9</small>
+                <strong>Motive präzise prüfen</strong>
+              </div>
+              <div class="pipeline-stage-status">
+                <span id="objectVerificationStageState" class="stage-state waiting">Wartet</span>
+                <small id="objectVerificationStageCounts">0 fertig · 0 offen</small>
+              </div>
+            </article>
+
+            <article class="pipeline-stage">
+              <div>
+                <small>Stufe 10</small>
                 <strong>Semantikanalyse · SigLIP2 So400m NaFlex</strong>
               </div>
               <div class="pipeline-stage-status">
@@ -176,7 +187,7 @@
 
             <article class="pipeline-stage">
               <div>
-                <small>Stufe 10</small>
+                <small>Stufe 11</small>
                 <strong>Personen bestätigen</strong>
               </div>
               <div class="pipeline-stage-status">
@@ -187,7 +198,7 @@
 
             <article class="pipeline-stage">
               <div>
-                <small>Stufe 11</small>
+                <small>Stufe 12</small>
                 <strong>Haustiere bestätigen</strong>
               </div>
               <div class="pipeline-stage-status">
@@ -213,7 +224,7 @@
               <button id="analysisErrorsButton" class="ghost analysis-errors-button" type="button" hidden>
                 Fehler anzeigen <span id="analysisErrorCount" class="tab-count">0</span>
               </button>
-              <span class="analysis-note">NanoDet + YOLOX-S prüfen konkrete Objekte gemeinsam. SigLIP2 So400m NaFlex analysiert zusätzlich den semantischen Bildinhalt mit hoher Auflösung; die Laufzeit ist bewusst der Genauigkeit untergeordnet.</span>
+              <span class="analysis-note">NanoDet + YOLOX-S bleiben für Haustiere. Allgemeine Motive werden separat mit RF-DETR Large vorgeschlagen und erst nach unabhängiger Grounding-DINO- und SigLIP2-Ausschnittprüfung für Suche und Anzeige übernommen. Genauigkeit hat Vorrang vor Laufzeit.</span>
             </div>
           </div>
         </section>
@@ -289,7 +300,7 @@
 
                 <section class="search-group search-group-wide">
                   <h4>Motive</h4>
-                  <p>Konkrete Objekte aus der NanoDet/YOLOX-Ensemble-Erkennung.</p>
+                  <p>Nur dreifach geprüfte Objekte aus RF-DETR Large + Grounding DINO + SigLIP2.</p>
                   <div id="searchObjects" class="search-facets motif-facets"></div>
                 </section>
 
