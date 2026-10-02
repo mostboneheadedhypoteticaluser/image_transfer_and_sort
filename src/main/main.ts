@@ -1,6 +1,6 @@
 import path from "node:path";
 import { readFile, rm } from "node:fs/promises";
-import { app, BrowserWindow, clipboard, dialog, ipcMain, protocol, shell } from "electron";
+import { app, BrowserWindow, clipboard, dialog, ipcMain, protocol, shell, type OpenDialogOptions } from "electron";
 import { CatalogService } from "./catalog-service";
 import { AnalysisService } from "./analysis-service";
 import { AnalysisCoordinator } from "./analysis-coordinator";
@@ -397,9 +397,9 @@ function registerIpc(): void {
   });
 
   ipcMain.handle("analysis:pickQwenBenchmarkImage", async () => {
-    const options = {
+    const options: OpenDialogOptions = {
       title: "Bild für Qwen-Einzeltest auswählen",
-      properties: ["openFile"] as const,
+      properties: ["openFile"],
       filters: [
         {
           name: "Bilder",
