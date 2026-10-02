@@ -153,11 +153,15 @@ export class AnalysisService {
     fields: Record<string, unknown> = {}
   ): void {
     try {
+      const memory = process.memoryUsage();
       const line = JSON.stringify({
         ts: new Date().toISOString(),
         source: "electron-analysis",
         pid: process.pid,
         event,
+        electronRssMiB: Math.round(memory.rss / 1024 / 1024),
+        systemFreeMiB: Math.round(os.freemem() / 1024 / 1024),
+        systemTotalMiB: Math.round(os.totalmem() / 1024 / 1024),
         ...fields
       });
       appendFileSync(this.devLogPath, line + "\n", "utf8");
