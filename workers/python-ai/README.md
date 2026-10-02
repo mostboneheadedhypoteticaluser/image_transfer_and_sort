@@ -51,10 +51,10 @@ Damit können Analysemodelle später ersetzt oder erweitert werden, ohne Katalog
 `pet-embed-dogreid-v1` nutzt das externe ONNX-Modell **DogReID DINOv2-B14 0.2.0**. Die Session wird lazy geladen; Bilder ohne fusionierten Hundefund schließen den Job ohne Bilddekodierung und ohne Modellinferenz ab. Eingabe: RGB 224×224, ImageNet-Normalisierung, NCHW. Ausgabe: L2-normalisierter Merkmalsvektor.
 
 
-## Allgemeine Motiverkennung mit Qwen3-VL-8B-Thinking
+## Allgemeine Motiverkennung mit Qwen3-VL-8B-Thinking Q8_0
 
 Die allgemeine Motiverkennung ist von der funktionierenden Gesichts- und
-Haustierpipeline getrennt. Sie nutzt lokal `Qwen/Qwen3-VL-8B-Thinking`
+Haustierpipeline getrennt. Sie nutzt lokal `Qwen/Qwen3-VL-8B-Thinking Q8_0`
 (ungefähr 17,5 GB Modellgewichte) ohne 4-/8-Bit-Quantisierung.
 
 Ablauf pro Bild:
