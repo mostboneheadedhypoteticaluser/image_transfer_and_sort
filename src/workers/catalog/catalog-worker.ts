@@ -1921,7 +1921,8 @@ function enqueueAnalysisJobs(sourceId: number, module = "file-probe-v1") {
     "pet-detect-nanodet-v1",
     "pet-detect-yolox-v1",
     "pet-fuse-ensemble-v1",
-    "pet-embed-dogreid-v1"
+    "pet-embed-dogreid-v1",
+    "semantic-embed-siglip2-v1"
   ]);
   const imageFilter =
     imageOnlyModules.has(module)
@@ -2833,6 +2834,7 @@ async function scanSource(sourceId: number): Promise<ScanResult> {
     enqueueAnalysisJobs(sourceId, "pet-detect-yolox-v1");
     enqueueAnalysisJobs(sourceId, "pet-fuse-ensemble-v1");
     enqueueAnalysisJobs(sourceId, "pet-embed-dogreid-v1");
+    enqueueAnalysisJobs(sourceId, "semantic-embed-siglip2-v1");
 
     const result: ScanResult = {
       discovered,
