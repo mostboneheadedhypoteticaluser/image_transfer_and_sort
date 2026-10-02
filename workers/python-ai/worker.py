@@ -1842,6 +1842,553 @@ def extract_semantic_text_embedding(text: str) -> dict:
     }
 
 
+
+def rfdetr_runtime():
+    global _rfdetr_model
+
+    if Image is None or ImageOps is None:
+        raise RuntimeError(
+            "Pillow fehlt. Einmal 'npm.cmd run setup:ai' ausführen."
+        )
+
+    if importlib.util.find_spec("rfdetr") is None:
+        raise RuntimeError(
+            "RF-DETR fehlt. Einmal 'npm.cmd run setup:ai' ausführen."
+        )
+
+    os.environ["RF_HOME"] = RFDETR_MODEL_DIR
+
+    if _rfdetr_model is None:
+        try:
+            from rfdetr import RFDETRLarge
+        except Exception as exc:
+            raise RuntimeError(
+                f"RF-DETR konnte nicht geladen werden: {exc}"
+            ) from exc
+
+        _rfdetr_model = RFDETRLarge(device="cpu")
+
+    return _rfdetr_model
+
+
+def grounding_dino_runtime():
+    global _grounding_dino_model, _grounding_dino_processor
+
+    if (
+        torch is None
+        or AutoModelForZeroShotObjectDetection is None
+        or AutoProcessor is None
+    ):
+        raise RuntimeError(
+            "PyTorch/Transformers für Grounding DINO fehlt. "
+            "Einmal 'npm.cmd run setup:ai' ausführen."
+        )
+
+    weights = os.path.join(GROUNDING_DINO_MODEL_DIR, "model.safetensors")
+    if not os.path.isfile(weights):
+        raise RuntimeError(
+            "Grounding DINO Base fehlt. Einmal 'npm.cmd run setup:ai' ausführen."
+        )
+
+    if _grounding_dino_processor is None:
+        _grounding_dino_processor = AutoProcessor.from_pretrained(
+            GROUNDING_DINO_MODEL_DIR,
+            local_files_only=True,
+        )
+
+    if _grounding_dino_model is None:
+        _grounding_dino_model = (
+            AutoModelForZeroShotObjectDetection
+            .from_pretrained(
+                GROUNDING_DINO_MODEL_DIR,
+                local_files_only=True,
+                torch_dtype=torch.float32,
+            )
+        )
+        _grounding_dino_model.eval()
+
+    return _grounding_dino_processor, _grounding_dino_model
+
+
+def normalize_object_label(label: str) -> str:
+    value = " ".join(str(label).strip().lower().split())
+    aliases = {
+        "motorbike": "motorcycle",
+        "aeroplane": "airplane",
+        "sofa": "couch",
+        "tvmonitor": "tv",
+        "cellphone": "cell phone",
+    }
+    return aliases.get(value, value)
+
+
+def xyxy_iou(left: list[float], right: list[float]) -> float:
+    x1 = max(float(left[0]), float(right[0]))
+    y1 = max(float(left[1]), float(right[1]))
+    x2 = min(float(left[2]), float(right[2]))
+    y2 = min(float(left[3]), float(right[3]))
+
+    intersection = max(0.0, x2 - x1) * max(0.0, y2 - y1)
+    left_area = max(0.0, float(left[2]) - float(left[0])) * max(
+        0.0, float(left[3]) - float(left[1])
+    )
+    right_area = max(0.0, float(right[2]) - float(right[0])) * max(
+        0.0, float(right[3]) - float(right[1])
+    )
+    union = left_area + right_area - intersection
+
+    return intersection / union if union > 0.0 else 0.0
+
+
+def detection_regions(
+    image,
+    tile_size: int = 1152,
+    overlap_fraction: float = 0.25,
+) -> list[tuple[int, int, int, int]]:
+    width, height = image.size
+    regions: list[tuple[int, int, int, int]] = [(0, 0, width, height)]
+
+    if max(width, height) <= 1400:
+        return regions
+
+    tile_width = min(tile_size, width)
+    tile_height = min(tile_size, height)
+    step_x = max(256, int(tile_width * (1.0 - overlap_fraction)))
+    step_y = max(256, int(tile_height * (1.0 - overlap_fraction)))
+
+    def starts(length: int, tile: int, step: int) -> list[int]:
+        if length <= tile:
+            return [0]
+        values = list(range(0, max(1, length - tile + 1), step))
+        end = length - tile
+        if not values or values[-1] != end:
+            values.append(end)
+        return sorted(set(values))
+
+    for top in starts(height, tile_height, step_y):
+        for left in starts(width, tile_width, step_x):
+            region = (
+                left,
+                top,
+                min(width, left + tile_width),
+                min(height, top + tile_height),
+            )
+            if region != (0, 0, width, height):
+                regions.append(region)
+
+    return regions
+
+
+def rfdetr_candidates(image) -> list[dict]:
+    if np is None:
+        raise RuntimeError(
+            "Numpy fehlt. Einmal 'npm.cmd run setup:ai' ausführen."
+        )
+
+    model = rfdetr_runtime()
+    candidates: list[dict] = []
+
+    for left, top, right, bottom in detection_regions(image):
+        crop = image.crop((left, top, right, bottom))
+
+        # Niedriger Kandidatenschwellwert ist absichtlich nur die erste Stufe.
+        # Grounding DINO und SigLIP2 müssen jeden Treffer anschließend bestätigen.
+        detections = model.predict(crop, threshold=0.25)
+
+        boxes = np.asarray(getattr(detections, "xyxy", []), dtype=np.float32)
+        scores = np.asarray(
+            getattr(detections, "confidence", []),
+            dtype=np.float32,
+        ).reshape(-1)
+
+        data = getattr(detections, "data", {}) or {}
+        raw_names = data.get("class_name")
+        raw_ids = np.asarray(
+            getattr(detections, "class_id", []),
+            dtype=np.int64,
+        ).reshape(-1)
+
+        if boxes.ndim != 2 or boxes.shape[1] != 4:
+            continue
+
+        if raw_names is not None:
+            names = [normalize_object_label(str(name)) for name in raw_names]
+        else:
+            try:
+                from rfdetr.assets.coco_classes import COCO_CLASSES
+            except Exception:
+                COCO_CLASSES = {}
+
+            names = []
+            for class_id in raw_ids.tolist():
+                if isinstance(COCO_CLASSES, dict):
+                    names.append(
+                        normalize_object_label(str(COCO_CLASSES.get(class_id, "")))
+                    )
+                else:
+                    try:
+                        names.append(
+                            normalize_object_label(str(COCO_CLASSES[class_id]))
+                        )
+                    except Exception:
+                        names.append("")
+
+        count = min(len(boxes), len(scores), len(names))
+
+        for index in range(count):
+            label = names[index]
+            if label not in COCO_CLASS_NAMES:
+                continue
+
+            score = float(scores[index])
+            if not math.isfinite(score) or score < 0.25:
+                continue
+
+            x1, y1, x2, y2 = [
+                float(value)
+                for value in boxes[index].tolist()
+            ]
+
+            x1 = max(0.0, min(float(right - left), x1)) + left
+            y1 = max(0.0, min(float(bottom - top), y1)) + top
+            x2 = max(0.0, min(float(right - left), x2)) + left
+            y2 = max(0.0, min(float(bottom - top), y2)) + top
+
+            if x2 - x1 <= 2.0 or y2 - y1 <= 2.0:
+                continue
+
+            candidates.append({
+                "label": label,
+                "classId": int(COCO_CLASS_NAMES.index(label)),
+                "score": score,
+                "box": [x1, y1, x2, y2],
+                "source": (
+                    "whole-image"
+                    if (left, top, right, bottom) == (0, 0, image.width, image.height)
+                    else "high-resolution-tile"
+                ),
+            })
+
+    # Klassenweises NMS über Gesamtbild + überlappende Kacheln.
+    candidates.sort(key=lambda item: float(item["score"]), reverse=True)
+    kept: list[dict] = []
+
+    for candidate in candidates:
+        duplicate = any(
+            existing["label"] == candidate["label"]
+            and xyxy_iou(existing["box"], candidate["box"]) >= 0.55
+            for existing in kept
+        )
+        if duplicate:
+            continue
+        kept.append(candidate)
+
+        # Die drei Verifikationsmodelle sind teuer. 80 Kandidaten pro Bild
+        # reichen auch bei sehr inhaltsreichen Fotos deutlich aus.
+        if len(kept) >= 80:
+            break
+
+    return kept
+
+
+def object_crop_with_context(
+    image,
+    candidate: dict,
+    margin_fraction: float = 0.55,
+):
+    x1, y1, x2, y2 = [float(value) for value in candidate["box"]]
+    width = max(1.0, x2 - x1)
+    height = max(1.0, y2 - y1)
+
+    margin_x = width * margin_fraction
+    margin_y = height * margin_fraction
+
+    left = max(0, int(math.floor(x1 - margin_x)))
+    top = max(0, int(math.floor(y1 - margin_y)))
+    right = min(image.width, int(math.ceil(x2 + margin_x)))
+    bottom = min(image.height, int(math.ceil(y2 + margin_y)))
+
+    if right <= left or bottom <= top:
+        raise RuntimeError("Motivausschnitt hat ungültige Abmessungen.")
+
+    local_box = [
+        x1 - left,
+        y1 - top,
+        x2 - left,
+        y2 - top,
+    ]
+    return image.crop((left, top, right, bottom)), local_box
+
+
+def grounding_dino_verify(crop, label: str, expected_box: list[float]) -> float:
+    processor, model = grounding_dino_runtime()
+    article = "an" if label[:1] in "aeiou" else "a"
+    text_label = f"{article} {label}"
+    prompt = text_label + "."
+
+    inputs = processor(
+        images=crop,
+        text=[[text_label]],
+        return_tensors="pt",
+    )
+
+    with torch.inference_mode():
+        outputs = model(**inputs)
+
+    kwargs = {
+        "threshold": 0.25,
+        "text_threshold": 0.20,
+        "target_sizes": [(crop.height, crop.width)],
+    }
+
+    try:
+        results = processor.post_process_grounded_object_detection(
+            outputs,
+            inputs.input_ids,
+            text_labels=[[text_label]],
+            **kwargs,
+        )
+    except TypeError:
+        results = processor.post_process_grounded_object_detection(
+            outputs,
+            inputs.input_ids,
+            **kwargs,
+        )
+
+    if not results:
+        return 0.0
+
+    result = results[0]
+    boxes = result.get("boxes")
+    scores = result.get("scores")
+    if boxes is None or scores is None:
+        return 0.0
+
+    best = 0.0
+    expected_center_x = (expected_box[0] + expected_box[2]) / 2.0
+    expected_center_y = (expected_box[1] + expected_box[3]) / 2.0
+
+    for raw_box, raw_score in zip(boxes, scores):
+        score = float(raw_score.detach().cpu().item())
+        if score < 0.25:
+            continue
+
+        box = [
+            float(value)
+            for value in raw_box.detach().cpu().tolist()
+        ]
+        overlap = xyxy_iou(box, expected_box)
+
+        center_x = (box[0] + box[2]) / 2.0
+        center_y = (box[1] + box[3]) / 2.0
+
+        center_matches = (
+            expected_box[0] <= center_x <= expected_box[2]
+            and expected_box[1] <= center_y <= expected_box[3]
+        ) or (
+            box[0] <= expected_center_x <= box[2]
+            and box[1] <= expected_center_y <= box[3]
+        )
+
+        if overlap >= 0.12 or center_matches:
+            best = max(best, score)
+
+    return best
+
+
+def siglip2_coco_text_features():
+    global _siglip2_coco_text_features
+
+    if _siglip2_coco_text_features is not None:
+        return _siglip2_coco_text_features
+
+    processor, model = siglip2_runtime()
+    prompts = []
+    for label in COCO_CLASS_NAMES:
+        article = "an" if label[:1] in "aeiou" else "a"
+        prompts.append(f"this is a photo of {article} {label}.")
+
+    inputs = processor(
+        text=prompts,
+        padding="max_length",
+        max_length=64,
+        truncation=True,
+        return_tensors="pt",
+    )
+
+    with torch.inference_mode():
+        features = model.get_text_features(**inputs)
+
+    features = features.detach().to(device="cpu", dtype=torch.float32)
+    norms = torch.linalg.vector_norm(features, dim=1, keepdim=True)
+    features = features / torch.clamp(norms, min=1e-12)
+    _siglip2_coco_text_features = features
+    return _siglip2_coco_text_features
+
+
+def siglip2_verify_object(crop, label: str) -> dict:
+    processor, model = siglip2_runtime()
+    text_features = siglip2_coco_text_features()
+
+    inputs = processor(
+        images=crop,
+        max_num_patches=SIGLIP2_MAX_NUM_PATCHES,
+        return_tensors="pt",
+    )
+
+    with torch.inference_mode():
+        image_features = model.get_image_features(**inputs)
+
+    image_features = image_features.detach().to(
+        device="cpu",
+        dtype=torch.float32,
+    )
+    image_features = image_features / torch.clamp(
+        torch.linalg.vector_norm(image_features, dim=1, keepdim=True),
+        min=1e-12,
+    )
+
+    similarities = torch.matmul(
+        image_features,
+        text_features.transpose(0, 1),
+    )[0]
+
+    class_index = int(COCO_CLASS_NAMES.index(label))
+    candidate_similarity = float(similarities[class_index].item())
+    order = torch.argsort(similarities, descending=True)
+    rank = int(
+        (order == class_index)
+        .nonzero(as_tuple=False)[0]
+        .item()
+    ) + 1
+    top_similarity = float(similarities[int(order[0].item())].item())
+    gap = top_similarity - candidate_similarity
+
+    raw_logit_scale = getattr(model, "logit_scale", None)
+    raw_logit_bias = getattr(model, "logit_bias", None)
+    sigmoid_score = 0.0
+
+    if raw_logit_scale is not None and raw_logit_bias is not None:
+        logit_scale = float(torch.exp(raw_logit_scale.detach().cpu()).item())
+        logit_bias = float(raw_logit_bias.detach().cpu().item())
+        logit = candidate_similarity * logit_scale + logit_bias
+        sigmoid_score = (
+            1.0 / (1.0 + math.exp(-logit))
+            if logit >= 0
+            else math.exp(logit) / (1.0 + math.exp(logit))
+        )
+
+    # Präzisionsmodus: Das behauptete Objekt muss unter allen 80 COCO-Klassen
+    # zu den zwei plausibelsten Beschreibungen des Ausschnitts gehören und darf
+    # semantisch nicht deutlich hinter der besten Alternative liegen.
+    accepted = rank <= 2 and gap <= 0.030
+
+    return {
+        "accepted": accepted,
+        "rank": rank,
+        "similarity": candidate_similarity,
+        "topSimilarity": top_similarity,
+        "gap": gap,
+        "sigmoidScore": sigmoid_score,
+    }
+
+
+def detect_verified_objects(file_path: str) -> dict:
+    if Image is None or ImageOps is None:
+        raise RuntimeError(
+            "Pillow fehlt. Einmal 'npm.cmd run setup:ai' ausführen."
+        )
+
+    try:
+        with Image.open(file_path) as source:
+            source.load()
+            image = ImageOps.exif_transpose(source).convert("RGB")
+    except Exception as exc:
+        raise RuntimeError(
+            f"Bild konnte für die Präzisions-Motiverkennung nicht gelesen werden: {exc}"
+        ) from exc
+
+    candidates = rfdetr_candidates(image)
+    verified: list[dict] = []
+    rejected = 0
+
+    for candidate in candidates:
+        label = str(candidate["label"])
+        crop, local_box = object_crop_with_context(image, candidate)
+
+        grounding_score = grounding_dino_verify(
+            crop,
+            label,
+            local_box,
+        )
+        if grounding_score < 0.32:
+            rejected += 1
+            continue
+
+        siglip = siglip2_verify_object(crop, label)
+        if not bool(siglip["accepted"]):
+            rejected += 1
+            continue
+
+        rf_score = float(candidate["score"])
+
+        # Alle drei Modelle müssen zustimmen. Der Gesamtscore dient nur zur
+        # Sortierung/Anzeige; die Aufnahmeentscheidung ist oben bereits streng.
+        final_score = min(
+            0.99,
+            max(
+                0.0,
+                0.50 * rf_score
+                + 0.35 * grounding_score
+                + 0.15 * float(siglip["sigmoidScore"]),
+            ),
+        )
+
+        x1, y1, x2, y2 = [float(value) for value in candidate["box"]]
+        verified.append({
+            "label": label,
+            "classId": int(candidate["classId"]),
+            "score": final_score,
+            "x": x1,
+            "y": y1,
+            "width": x2 - x1,
+            "height": y2 - y1,
+            "agreementCount": 3,
+            "sources": [
+                RFDETR_MODEL_VERSION,
+                GROUNDING_DINO_MODEL_VERSION,
+                SIGLIP2_MODEL_VERSION,
+            ],
+            "verification": {
+                "rfDetrScore": rf_score,
+                "groundingDinoScore": grounding_score,
+                "siglipRank": int(siglip["rank"]),
+                "siglipSimilarity": float(siglip["similarity"]),
+                "siglipGap": float(siglip["gap"]),
+                "siglipScore": float(siglip["sigmoidScore"]),
+                "rfDetrSource": str(candidate["source"]),
+            },
+        })
+
+    verified.sort(
+        key=lambda item: (
+            -float(item["score"]),
+            str(item["label"]),
+        )
+    )
+
+    return {
+        "module": "object-detect-verified-v2",
+        "detector": VERIFIED_OBJECT_VERSION,
+        "imageWidth": int(image.width),
+        "imageHeight": int(image.height),
+        "candidateCount": len(candidates),
+        "verifiedCount": len(verified),
+        "rejectedCount": rejected,
+        "objects": verified,
+    }
+
+
 def handle(message: dict) -> bool:
     request_id = message.get("id")
     method = message.get("method")
@@ -1974,6 +2521,15 @@ def handle(message: dict) -> bool:
         respond(
             request_id,
             result=extract_semantic_text_embedding(query),
+        )
+        return True
+
+    if method == "detect_verified_objects":
+        file_path = require_file(payload)
+        verify_expected_size(file_path, payload)
+        respond(
+            request_id,
+            result=detect_verified_objects(file_path),
         )
         return True
 
