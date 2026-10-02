@@ -2476,6 +2476,7 @@ async function scanSource(sourceId: number): Promise<ScanResult> {
     }
 
     recycleBin = await refreshRecycleStatus(sourceId);
+    reactivateAvailableMediaJobs(sourceId);
     enqueueAnalysisJobs(sourceId, "file-probe-v1");
     enqueueAnalysisJobs(sourceId, "thumbnail-v1");
     enqueueAnalysisJobs(sourceId, "image-metadata-v1");
