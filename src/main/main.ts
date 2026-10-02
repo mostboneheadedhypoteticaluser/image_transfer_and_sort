@@ -31,6 +31,7 @@ import type {
   RetryAnalysisResult,
   SearchFacets,
   SearchFilter,
+  SemanticTextEmbedding,
   ScanResult,
   SourceRecord,
   ThumbnailInfo,
@@ -66,8 +67,11 @@ let pipelineStatus: PipelineStatus = {
   faceEmbeddings: { ...EMPTY_QUEUE },
   petDetection: { ...EMPTY_QUEUE },
   petFusion: { ...EMPTY_QUEUE },
-  petEmbeddings: { ...EMPTY_QUEUE }
+  petEmbeddings: { ...EMPTY_QUEUE },
+  semanticEmbeddings: { ...EMPTY_QUEUE }
 };
+
+const semanticTextCache = new Map<string, SemanticTextEmbedding>();
 
 protocol.registerSchemesAsPrivileged([
   {
@@ -255,8 +259,42 @@ function registerIpc(): void {
 
   ipcMain.handle(
     "catalog:searchMedia",
-    (_event, sourceId: number, filter: SearchFilter, limit: number) =>
-      catalog!.request<MediaRecord[]>("searchMedia", { sourceId, filter, limit })
+    async (_event, sourceId: number, filter: SearchFilter, limit: number) => {
+      const query =
+        typeof filter?.semanticQuery === "string"
+          ? filter.semanticQuery.trim()
+          : "";
+
+      let semantic: SemanticTextEmbedding | null = null;
+
+      if (query) {
+        const cacheKey = query.toLocaleLowerCase("de-DE");
+        semantic = semanticTextCache.get(cacheKey) ?? null;
+
+        if (!semantic) {
+          if (!analysis || analysis.getStatus().state !== "READY") {
+            throw new Error(
+              "Die semantische Suche ist noch nicht bereit. " +
+              "Bitte AI-Setup und Analyse-Worker prüfen."
+            );
+          }
+
+          semantic = await analysis.request<SemanticTextEmbedding>(
+            "extract_semantic_text_embedding",
+            { text: query },
+            1800000
+          );
+          semanticTextCache.set(cacheKey, semantic);
+        }
+      }
+
+      return catalog!.request<MediaRecord[]>("searchMedia", {
+        sourceId,
+        filter,
+        semantic,
+        limit
+      });
+    }
   );
 
   ipcMain.handle("catalog:listDuplicateGroups", (_event, sourceId: number, limit: number) =>
@@ -275,9 +313,10 @@ function registerIpc(): void {
     catalog!.request<RestoreResult>("restoreMedia", { mediaId })
   );
 
-  ipcMain.handle("catalog:resetCatalog", () =>
-    catalog!.request<ResetCatalogResult>("resetCatalog")
-  );
+  ipcMain.handle("catalog:resetCatalog", async () => {
+    semanticTextCache.clear();
+    return catalog!.request<ResetCatalogResult>("resetCatalog");
+  });
 
   ipcMain.handle("analysis:getStatus", (): Promise<AnalysisWorkerStatus> =>
     analysis!.refreshStatus()
@@ -353,7 +392,8 @@ function registerIpc(): void {
     faceEmbeddings: { ...pipelineStatus.faceEmbeddings },
     petDetection: { ...pipelineStatus.petDetection },
     petFusion: { ...pipelineStatus.petFusion },
-    petEmbeddings: { ...pipelineStatus.petEmbeddings }
+    petEmbeddings: { ...pipelineStatus.petEmbeddings },
+    semanticEmbeddings: { ...pipelineStatus.semanticEmbeddings }
   }));
 
   ipcMain.handle(
