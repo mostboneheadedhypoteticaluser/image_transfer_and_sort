@@ -1,4 +1,5 @@
 import type {
+  AnalysisErrorRecord,
   AnalysisWorkerStatus,
   PipelineStatus,
   CatalogStats,
@@ -14,6 +15,7 @@ import type {
   PetOverview,
   RestoreResult,
   ResetCatalogResult,
+  RetryAnalysisResult,
   ScanProgress,
   ScanResult,
   SourceRecord
@@ -26,6 +28,9 @@ declare global {
       analysis: {
         getStatus(): Promise<AnalysisWorkerStatus>;
         getPipelineStatus(): Promise<PipelineStatus>;
+        listErrors(sourceId?: number, limit?: number): Promise<AnalysisErrorRecord[]>;
+        retryJob(jobId: number): Promise<RetryAnalysisResult>;
+        retryAll(sourceId?: number): Promise<RetryAnalysisResult>;
         onStatus(listener: (status: AnalysisWorkerStatus) => void): () => void;
         onPipelineStatus(listener: (status: PipelineStatus) => void): () => void;
       };
@@ -57,7 +62,8 @@ declare global {
         getOverview(sourceId: number, forceRefresh?: boolean): Promise<PetOverview>;
         confirmCandidate(
           candidateId: number,
-          name: string
+          name: string,
+          rejectedPetId?: number
         ): Promise<ConfirmPetResult>;
         removeCandidatePet(
           candidateId: number,
