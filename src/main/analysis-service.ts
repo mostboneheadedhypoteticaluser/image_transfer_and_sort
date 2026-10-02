@@ -42,6 +42,10 @@ type WorkerResponse = {
   phase?: string;
   current?: number;
   total?: number;
+  processKind?: string;
+  processState?: string;
+  pid?: number;
+  port?: number;
 };
 
 type PythonCandidate = {
@@ -101,6 +105,7 @@ export class AnalysisService {
   private child: ChildProcessWithoutNullStreams | null = null;
   private readonly pending = new Map<string, Pending>();
   private stopping = false;
+  private qwenServerPid: number | null = null;
   private status: AnalysisWorkerStatus = { ...DEFAULT_STATUS };
 
   constructor(
@@ -487,6 +492,35 @@ export class AnalysisService {
         return;
       }
 
+      if (
+        message.event === "process" &&
+        message.processKind === "qwen-server"
+      ) {
+        if (
+          message.processState === "started" &&
+          typeof message.pid === "number" &&
+          Number.isInteger(message.pid) &&
+          message.pid > 0
+        ) {
+          this.qwenServerPid = message.pid;
+          this.devLog("QWEN_SERVER_TRACKED", {
+            qwenServerPid: message.pid,
+            port: message.port ?? null
+          });
+        } else if (message.processState === "stopped") {
+          if (
+            typeof message.pid !== "number" ||
+            this.qwenServerPid === message.pid
+          ) {
+            this.devLog("QWEN_SERVER_UNTRACKED", {
+              qwenServerPid: this.qwenServerPid
+            });
+            this.qwenServerPid = null;
+          }
+        }
+        return;
+      }
+
       if (message.event === "progress") {
         const requestId = message.requestId ?? null;
 
@@ -762,6 +796,86 @@ export class AnalysisService {
     timer.unref();
   }
 
+  private isTrackedQwenProcessRunning(): boolean {
+    const pid = this.qwenServerPid;
+    if (!pid) return false;
+
+    if (process.platform !== "win32") {
+      try {
+        process.kill(pid, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    }
+
+    try {
+      const probe = spawnSync(
+        "tasklist",
+        ["/FI", `PID eq ${pid}`, "/FO", "CSV", "/NH"],
+        {
+          encoding: "utf8",
+          windowsHide: true,
+          timeout: 5000
+        }
+      );
+
+      const output =
+        typeof probe.stdout === "string" ? probe.stdout : "";
+
+      return /llama-server(?:\.exe)?/i.test(output);
+    } catch {
+      return false;
+    }
+  }
+
+  private killTrackedQwenServerSync(): void {
+    const pid = this.qwenServerPid;
+    if (!pid) return;
+
+    const running = this.isTrackedQwenProcessRunning();
+    this.devLog("QWEN_SERVER_SHUTDOWN_CHECK", {
+      qwenServerPid: pid,
+      running
+    });
+
+    if (!running) {
+      this.qwenServerPid = null;
+      return;
+    }
+
+    try {
+      if (process.platform === "win32") {
+        const killed = spawnSync(
+          "taskkill",
+          ["/PID", String(pid), "/T", "/F"],
+          {
+            stdio: "ignore",
+            windowsHide: true,
+            timeout: 15000
+          }
+        );
+        this.devLog("QWEN_SERVER_FALLBACK_KILL", {
+          qwenServerPid: pid,
+          status: killed.status
+        });
+      } else {
+        process.kill(pid, "SIGKILL");
+        this.devLog("QWEN_SERVER_FALLBACK_KILL", {
+          qwenServerPid: pid,
+          status: 0
+        });
+      }
+    } catch (error) {
+      this.devLog("QWEN_SERVER_FALLBACK_KILL_ERROR", {
+        qwenServerPid: pid,
+        error: error instanceof Error ? error.message : String(error)
+      });
+    } finally {
+      this.qwenServerPid = null;
+    }
+  }
+
   /**
    * Harte, synchrone Beendigung für den App-Shutdown.
    *
@@ -780,13 +894,14 @@ export class AnalysisService {
     const child = this.child;
 
     if (!child) {
+      this.killTrackedQwenServerSync();
       this.publish({
         state: "STOPPED",
         pid: null,
         activeJobs: 0,
         queuedJobs: 0,
         progress: null,
-        message: "Analyse-Worker ist beendet."
+        message: "Analyse-Worker und Qwen sind beendet."
       });
       return;
     }
@@ -825,6 +940,11 @@ export class AnalysisService {
         // Prozess ist bereits beendet.
       }
     }
+
+    // /T sollte llama.cpp bereits mitnehmen. Der separat verfolgte PID ist ein
+    // Sicherheitsnetz für den seltenen Fall, dass der Server sich vom
+    // Python-Prozess gelöst hat oder der Worker vorher abgestürzt ist.
+    this.killTrackedQwenServerSync();
 
     this.devLog("STOP_IMMEDIATE_DONE", {
       elapsedMs: Date.now() - stopAt
@@ -877,5 +997,7 @@ export class AnalysisService {
         // Prozess ist bereits beendet.
       }
     }
+
+    this.killTrackedQwenServerSync();
   }
 }
