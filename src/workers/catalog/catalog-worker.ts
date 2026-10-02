@@ -629,6 +629,45 @@ db.prepare(`
     AND error_message LIKE '%BaseModelOutputWithPooling%object has no attribute%detach%'
 `).run();
 
+// Die alte Qwen-Ausführung hatte einen absoluten 2-Stunden-Timeout. Solche
+// bereits erzeugten Fehler werden nach Einführung des Aktivitäts-Watchdogs
+// automatisch noch einmal sauber gestartet.
+db.prepare(`
+  UPDATE analysis_jobs
+  SET
+    status='PENDING',
+    attempts=0,
+    result_json=NULL,
+    error_message=NULL,
+    started_at=NULL,
+    finished_at=NULL,
+    updated_at=CURRENT_TIMESTAMP
+  WHERE module='object-detect-qwen3vl-gguf-v2'
+    AND status='FAILED'
+    AND error_message='Zeitüberschreitung bei Analyse-Worker-Methode detect_qwen3vl_objects.'
+`).run();
+
+// Erfolgreiche Qwen-v2-Ergebnisse stammen noch aus dem ungebremsten
+// Thinking-Pfad. Sie werden einmalig mit der strukturierten v3-Ausführung
+// neu berechnet, damit der Katalog keine gemischten Motivgenerationen enthält.
+db.prepare(`
+  UPDATE analysis_jobs
+  SET
+    status='PENDING',
+    attempts=0,
+    result_json=NULL,
+    error_message=NULL,
+    started_at=NULL,
+    finished_at=NULL,
+    updated_at=CURRENT_TIMESTAMP
+  WHERE module='object-detect-qwen3vl-gguf-v2'
+    AND status='DONE'
+    AND (
+      result_json IS NULL
+      OR result_json NOT LIKE '%"verificationVersion":"qwen3vl-gguf-object-v3"%'
+    )
+`).run();
+
 let scanRunning = false;
 
 function post(message: WorkerResponse): void {
@@ -3758,7 +3797,7 @@ function completeVerifiedObjectDetectionJob(jobId: number, result: unknown) {
   const detectorVersion =
     typeof value.detector === "string" && value.detector.trim()
       ? value.detector.trim()
-      : "Qwen3-VL-8B-Thinking GGUF Q8_0 + mmproj F16 open-vocabulary v2";
+      : "Qwen3-VL-8B-Thinking GGUF Q8_0 + mmproj F16 structured non-thinking v3";
 
   const candidateCount = Math.max(0, Math.trunc(Number(value.candidateCount) || 0));
   const rejectedCount = Math.max(0, Math.trunc(Number(value.rejectedCount) || 0));
@@ -3869,7 +3908,7 @@ function completeVerifiedObjectDetectionJob(jobId: number, result: unknown) {
         candidateCount,
         verifiedCount: written,
         rejectedCount,
-        verificationVersion: "qwen3vl-gguf-object-v2"
+        verificationVersion: "qwen3vl-gguf-object-v3"
       }),
       jobId
     );
