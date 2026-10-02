@@ -41,6 +41,7 @@ export type AnalysisJob = {
 
 export type AnalysisErrorRecord = {
   id: number;
+  status: "FAILED" | "UNAVAILABLE";
   mediaId: number;
   module: string;
   relativePath: string;
