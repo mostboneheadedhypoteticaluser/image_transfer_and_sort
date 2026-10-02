@@ -1,13 +1,20 @@
 from __future__ import annotations
 
+import base64
 import gc
 import importlib.util
+import io
 import json
 import math
 import mimetypes
 import os
+import shutil
+import socket
+import subprocess
 import sys
 import time
+from urllib import error as urllib_error
+from urllib import request as urllib_request
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from typing import Any
@@ -21,15 +28,10 @@ except Exception:
 
 try:
     import torch
-    from transformers import (
-        AutoModel,
-        AutoModelForImageTextToText,
-        AutoProcessor,
-    )
+    from transformers import AutoModel, AutoProcessor
 except Exception:
     torch = None
     AutoModel = None
-    AutoModelForImageTextToText = None
     AutoProcessor = None
 
 try:
@@ -78,11 +80,20 @@ SIGLIP2_MAX_NUM_PATCHES = 1024
 QWEN3VL_MODEL_DIR = os.path.join(
     WORKER_DIR,
     "models",
-    "qwen3-vl-8b-thinking",
+    "qwen3-vl-8b-thinking-gguf",
 )
-QWEN3VL_MODEL_VERSION = "Qwen3-VL-8B-Thinking BF16 open-vocabulary v1"
-QWEN3VL_MAX_PIXELS = 2048 * 32 * 32
-QWEN3VL_MIN_PIXELS = 128 * 32 * 32
+QWEN3VL_MODEL_FILE = os.path.join(
+    QWEN3VL_MODEL_DIR,
+    "Qwen3VL-8B-Thinking-Q8_0.gguf",
+)
+QWEN3VL_MMPROJ_FILE = os.path.join(
+    QWEN3VL_MODEL_DIR,
+    "mmproj-Qwen3VL-8B-Thinking-F16.gguf",
+)
+QWEN3VL_MODEL_VERSION = (
+    "Qwen3-VL-8B-Thinking GGUF Q8_0 + mmproj F16 open-vocabulary v2"
+)
+QWEN3VL_CONTEXT_SIZE = 16384
 
 COCO_CLASS_NAMES = (
     "person", "bicycle", "car", "motorcycle", "airplane", "bus", "train",
@@ -105,8 +116,10 @@ _onnxruntime_module = None
 _siglip2_model = None
 _siglip2_processor = None
 _siglip2_coco_text_features = None
-_qwen3vl_model = None
-_qwen3vl_processor = None
+_qwen_server_process = None
+_qwen_server_port = None
+_qwen_server_log_handle = None
+QWEN_SERVER_LOG = os.path.join(WORKER_DIR, "llama-qwen3vl.log")
 
 
 @dataclass
@@ -126,6 +139,28 @@ config = WorkerConfig()
 runtime = WorkerRuntime()
 
 
+def find_llama_server() -> str | None:
+    configured = os.environ.get("IMAGE_SORTER_LLAMA_SERVER", "").strip()
+    if configured and os.path.isfile(configured):
+        return configured
+
+    for name in ("llama-server.exe", "llama-server"):
+        found = shutil.which(name)
+        if found:
+            return found
+
+    return None
+
+
+def qwen_gguf_ready() -> bool:
+    return (
+        os.path.isfile(QWEN3VL_MODEL_FILE)
+        and os.path.getsize(QWEN3VL_MODEL_FILE) > 8_000_000_000
+        and os.path.isfile(QWEN3VL_MMPROJ_FILE)
+        and os.path.getsize(QWEN3VL_MMPROJ_FILE) > 1_000_000_000
+    )
+
+
 def snapshot() -> dict:
     return {
         **asdict(config),
@@ -143,18 +178,8 @@ def snapshot() -> dict:
             "siglip2Model": os.path.isfile(
                 os.path.join(SIGLIP2_MODEL_DIR, "model.safetensors")
             ),
-            "qwen3vlModel": all(
-                os.path.isfile(os.path.join(QWEN3VL_MODEL_DIR, name))
-                for name in (
-                    "config.json",
-                    "model.safetensors.index.json",
-                    "model-00001-of-00004.safetensors",
-                    "model-00002-of-00004.safetensors",
-                    "model-00003-of-00004.safetensors",
-                    "model-00004-of-00004.safetensors",
-                )
-            ),
-            "qwen3vlRuntime": AutoModelForImageTextToText is not None,
+            "qwen3vlModel": qwen_gguf_ready(),
+            "qwen3vlRuntime": find_llama_server() is not None,
             "torch": torch is not None,
             "transformers": AutoModel is not None and AutoProcessor is not None,
             "onnxRuntime": importlib.util.find_spec("onnxruntime") is not None,
@@ -190,20 +215,8 @@ def snapshot() -> dict:
                 Image is not None
                 and ImageDraw is not None
                 and ImageOps is not None
-                and torch is not None
-                and AutoModelForImageTextToText is not None
-                and AutoProcessor is not None
-                and all(
-                    os.path.isfile(os.path.join(QWEN3VL_MODEL_DIR, name))
-                    for name in (
-                        "config.json",
-                        "model.safetensors.index.json",
-                        "model-00001-of-00004.safetensors",
-                        "model-00002-of-00004.safetensors",
-                        "model-00003-of-00004.safetensors",
-                        "model-00004-of-00004.safetensors",
-                    )
-                )
+                and qwen_gguf_ready()
+                and find_llama_server() is not None
             ),
         },
     }
