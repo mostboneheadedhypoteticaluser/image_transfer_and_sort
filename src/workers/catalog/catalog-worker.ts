@@ -822,6 +822,18 @@ function listMedia(sourceId: number, requestedLimit: number) {
           AND pd.input_sha256=m.sha256
           AND pd.agreement_count=1
       ) AS pet_single_model_count,
+      (
+        SELECT COUNT(DISTINCT od.label)
+        FROM object_detections od
+        WHERE od.media_id=m.id
+          AND od.input_sha256=m.sha256
+      ) AS object_count,
+      (
+        SELECT GROUP_CONCAT(DISTINCT od.label)
+        FROM object_detections od
+        WHERE od.media_id=m.id
+          AND od.input_sha256=m.sha256
+      ) AS object_labels,
       CASE
         WHEN m.availability='AVAILABLE' THEN (
           SELECT COUNT(*) - 1
@@ -869,6 +881,10 @@ function listMedia(sourceId: number, requestedLimit: number) {
     catCount: Number(row.cat_count ?? 0),
     petMultiModelCount: Number(row.pet_multi_model_count ?? 0),
     petSingleModelCount: Number(row.pet_single_model_count ?? 0),
+    objectCount: Number(row.object_count ?? 0),
+    objectLabels: row.object_labels
+      ? String(row.object_labels).split(",").filter(Boolean)
+      : [],
     lastSeenAt: String(row.last_seen_at)
   }));
 }
@@ -934,7 +950,19 @@ function listRecycleMedia(sourceId: number, requestedLimit: number) {
         WHERE pd.media_id=m.id
           AND pd.input_sha256=m.sha256
           AND pd.agreement_count=1
-      ) AS pet_single_model_count
+      ) AS pet_single_model_count,
+      (
+        SELECT COUNT(DISTINCT od.label)
+        FROM object_detections od
+        WHERE od.media_id=m.id
+          AND od.input_sha256=m.sha256
+      ) AS object_count,
+      (
+        SELECT GROUP_CONCAT(DISTINCT od.label)
+        FROM object_detections od
+        WHERE od.media_id=m.id
+          AND od.input_sha256=m.sha256
+      ) AS object_labels
     FROM media_items m
     LEFT JOIN media_thumbnails t ON t.media_id=m.id
     LEFT JOIN media_image_metadata md ON md.media_id=m.id
@@ -966,6 +994,10 @@ function listRecycleMedia(sourceId: number, requestedLimit: number) {
     catCount: Number(row.cat_count ?? 0),
     petMultiModelCount: Number(row.pet_multi_model_count ?? 0),
     petSingleModelCount: Number(row.pet_single_model_count ?? 0),
+    objectCount: Number(row.object_count ?? 0),
+    objectLabels: row.object_labels
+      ? String(row.object_labels).split(",").filter(Boolean)
+      : [],
     lastSeenAt: String(row.last_seen_at)
   }));
 }
