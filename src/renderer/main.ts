@@ -1,5 +1,6 @@
 import "./style.css";
 import type {
+  AnalysisErrorRecord,
   AnalysisWorkerStatus,
   DuplicateGroup,
   MediaRecord,
@@ -72,6 +73,17 @@ const petFusionStageState = document.querySelector<HTMLSpanElement>("#petFusionS
 const petFusionStageCounts = document.querySelector<HTMLElement>("#petFusionStageCounts")!;
 const petEmbeddingStageState = document.querySelector<HTMLSpanElement>("#petEmbeddingStageState")!;
 const petEmbeddingStageCounts = document.querySelector<HTMLElement>("#petEmbeddingStageCounts")!;
+const analysisErrorsButton = document.querySelector<HTMLButtonElement>("#analysisErrorsButton")!;
+const analysisErrorCount = document.querySelector<HTMLSpanElement>("#analysisErrorCount")!;
+const analysisErrorDialog = document.querySelector<HTMLDialogElement>("#analysisErrorDialog")!;
+const closeAnalysisErrorsButton = document.querySelector<HTMLButtonElement>("#closeAnalysisErrors")!;
+const retryAllAnalysisErrorsButton = document.querySelector<HTMLButtonElement>("#retryAllAnalysisErrors")!;
+const analysisErrorSummary = document.querySelector<HTMLSpanElement>("#analysisErrorSummary")!;
+const analysisErrorList = document.querySelector<HTMLDivElement>("#analysisErrorList")!;
+const imagePreviewDialog = document.querySelector<HTMLDialogElement>("#imagePreviewDialog")!;
+const closeImagePreviewButton = document.querySelector<HTMLButtonElement>("#closeImagePreview")!;
+const imagePreviewImage = document.querySelector<HTMLImageElement>("#imagePreviewImage")!;
+const imagePreviewCaption = document.querySelector<HTMLDivElement>("#imagePreviewCaption")!;
 
 let sources: SourceRecord[] = [];
 let currentView: CatalogView = "media";
@@ -180,6 +192,19 @@ function renderPipelineStatus(status: PipelineStatus): void {
   lastPetFusionDone = status.petFusion.done;
   lastPetEmbeddingDone = status.petEmbeddings.done;
 
+  const totalFailed =
+    status.technical.failed +
+    status.thumbnails.failed +
+    status.imageMetadata.failed +
+    status.faces.failed +
+    status.faceEmbeddings.failed +
+    status.petDetection.failed +
+    status.petFusion.failed +
+    status.petEmbeddings.failed;
+
+  analysisErrorCount.textContent = totalFailed.toLocaleString("de-DE");
+  analysisErrorsButton.hidden = totalFailed === 0;
+
   if (!visualDataChanged) return;
 
   if (analysisRefreshTimer !== null) {
@@ -209,6 +234,40 @@ function faceCropUrl(faceDetectionId: number): string {
 
 function petCropUrl(petDetectionId: number): string {
   return `image-sorter-pet://pet/${petDetectionId}`;
+}
+
+function fullPreviewUrl(mediaId: number): string {
+  return `image-sorter-preview://media/${mediaId}`;
+}
+
+function openImagePreview(mediaId: number, caption: string): void {
+  imagePreviewImage.src = fullPreviewUrl(mediaId);
+  imagePreviewImage.alt = caption;
+  imagePreviewCaption.textContent = caption;
+
+  if (!imagePreviewDialog.open) {
+    imagePreviewDialog.showModal();
+  }
+}
+
+function makePreviewable(
+  image: HTMLImageElement,
+  mediaId: number,
+  caption: string
+): void {
+  image.classList.add("previewable-image");
+  image.tabIndex = 0;
+  image.setAttribute("role", "button");
+  image.setAttribute("aria-label", "Bild groß anzeigen");
+
+  const open = () => openImagePreview(mediaId, caption);
+  image.addEventListener("click", open);
+  image.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      open();
+    }
+  });
 }
 
 function isEditingPersonView(): boolean {
@@ -317,6 +376,7 @@ function renderRows(rows: MediaRecord[], emptyText = "Noch keine Medien katalogi
       img.src = thumbnail;
       img.alt = "";
       img.loading = "lazy";
+      makePreviewable(img, row.id, row.relativePath);
       img.addEventListener("error", () => {
         previewCell.replaceChildren();
         const fallback = document.createElement("span");
