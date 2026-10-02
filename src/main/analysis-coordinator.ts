@@ -279,7 +279,8 @@ export class AnalysisCoordinator {
         stats.faceEmbeddings.running +
         stats.petDetection.running +
         stats.petFusion.running +
-        stats.petEmbeddings.running;
+        stats.petEmbeddings.running +
+        stats.semanticEmbeddings.running;
 
       if (totalRunning > 0) return;
 
@@ -305,7 +306,8 @@ export class AnalysisCoordinator {
         stats.faceEmbeddings.pending +
         stats.petDetection.pending +
         stats.petFusion.pending +
-        stats.petEmbeddings.pending - 1;
+        stats.petEmbeddings.pending +
+        stats.semanticEmbeddings.pending - 1;
 
       this.analysis.setQueueState(
         Math.max(0, queued),
