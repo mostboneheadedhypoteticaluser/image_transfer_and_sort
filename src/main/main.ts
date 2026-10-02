@@ -1,6 +1,6 @@
 import path from "node:path";
 import { readFile, rm } from "node:fs/promises";
-import { app, BrowserWindow, dialog, ipcMain, protocol, shell } from "electron";
+import { app, BrowserWindow, clipboard, dialog, ipcMain, protocol, shell } from "electron";
 import { CatalogService } from "./catalog-service";
 import { AnalysisService } from "./analysis-service";
 import { AnalysisCoordinator } from "./analysis-coordinator";
@@ -380,6 +380,17 @@ function registerIpc(): void {
       throw new Error("Dev-Protokoll konnte nicht geöffnet werden: " + result);
     }
     return { opened: true, path: logPath };
+  });
+
+  ipcMain.handle("analysis:copyDevLog", async () => {
+    const logPath = analysis!.getDevLogPath();
+    const text = await readFile(logPath, "utf8");
+    clipboard.writeText(text);
+    return {
+      copied: true,
+      path: logPath,
+      characters: text.length
+    };
   });
 
   ipcMain.handle(
