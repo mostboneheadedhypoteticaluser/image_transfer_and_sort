@@ -1543,12 +1543,19 @@ function analysisModuleLabel(module: string): string {
   return analysisModuleLabels[module] ?? module;
 }
 
+function isUnavailableAnalysisError(error: AnalysisErrorRecord): boolean {
+  return (
+    error.status === "UNAVAILABLE" ||
+    error.errorMessage.toLocaleLowerCase("de-DE").includes("nicht erreichbar")
+  );
+}
+
 function analysisErrorCopyText(error: AnalysisErrorRecord): string {
   return [
     "Image Sortierer – Analysefehler",
     "Stufe: " + analysisModuleLabel(error.module),
     "Modul: " + error.module,
-    "Status: " + (error.status === "UNAVAILABLE" ? "Datei nicht erreichbar" : "Analysefehler"),
+    "Status: " + (isUnavailableAnalysisError(error) ? "Datei nicht erreichbar" : "Analysefehler"),
     "Datei: " + error.relativePath,
     "Dateityp: " + error.extension,
     "Versuche: " + error.attempts.toLocaleString("de-DE"),
@@ -1596,7 +1603,7 @@ function renderAnalysisErrors(errors: AnalysisErrorRecord[]): void {
       ? error.finishedAt.replace("T", " ")
       : "Zeitpunkt unbekannt";
     meta.textContent =
-      (error.status === "UNAVAILABLE" ? "Datei nicht erreichbar" : "Analysefehler") +
+      (isUnavailableAnalysisError(error) ? "Datei nicht erreichbar" : "Analysefehler") +
       " · Versuche: " + error.attempts.toLocaleString("de-DE") +
       " · " + finished;
 
@@ -1617,7 +1624,7 @@ function renderAnalysisErrors(errors: AnalysisErrorRecord[]): void {
       });
     });
 
-    if (error.status === "UNAVAILABLE") {
+    if (isUnavailableAnalysisError(error)) {
       const openFileButton = document.createElement("button");
       openFileButton.type = "button";
       openFileButton.className = "ghost";
@@ -1654,7 +1661,7 @@ function renderAnalysisErrors(errors: AnalysisErrorRecord[]): void {
         progressText.textContent =
           result.retried > 0
             ? analysisModuleLabel(error.module) + " wurde erneut eingeplant."
-            : error.status === "UNAVAILABLE"
+            : isUnavailableAnalysisError(error)
               ? "Die Datei ist weiterhin nicht erreichbar."
               : "Der Fehlerjob ist nicht mehr erneut startbar.";
         await loadAnalysisErrors();
