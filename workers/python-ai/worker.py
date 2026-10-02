@@ -6,6 +6,7 @@ import math
 import mimetypes
 import os
 import sys
+import time
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from typing import Any
@@ -121,9 +122,37 @@ def require_file(payload: dict) -> str:
     file_path = os.path.abspath(str(payload.get("path", "")))
     if not file_path:
         raise RuntimeError("Dateipfad fehlt.")
-    if not os.path.isfile(file_path):
-        raise RuntimeError(f"Datei ist nicht erreichbar: {file_path}")
-    return file_path
+
+    # Externe/rotierende Windows-Laufwerke können nach längerer Inaktivität
+    # einige Sekunden zum Aufwachen benötigen. Ein einzelnes isfile() würde
+    # dann fälschlich einen dauerhaften Fehler erzeugen.
+    delays = (0.0, 0.5, 1.0, 2.0, 4.0)
+    last_error: Exception | None = None
+
+    for delay in delays:
+        if delay > 0:
+            time.sleep(delay)
+
+        try:
+            info = os.stat(file_path)
+            if not os.path.isfile(file_path):
+                continue
+
+            # Ein kurzer echter Lesezugriff stellt sicher, dass nicht nur der
+            # Verzeichniseintrag, sondern auch die Datei selbst erreichbar ist.
+            with open(file_path, "rb") as handle:
+                handle.read(1)
+
+            if info.st_size >= 0:
+                return file_path
+        except Exception as exc:
+            last_error = exc
+
+    detail = f" ({last_error})" if last_error is not None else ""
+    raise RuntimeError(
+        f"Datei ist nach mehreren Zugriffsversuchen nicht erreichbar: "
+        f"{file_path}{detail}"
+    )
 
 
 def verify_expected_size(file_path: str, payload: dict) -> None:
