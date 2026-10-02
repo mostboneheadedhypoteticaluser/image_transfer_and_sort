@@ -373,6 +373,15 @@ function registerIpc(): void {
     analysis!.refreshStatus()
   );
 
+  ipcMain.handle("analysis:openDevLog", async () => {
+    const logPath = analysis!.getDevLogPath();
+    const result = await shell.openPath(logPath);
+    if (result) {
+      throw new Error("Dev-Protokoll konnte nicht geöffnet werden: " + result);
+    }
+    return { opened: true, path: logPath };
+  });
+
   ipcMain.handle(
     "analysis:listErrors",
     (_event, sourceId?: number, limit = 200): Promise<AnalysisErrorRecord[]> =>
@@ -594,9 +603,18 @@ app.whenReady().then(() => {
     sendToRenderer("catalog:progress", progress);
   });
 
-  analysis = new AnalysisService(analysisWorkerPath, (status) => {
-    sendToRenderer("analysis:status", status);
-  });
+  const analysisDevLogPath = path.join(
+    app.getPath("userData"),
+    "analysis-dev.log"
+  );
+
+  analysis = new AnalysisService(
+    analysisWorkerPath,
+    (status) => {
+      sendToRenderer("analysis:status", status);
+    },
+    analysisDevLogPath
+  );
 
   thumbnailService = new ThumbnailService(
     thumbnailWorkerPath,
