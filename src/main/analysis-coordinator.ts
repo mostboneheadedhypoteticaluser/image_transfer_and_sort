@@ -321,8 +321,14 @@ export class AnalysisCoordinator {
             mediaId: job.mediaId,
             inputSha256: job.sha256
           });
+          const objects = await this.catalog.request<
+            Array<Record<string, unknown>>
+          >("getObjectDetectionsForFusion", {
+            mediaId: job.mediaId,
+            inputSha256: job.sha256
+          });
 
-          extraPayload = { detections };
+          extraPayload = { detections, objects };
         }
 
         if (spec.module === "pet-embed-dogreid-v1") {
