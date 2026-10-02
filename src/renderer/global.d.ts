@@ -1,6 +1,9 @@
 import type {
   AnalysisErrorRecord,
   AnalysisWorkerStatus,
+  QwenBenchmarkProfile,
+  QwenBenchmarkRunResult,
+  QwenBenchmarkStageResult,
   PipelineStatus,
   CatalogStats,
   ConfirmPersonResult,
@@ -36,6 +39,14 @@ declare global {
           path: string;
           characters: number;
         }>;
+        pickQwenBenchmarkImage(): Promise<string | null>;
+        runQwenBenchmark(
+          filePath: string,
+          profiles: QwenBenchmarkProfile[]
+        ): Promise<QwenBenchmarkRunResult>;
+        onQwenBenchmarkStage(
+          listener: (stage: QwenBenchmarkStageResult) => void
+        ): () => void;
         listErrors(sourceId?: number, limit?: number): Promise<AnalysisErrorRecord[]>;
         retryJob(jobId: number): Promise<RetryAnalysisResult>;
         retryAll(sourceId?: number): Promise<RetryAnalysisResult>;
