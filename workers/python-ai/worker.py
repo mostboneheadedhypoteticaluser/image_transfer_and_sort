@@ -2670,7 +2670,7 @@ def detect_qwen3vl_objects(file_path: str, hints: list[dict] | None = None) -> d
             final.append(item)
 
     return {
-        "module": "object-detect-qwen3vl-v1",
+        "module": "object-detect-qwen3vl-gguf-v2",
         "detector": QWEN3VL_MODEL_VERSION,
         "imageWidth": int(image.width),
         "imageHeight": int(image.height),
@@ -2862,6 +2862,7 @@ def handle(message: dict) -> bool:
         return True
 
     if method == "shutdown":
+        unload_qwen3vl()
         respond(request_id, result={"status": "bye"})
         return False
 
@@ -2870,22 +2871,25 @@ def handle(message: dict) -> bool:
 
 
 def main() -> int:
-    for line in sys.stdin:
-        line = line.strip()
-        if not line:
-            continue
+    try:
+        for line in sys.stdin:
+            line = line.strip()
+            if not line:
+                continue
 
-        try:
-            message = json.loads(line)
-            if not handle(message):
-                break
-        except Exception as exc:
-            request_id = None
             try:
-                request_id = message.get("id")  # type: ignore[name-defined]
-            except Exception:
-                pass
-            respond(request_id, error=str(exc))
+                message = json.loads(line)
+                if not handle(message):
+                    break
+            except Exception as exc:
+                request_id = None
+                try:
+                    request_id = message.get("id")  # type: ignore[name-defined]
+                except Exception:
+                    pass
+                respond(request_id, error=str(exc))
+    finally:
+        unload_qwen3vl()
 
     return 0
 
