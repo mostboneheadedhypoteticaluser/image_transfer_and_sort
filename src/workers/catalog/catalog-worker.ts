@@ -1679,7 +1679,8 @@ function getAnalysisQueueStats(sourceId?: number, module = "file-probe-v1") {
       SUM(CASE WHEN j.status='PENDING' THEN 1 ELSE 0 END) AS pending,
       SUM(CASE WHEN j.status='RUNNING' THEN 1 ELSE 0 END) AS running,
       SUM(CASE WHEN j.status='DONE' THEN 1 ELSE 0 END) AS done,
-      SUM(CASE WHEN j.status='FAILED' THEN 1 ELSE 0 END) AS failed
+      SUM(CASE WHEN j.status='FAILED' THEN 1 ELSE 0 END) AS failed,
+      SUM(CASE WHEN j.status='UNAVAILABLE' THEN 1 ELSE 0 END) AS unavailable
     FROM analysis_jobs j
     JOIN media_items m ON m.id=j.media_id
     WHERE ${filter}
@@ -1689,7 +1690,8 @@ function getAnalysisQueueStats(sourceId?: number, module = "file-probe-v1") {
     pending: Number(row?.pending ?? 0),
     running: Number(row?.running ?? 0),
     done: Number(row?.done ?? 0),
-    failed: Number(row?.failed ?? 0)
+    failed: Number(row?.failed ?? 0),
+    unavailable: Number(row?.unavailable ?? 0)
   };
 }
 
