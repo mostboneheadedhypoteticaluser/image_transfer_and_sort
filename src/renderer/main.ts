@@ -2472,17 +2472,66 @@ analysisCopyDevLogButton.addEventListener("click", () => {
   });
 });
 
-qwenBenchmarkButton.addEventListener("click", () => {
-  if (!qwenBenchmarkDialog.open) qwenBenchmarkDialog.showModal();
-});
-
-closeQwenBenchmarkButton.addEventListener("click", () => {
+async function closeQwenBenchmarkAndResume(): Promise<void> {
   if (qwenBenchmarkRunning) {
     qwenBenchmarkLive.textContent =
       "Der Test läuft noch. Nach Abschluss kann das Fenster geschlossen werden.";
     return;
   }
-  qwenBenchmarkDialog.close();
+
+  closeQwenBenchmarkButton.disabled = true;
+  pickQwenBenchmarkImageButton.disabled = true;
+  runQwenBenchmarkButton.disabled = true;
+  qwenBenchmarkLive.textContent =
+    "Testmodus wird beendet. Normale Analyse wird wieder freigegeben …";
+
+  try {
+    await window.imageSorter.analysis.finishQwenBenchmark();
+    qwenBenchmarkDialog.close();
+    progressText.textContent =
+      "Qwen-Einzeltest beendet. Normale Analyse läuft wieder weiter.";
+  } finally {
+    closeQwenBenchmarkButton.disabled = false;
+    pickQwenBenchmarkImageButton.disabled = false;
+    runQwenBenchmarkButton.disabled = false;
+  }
+}
+
+qwenBenchmarkButton.addEventListener("click", () => {
+  void runSafely(async () => {
+    if (!qwenBenchmarkDialog.open) qwenBenchmarkDialog.showModal();
+
+    qwenBenchmarkButton.disabled = true;
+    pickQwenBenchmarkImageButton.disabled = true;
+    runQwenBenchmarkButton.disabled = true;
+    qwenBenchmarkLive.textContent =
+      "Standard-Qwen wird jetzt gestoppt und aus dem Speicher entladen …";
+
+    try {
+      await window.imageSorter.analysis.prepareQwenBenchmark();
+      qwenBenchmarkLive.textContent =
+        "Standardanalyse ist vollständig pausiert und Qwen ist entladen. " +
+        "Du kannst jetzt ein Bild auswählen.";
+    } finally {
+      qwenBenchmarkButton.disabled = false;
+      pickQwenBenchmarkImageButton.disabled = false;
+      runQwenBenchmarkButton.disabled = false;
+    }
+  });
+});
+
+closeQwenBenchmarkButton.addEventListener("click", () => {
+  void runSafely(closeQwenBenchmarkAndResume);
+});
+
+qwenBenchmarkDialog.addEventListener("cancel", (event) => {
+  event.preventDefault();
+  if (!qwenBenchmarkRunning) {
+    void runSafely(closeQwenBenchmarkAndResume);
+  } else {
+    qwenBenchmarkLive.textContent =
+      "Der Test läuft noch. Nach Abschluss kann das Fenster geschlossen werden.";
+  }
 });
 
 pickQwenBenchmarkImageButton.addEventListener("click", () => {
@@ -2523,7 +2572,7 @@ runQwenBenchmarkButton.addEventListener("click", () => {
     copyQwenBenchmarkButton.disabled = true;
     closeQwenBenchmarkButton.disabled = true;
     qwenBenchmarkLive.textContent =
-      "Normale Analyse wird für den Einzeltest pausiert. Qwen wird vorbereitet …";
+      "Standardanalyse ist pausiert. Qwen-Test wird vorbereitet …";
 
     try {
       const result = await window.imageSorter.analysis.runQwenBenchmark(
