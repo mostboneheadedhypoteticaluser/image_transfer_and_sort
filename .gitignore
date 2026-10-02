@@ -17,7 +17,5 @@ workers/python-ai/models/*.onnx
 
 workers/python-ai/models/siglip2-so400m-patch16-naflex/
 
-workers/python-ai/models/grounding-dino-base/
-workers/python-ai/models/rfdetr/
 
 workers/python-ai/models/qwen3-vl-8b-thinking/
