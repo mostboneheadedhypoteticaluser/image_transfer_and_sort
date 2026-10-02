@@ -15,6 +15,7 @@ export type AnalysisQueueStats = {
   running: number;
   done: number;
   failed: number;
+  unavailable: number;
 };
 
 export type PipelineStatus = {
