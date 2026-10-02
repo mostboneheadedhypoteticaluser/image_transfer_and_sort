@@ -1641,6 +1641,138 @@ function getAnalysisQueueStats(sourceId?: number, module = "file-probe-v1") {
   };
 }
 
+
+function listAnalysisErrors(sourceId?: number, requestedLimit = 200) {
+  const limit = Math.max(1, Math.min(1000, Math.trunc(requestedLimit || 200)));
+  const sourceFilter = sourceId === undefined ? "" : "AND m.source_id=?";
+  const args: number[] = sourceId === undefined ? [] : [sourceId];
+
+  return db.prepare(`
+    SELECT
+      j.id,
+      j.media_id,
+      j.module,
+      j.attempts,
+      j.error_message,
+      j.started_at,
+      j.finished_at,
+      m.relative_path,
+      m.extension
+    FROM analysis_jobs j
+    JOIN media_items m ON m.id=j.media_id
+    WHERE j.status='FAILED'
+      ${sourceFilter}
+    ORDER BY
+      COALESCE(j.finished_at, j.updated_at) DESC,
+      j.id DESC
+    LIMIT ?
+  `).all(...args, limit).map((row) => ({
+    id: Number(row.id),
+    mediaId: Number(row.media_id),
+    module: String(row.module),
+    relativePath: String(row.relative_path),
+    extension: String(row.extension),
+    attempts: Number(row.attempts ?? 0),
+    errorMessage: String(row.error_message ?? "Unbekannter Analysefehler"),
+    startedAt: row.started_at === null ? null : String(row.started_at),
+    finishedAt: row.finished_at === null ? null : String(row.finished_at)
+  }));
+}
+
+function resetAnalysisJob(jobId: number): number {
+  const job = db.prepare(`
+    SELECT j.id, j.media_id, j.module, m.sha256
+    FROM analysis_jobs j
+    JOIN media_items m ON m.id=j.media_id
+    WHERE j.id=?
+      AND j.status='FAILED'
+      AND m.availability='AVAILABLE'
+  `).get(jobId);
+
+  if (!job) return 0;
+
+  const mediaId = Number(job.media_id);
+  const module = String(job.module);
+  const sha256 = String(job.sha256);
+
+  const modules = new Set<string>([module]);
+
+  if (module === "face-detect-yunet-v1") {
+    modules.add("face-embed-sface-v1");
+  }
+
+  if (
+    module === "pet-detect-nanodet-v1" ||
+    module === "pet-detect-yolox-v1"
+  ) {
+    modules.add("pet-fuse-ensemble-v1");
+    modules.add("pet-embed-dogreid-v1");
+  } else if (module === "pet-fuse-ensemble-v1") {
+    modules.add("pet-embed-dogreid-v1");
+  }
+
+  const reset = db.prepare(`
+    UPDATE analysis_jobs
+    SET
+      status='PENDING',
+      attempts=0,
+      input_sha256=?,
+      result_json=NULL,
+      error_message=NULL,
+      started_at=NULL,
+      finished_at=NULL,
+      updated_at=CURRENT_TIMESTAMP
+    WHERE media_id=?
+      AND module=?
+      AND status<>'RUNNING'
+  `);
+
+  let changes = 0;
+  for (const targetModule of modules) {
+    changes += Number(reset.run(sha256, mediaId, targetModule).changes);
+  }
+
+  return changes;
+}
+
+function retryAnalysisJob(jobId: number) {
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const retried = resetAnalysisJob(jobId);
+    db.exec("COMMIT");
+    return { retried };
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+}
+
+function retryFailedAnalysisJobs(sourceId?: number) {
+  const sourceFilter = sourceId === undefined ? "" : "AND m.source_id=?";
+  const args: number[] = sourceId === undefined ? [] : [sourceId];
+
+  const ids = db.prepare(`
+    SELECT j.id
+    FROM analysis_jobs j
+    JOIN media_items m ON m.id=j.media_id
+    WHERE j.status='FAILED'
+      AND m.availability='AVAILABLE'
+      ${sourceFilter}
+    ORDER BY j.id
+  `).all(...args).map((row) => Number(row.id));
+
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    let retried = 0;
+    for (const id of ids) retried += resetAnalysisJob(id);
+    db.exec("COMMIT");
+    return { retried };
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+}
+
 function claimAnalysisJob(module = "file-probe-v1") {
   db.exec("BEGIN IMMEDIATE");
   try {
@@ -5087,6 +5219,23 @@ async function restoreMedia(mediaId: number): Promise<RestoreResult> {
   };
 }
 
+function getMediaPreviewInfo(mediaId: number) {
+  const row = db.prepare(`
+    SELECT id, absolute_path, sha256
+    FROM media_items
+    WHERE id=?
+      AND availability='AVAILABLE'
+  `).get(mediaId);
+
+  if (!row) return null;
+
+  return {
+    mediaId: Number(row.id),
+    absolutePath: String(row.absolute_path),
+    inputSha256: String(row.sha256)
+  };
+}
+
 function resetCatalog(): { reset: true } {
   if (scanRunning) {
     throw new Error("Während eines laufenden Scans kann der Katalog nicht zurückgesetzt werden.");
@@ -5165,6 +5314,17 @@ async function dispatch(method: CatalogMethod, payload: Record<string, unknown> 
       return getAnalysisQueueStats(
         payload.sourceId === undefined ? undefined : asNumber(payload.sourceId, "sourceId"),
         typeof payload.module === "string" ? payload.module : "file-probe-v1"
+      );
+    case "listAnalysisErrors":
+      return listAnalysisErrors(
+        payload.sourceId === undefined ? undefined : asNumber(payload.sourceId, "sourceId"),
+        payload.limit === undefined ? 200 : asNumber(payload.limit, "limit")
+      );
+    case "retryAnalysisJob":
+      return retryAnalysisJob(asNumber(payload.jobId, "jobId"));
+    case "retryFailedAnalysisJobs":
+      return retryFailedAnalysisJobs(
+        payload.sourceId === undefined ? undefined : asNumber(payload.sourceId, "sourceId")
       );
     case "claimAnalysisJob":
       return claimAnalysisJob(
@@ -5332,6 +5492,8 @@ async function dispatch(method: CatalogMethod, payload: Record<string, unknown> 
       return getFaceCropInfo(asNumber(payload.faceDetectionId, "faceDetectionId"));
     case "getThumbnailInfo":
       return getThumbnailInfo(asNumber(payload.mediaId, "mediaId"));
+    case "getMediaPreviewInfo":
+      return getMediaPreviewInfo(asNumber(payload.mediaId, "mediaId"));
     case "scanSource":
       return scanSource(asNumber(payload.sourceId, "sourceId"));
     case "restoreMedia":
