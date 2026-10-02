@@ -218,13 +218,12 @@ export class AnalysisService {
         }
 
         if (
-          capabilities.rfdetr !== true ||
-          capabilities.rfdetrModel !== true ||
-          capabilities.groundingDinoModel !== true ||
-          capabilities.verifiedObjectDetection !== true
+          capabilities.qwen3vlModel !== true ||
+          capabilities.qwen3vlRuntime !== true ||
+          capabilities.qwenObjectDetection !== true
         ) {
           throw new Error(
-            "RF-DETR Large oder Grounding DINO Base für die Präzisions-Motiverkennung fehlt. " +
+            "Qwen3-VL-8B-Thinking für die große Motiverkennung fehlt oder ist unvollständig. " +
             "Bitte 'npm.cmd run setup:ai' ausführen."
           );
         }
