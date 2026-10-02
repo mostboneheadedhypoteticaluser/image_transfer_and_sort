@@ -132,6 +132,16 @@ export class PetService {
     );
   }
 
+  async confirmPetDetection(
+    petId: number,
+    petDetectionId: number
+  ): Promise<PetCorrectionResult> {
+    return this.catalog.request<PetCorrectionResult>(
+      "confirmPetDetection",
+      { petId, petDetectionId }
+    );
+  }
+
   async mergePets(
     targetPetId: number,
     sourcePetId: number
