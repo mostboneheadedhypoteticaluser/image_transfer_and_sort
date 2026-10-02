@@ -33,6 +33,10 @@ const api = {
       ipcRenderer.invoke("analysis:retryJob", jobId),
     retryAll: (sourceId?: number): Promise<RetryAnalysisResult> =>
       ipcRenderer.invoke("analysis:retryAll", sourceId),
+    openFile: (mediaId: number): Promise<{ opened: true }> =>
+      ipcRenderer.invoke("analysis:openFile", mediaId),
+    openFolder: (mediaId: number): Promise<{ opened: true }> =>
+      ipcRenderer.invoke("analysis:openFolder", mediaId),
     onStatus: (listener: (status: AnalysisWorkerStatus) => void) => {
       const handler = (_event: Electron.IpcRendererEvent, status: AnalysisWorkerStatus) => listener(status);
       ipcRenderer.on("analysis:status", handler);
