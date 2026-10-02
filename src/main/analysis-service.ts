@@ -146,7 +146,7 @@ export class AnalysisService {
         const ping = await this.request<Record<string, unknown>>(
           "ping",
           {},
-          20000
+          60000
         );
 
         const capabilities =
@@ -251,7 +251,7 @@ export class AnalysisService {
             cpuBudgetPercent: 50,
             profile: "background"
           },
-          5000
+          15000
         );
 
         this.applyWorkerResult(configured);
