@@ -4,7 +4,10 @@ import { existsSync, readdirSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import readline from "node:readline";
-import type { AnalysisWorkerStatus } from "../shared/protocol";
+import type {
+  AnalysisWorkerProgress,
+  AnalysisWorkerStatus
+} from "../shared/protocol";
 
 type Pending = {
   resolve: (value: unknown) => void;
@@ -74,7 +77,8 @@ const DEFAULT_STATUS: AnalysisWorkerStatus = {
   maxConcurrentJobs: 1,
   queuedJobs: 0,
   activeJobs: 0,
-  message: "Analyse-Worker ist noch nicht gestartet."
+  message: "Analyse-Worker ist noch nicht gestartet.",
+  progress: null
 };
 
 export class AnalysisService {
@@ -350,7 +354,30 @@ export class AnalysisService {
           typeof message.message === "string" &&
           message.message.trim()
         ) {
-          this.publish({ message: message.message.trim() });
+          const current =
+            typeof message.current === "number" && Number.isFinite(message.current)
+              ? Math.max(0, Math.trunc(message.current))
+              : null;
+          const total =
+            typeof message.total === "number" && Number.isFinite(message.total)
+              ? Math.max(0, Math.trunc(message.total))
+              : null;
+
+          const progress: AnalysisWorkerProgress = {
+            kind: "qwen3vl",
+            phase:
+              typeof message.phase === "string" && message.phase.trim()
+                ? message.phase.trim()
+                : "working",
+            current,
+            total,
+            message: message.message.trim()
+          };
+
+          this.publish({
+            message: progress.message,
+            progress
+          });
         }
         return;
       }
@@ -401,14 +428,16 @@ export class AnalysisService {
           pid: null,
           activeJobs: 0,
           queuedJobs: 0,
-          message: "Analyse-Worker wurde mit der App beendet."
+          message: "Analyse-Worker wurde mit der App beendet.",
+          progress: null
         });
       } else {
         this.publish({
           state: "ERROR",
           pid: null,
           activeJobs: 0,
-          message: error.message
+          message: error.message,
+          progress: null
         });
       }
     });
@@ -429,6 +458,7 @@ export class AnalysisService {
     this.publish({
       queuedJobs: Math.max(0, Math.trunc(queuedJobs)),
       activeJobs: Math.max(0, Math.trunc(activeJobs)),
+      progress: null,
       ...(message ? { message } : {})
     });
   }
