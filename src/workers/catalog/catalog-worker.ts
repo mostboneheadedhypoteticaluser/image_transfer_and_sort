@@ -5610,6 +5610,25 @@ function getMediaPreviewInfo(mediaId: number) {
   };
 }
 
+
+
+function getMediaPath(mediaId: number) {
+  const row = db.prepare(`
+    SELECT id, absolute_path, relative_path, availability
+    FROM media_items
+    WHERE id=?
+  `).get(mediaId);
+
+  if (!row) return null;
+
+  return {
+    mediaId: Number(row.id),
+    absolutePath: String(row.absolute_path),
+    relativePath: String(row.relative_path),
+    availability: String(row.availability)
+  };
+}
+
 function resetCatalog(): { reset: true } {
   if (scanRunning) {
     throw new Error("Während eines laufenden Scans kann der Katalog nicht zurückgesetzt werden.");
@@ -5880,6 +5899,8 @@ async function dispatch(method: CatalogMethod, payload: Record<string, unknown> 
       return getThumbnailInfo(asNumber(payload.mediaId, "mediaId"));
     case "getMediaPreviewInfo":
       return getMediaPreviewInfo(asNumber(payload.mediaId, "mediaId"));
+    case "getMediaPath":
+      return getMediaPath(asNumber(payload.mediaId, "mediaId"));
     case "scanSource":
       return scanSource(asNumber(payload.sourceId, "sourceId"));
     case "restoreMedia":
