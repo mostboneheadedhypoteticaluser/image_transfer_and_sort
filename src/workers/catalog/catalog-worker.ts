@@ -3820,6 +3820,7 @@ function confirmPetCandidate(
           JOIN pet_fused_detections pd ON pd.id=pa.pet_detection_id
           JOIN media_items m ON m.id=pd.media_id
           WHERE pa.pet_id=?
+            AND pa.assignment_source='CONFIRMED'
             AND m.source_id=?
         `).all(Number(rejectedPetId), Number(candidate.source_id))
           .map((row) => Number(row.pet_detection_id));
