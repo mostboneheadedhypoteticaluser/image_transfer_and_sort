@@ -22,6 +22,7 @@ import type {
   RestoreResult,
   SearchFacets,
   SearchFilter,
+  SemanticTextEmbedding,
   ScanProgress,
   ScanResult,
   WorkerRequest,
@@ -859,19 +860,31 @@ function normalizeSearchFilter(raw: SearchFilter | undefined): SearchFilter | un
       )]
     : [];
 
+  const semanticQuery =
+    typeof raw.semanticQuery === "string"
+      ? raw.semanticQuery.trim()
+      : "";
+  const semanticMinProbability = Math.max(
+    0,
+    Math.min(0.999, Number(raw.semanticMinProbability) || 0)
+  );
+
   return {
     personIds: uniquePositiveIds(raw.personIds),
     petIds: uniquePositiveIds(raw.petIds),
     objectLabels,
     minDogs: Math.max(0, Math.min(20, Math.trunc(Number(raw.minDogs) || 0))),
-    minCats: Math.max(0, Math.min(20, Math.trunc(Number(raw.minCats) || 0)))
+    minCats: Math.max(0, Math.min(20, Math.trunc(Number(raw.minCats) || 0))),
+    semanticQuery,
+    semanticMinProbability
   };
 }
 
 function listMedia(
   sourceId: number,
   requestedLimit: number,
-  rawSearch?: SearchFilter
+  rawSearch?: SearchFilter,
+  semantic?: SemanticTextEmbedding | null
 ) {
   const limit = Math.max(1, Math.min(2000, Math.trunc(requestedLimit || 500)));
   const search = normalizeSearchFilter(rawSearch);
@@ -941,12 +954,35 @@ function listMedia(
     }
   }
 
+  const semanticActive = Boolean(search?.semanticQuery);
+
+  if (semanticActive) {
+    if (
+      !semantic ||
+      !Array.isArray(semantic.vector) ||
+      semantic.vector.length === 0 ||
+      semantic.dimension !== semantic.vector.length ||
+      !Number.isFinite(semantic.logitScale) ||
+      !Number.isFinite(semantic.logitBias)
+    ) {
+      throw new Error("Semantischer Suchvektor ist nicht verfügbar.");
+    }
+
+    searchClauses.push(
+      "se.input_sha256=m.sha256",
+      "se.model_version=?",
+      "se.dimension=?"
+    );
+    searchArgs.push(semantic.model, semantic.dimension);
+  }
+
   const searchSql =
     searchClauses.length > 0
       ? "\n      AND " + searchClauses.join("\n      AND ")
       : "";
+  const limitSql = semanticActive ? "" : "\n    LIMIT ?";
 
-  return db.prepare(`
+  const rows = db.prepare(`
     SELECT
       m.id,
       m.relative_path,
@@ -1018,6 +1054,25 @@ function listMedia(
           AND od.input_sha256=m.sha256
       ) AS object_labels,
       CASE
+        WHEN se.media_id IS NOT NULL AND se.input_sha256=m.sha256 THEN 1
+        ELSE 0
+      END AS semantic_ready,
+      CASE
+        WHEN se.media_id IS NOT NULL AND se.input_sha256=m.sha256
+        THEN se.model_version
+        ELSE NULL
+      END AS semantic_model,
+      CASE
+        WHEN se.media_id IS NOT NULL AND se.input_sha256=m.sha256
+        THEN se.dimension
+        ELSE NULL
+      END AS semantic_dimension,
+      CASE
+        WHEN se.media_id IS NOT NULL AND se.input_sha256=m.sha256
+        THEN se.vector_blob
+        ELSE NULL
+      END AS semantic_vector,
+      CASE
         WHEN m.availability='AVAILABLE' THEN (
           SELECT COUNT(*) - 1
           FROM media_items d
@@ -1031,6 +1086,7 @@ function listMedia(
     FROM media_items m
     LEFT JOIN media_thumbnails t ON t.media_id=m.id
     LEFT JOIN media_image_metadata md ON md.media_id=m.id
+    LEFT JOIN semantic_embeddings se ON se.media_id=m.id
     WHERE m.source_id=?${searchSql}
     ORDER BY
       CASE
@@ -1040,8 +1096,44 @@ function listMedia(
         ELSE 0
       END,
       m.relative_path COLLATE NOCASE
-    LIMIT ?
-  `).all(sourceId, ...searchArgs, limit).map((row) => ({
+    ${limitSql}
+  `).all(
+    sourceId,
+    ...searchArgs,
+    ...(semanticActive ? [] : [limit])
+  );
+
+  const mapped = rows.map((row) => {
+    let semanticScore: number | null = null;
+
+    if (semanticActive && semantic) {
+      const dimension = Number(row.semantic_dimension);
+      const imageVector = vectorFromBlob(row.semantic_vector, dimension);
+
+      if (dimension !== semantic.vector.length) {
+        return null;
+      }
+
+      let dot = 0;
+      for (let index = 0; index < dimension; index += 1) {
+        dot += imageVector[index] * semantic.vector[index];
+      }
+
+      const logit = dot * semantic.logitScale + semantic.logitBias;
+      semanticScore =
+        logit >= 0
+          ? 1 / (1 + Math.exp(-logit))
+          : Math.exp(logit) / (1 + Math.exp(logit));
+
+      if (
+        !Number.isFinite(semanticScore) ||
+        semanticScore < (search?.semanticMinProbability ?? 0)
+      ) {
+        return null;
+      }
+    }
+
+    return {
     id: Number(row.id),
     relativePath: String(row.relative_path),
     extension: String(row.extension),
@@ -1068,8 +1160,21 @@ function listMedia(
     objectLabels: row.object_labels
       ? String(row.object_labels).split(",").filter(Boolean)
       : [],
+    semanticReady: Boolean(row.semantic_ready),
+    semanticModel: row.semantic_model ? String(row.semantic_model) : null,
+    semanticScore,
     lastSeenAt: String(row.last_seen_at)
-  }));
+    };
+  }).filter((row): row is NonNullable<typeof row> => row !== null);
+
+  if (semanticActive) {
+    mapped.sort((left, right) =>
+      (right.semanticScore ?? -1) - (left.semanticScore ?? -1) ||
+      left.relativePath.localeCompare(right.relativePath, "de")
+    );
+  }
+
+  return mapped.slice(0, limit);
 }
 
 function getSearchFacets(sourceId: number): SearchFacets {
