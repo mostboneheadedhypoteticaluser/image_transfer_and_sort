@@ -31,6 +31,8 @@ declare global {
         listErrors(sourceId?: number, limit?: number): Promise<AnalysisErrorRecord[]>;
         retryJob(jobId: number): Promise<RetryAnalysisResult>;
         retryAll(sourceId?: number): Promise<RetryAnalysisResult>;
+        openFile(mediaId: number): Promise<{ opened: true }>;
+        openFolder(mediaId: number): Promise<{ opened: true }>;
         onStatus(listener: (status: AnalysisWorkerStatus) => void): () => void;
         onPipelineStatus(listener: (status: PipelineStatus) => void): () => void;
       };
