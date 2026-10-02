@@ -13,6 +13,8 @@ type Pending = {
   resolve: (value: unknown) => void;
   reject: (reason: Error) => void;
   timeout: NodeJS.Timeout;
+  timeoutMs: number;
+  method: string;
 };
 
 type WorkerResponse = {
@@ -374,6 +376,9 @@ export class AnalysisService {
             message: message.message.trim()
           };
 
+          const pending = this.pending.get(requestId);
+          if (pending) this.armPendingTimeout(requestId, pending);
+
           this.publish({
             message: progress.message,
             progress
@@ -463,6 +468,41 @@ export class AnalysisService {
     });
   }
 
+  private armPendingTimeout(id: string, pending: Pending): void {
+    clearTimeout(pending.timeout);
+    pending.timeout = setTimeout(() => {
+      const current = this.pending.get(id);
+      if (!current) return;
+
+      this.pending.delete(id);
+      const error = new Error(
+        `Zeitüberschreitung bei Analyse-Worker-Methode ${current.method}.`
+      );
+      current.reject(error);
+
+      // Ein abgelaufener Qwen-Aufruf darf nicht im Python-Prozess weiterlaufen
+      // und alle folgenden Jobs blockieren. Worker + llama.cpp-Prozessbaum
+      // werden beendet und anschließend frisch gestartet.
+      if (current.method === "detect_qwen3vl_objects") {
+        this.publish({
+          state: "STARTING",
+          progress: null,
+          message:
+            "Qwen3-VL hat zu lange keine Aktivität gemeldet. " +
+            "Analyse-Worker wird sauber neu gestartet …"
+        });
+
+        this.killChild();
+
+        const restart = setTimeout(() => {
+          void this.start();
+        }, 1200);
+        restart.unref();
+      }
+    }, pending.timeoutMs);
+    pending.timeout.unref();
+  }
+
   async request<T>(
     method: string,
     payload: Record<string, unknown> = {},
@@ -474,16 +514,16 @@ export class AnalysisService {
     const id = randomUUID();
 
     const response = new Promise<T>((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        this.pending.delete(id);
-        reject(new Error(`Zeitüberschreitung bei Analyse-Worker-Methode ${method}.`));
-      }, timeoutMs);
-
-      this.pending.set(id, {
+      const pending: Pending = {
         resolve: (value) => resolve(value as T),
         reject,
-        timeout
-      });
+        timeout: setTimeout(() => {}, 1),
+        timeoutMs,
+        method
+      };
+
+      this.pending.set(id, pending);
+      this.armPendingTimeout(id, pending);
     });
 
     child.stdin.write(JSON.stringify({ id, method, payload }) + "\n");
@@ -539,9 +579,25 @@ export class AnalysisService {
     this.pending.clear();
 
     try {
-      child.kill();
+      if (process.platform === "win32" && child.pid) {
+        const killer = spawn(
+          "taskkill",
+          ["/PID", String(child.pid), "/T", "/F"],
+          {
+            stdio: "ignore",
+            windowsHide: true
+          }
+        );
+        killer.unref();
+      } else {
+        child.kill();
+      }
     } catch {
-      // Prozess ist bereits beendet.
+      try {
+        child.kill();
+      } catch {
+        // Prozess ist bereits beendet.
+      }
     }
   }
 }
