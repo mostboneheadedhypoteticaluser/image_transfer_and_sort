@@ -1447,6 +1447,102 @@ async function loadPetOverview(
   }
 }
 
+const analysisModuleLabels: Record<string, string> = {
+  "file-probe-v1": "Technische Prüfung",
+  "thumbnail-v1": "Thumbnail",
+  "image-metadata-v1": "Bildmetadaten",
+  "face-detect-yunet-v1": "Gesichter erkennen (YuNet)",
+  "face-embed-sface-v1": "Gesichtsmerkmale (SFace)",
+  "pet-detect-nanodet-v1": "Haustierdetektor NanoDet",
+  "pet-detect-yolox-v1": "Haustierdetektor YOLOX-S",
+  "pet-fuse-ensemble-v1": "Haustier-Ergebnisse fusionieren",
+  "pet-embed-dogreid-v1": "Individuelle Hundemerkmale"
+};
+
+function analysisModuleLabel(module: string): string {
+  return analysisModuleLabels[module] ?? module;
+}
+
+function renderAnalysisErrors(errors: AnalysisErrorRecord[]): void {
+  analysisErrorList.replaceChildren();
+  analysisErrorSummary.textContent =
+    errors.length.toLocaleString("de-DE") + " " +
+    (errors.length === 1 ? "Fehler" : "Fehler");
+
+  if (errors.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "analysis-error-empty";
+    empty.textContent = "Aktuell sind keine fehlgeschlagenen Analysejobs vorhanden.";
+    analysisErrorList.appendChild(empty);
+    return;
+  }
+
+  const fragment = document.createDocumentFragment();
+
+  for (const error of errors) {
+    const card = document.createElement("article");
+    card.className = "analysis-error-card";
+
+    const header = document.createElement("div");
+    header.className = "analysis-error-card-header";
+
+    const heading = document.createElement("div");
+    const title = document.createElement("strong");
+    title.textContent = analysisModuleLabel(error.module);
+
+    const meta = document.createElement("small");
+    const finished = error.finishedAt
+      ? error.finishedAt.replace("T", " ")
+      : "Zeitpunkt unbekannt";
+    meta.textContent =
+      "Versuche: " + error.attempts.toLocaleString("de-DE") +
+      " · " + finished;
+
+    heading.append(title, meta);
+
+    const retryButton = document.createElement("button");
+    retryButton.type = "button";
+    retryButton.className = "secondary";
+    retryButton.textContent = "Erneut versuchen";
+    retryButton.addEventListener("click", () => {
+      void runSafely(async () => {
+        retryButton.disabled = true;
+        const result = await window.imageSorter.analysis.retryJob(error.id);
+        progressText.textContent =
+          result.retried > 0
+            ? analysisModuleLabel(error.module) + " wurde erneut eingeplant."
+            : "Der Fehlerjob ist nicht mehr erneut startbar.";
+        await loadAnalysisErrors();
+      });
+    });
+
+    header.append(heading, retryButton);
+
+    const path = document.createElement("div");
+    path.className = "analysis-error-path";
+    path.textContent = error.relativePath;
+    path.title = error.relativePath;
+
+    const message = document.createElement("pre");
+    message.className = "analysis-error-message";
+    message.textContent = error.errorMessage;
+
+    card.append(header, path, message);
+    fragment.appendChild(card);
+  }
+
+  analysisErrorList.appendChild(fragment);
+}
+
+async function loadAnalysisErrors(): Promise<void> {
+  const sourceId = selectedSourceId() ?? undefined;
+  const errors = await window.imageSorter.analysis.listErrors(sourceId, 300);
+  renderAnalysisErrors(errors);
+
+  analysisErrorCount.textContent = errors.length.toLocaleString("de-DE");
+  analysisErrorsButton.hidden = errors.length === 0;
+}
+
 async function refreshCatalog(): Promise<void> {
   const sourceId = selectedSourceId();
   scanButton.disabled = sourceId === null || scanning || restoring || resetting;
@@ -1690,6 +1786,53 @@ refreshPetsButton.addEventListener("click", () => {
     petsTabCount.textContent = stats.petCandidates.toLocaleString("de-DE");
   });
 });
+analysisErrorsButton.addEventListener("click", () => {
+  void runSafely(async () => {
+    await loadAnalysisErrors();
+    if (!analysisErrorDialog.open) analysisErrorDialog.showModal();
+  });
+});
+
+closeAnalysisErrorsButton.addEventListener("click", () => {
+  analysisErrorDialog.close();
+});
+
+retryAllAnalysisErrorsButton.addEventListener("click", () => {
+  const sourceId = selectedSourceId() ?? undefined;
+
+  void runSafely(async () => {
+    retryAllAnalysisErrorsButton.disabled = true;
+    try {
+      const result = await window.imageSorter.analysis.retryAll(sourceId);
+      progressText.textContent =
+        result.retried.toLocaleString("de-DE") +
+        (result.retried === 1
+          ? " Analysejob wurde erneut eingeplant."
+          : " Analysejobs wurden erneut eingeplant.");
+      await loadAnalysisErrors();
+    } finally {
+      retryAllAnalysisErrorsButton.disabled = false;
+    }
+  });
+});
+
+analysisErrorDialog.addEventListener("click", (event) => {
+  if (event.target === analysisErrorDialog) analysisErrorDialog.close();
+});
+
+closeImagePreviewButton.addEventListener("click", () => {
+  imagePreviewDialog.close();
+});
+
+imagePreviewDialog.addEventListener("click", (event) => {
+  if (event.target === imagePreviewDialog) imagePreviewDialog.close();
+});
+
+imagePreviewDialog.addEventListener("close", () => {
+  imagePreviewImage.removeAttribute("src");
+  imagePreviewCaption.textContent = "";
+});
+
 sourceSelect.addEventListener("change", () => void runSafely(refreshCatalog));
 refreshButton.addEventListener("click", () => void runSafely(refreshCatalog));
 
