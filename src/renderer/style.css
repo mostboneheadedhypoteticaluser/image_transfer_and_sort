@@ -1658,3 +1658,202 @@ td .badge + .badge {
     grid-template-columns: 1fr;
   }
 }
+
+
+.qwen-benchmark-dialog {
+  width: min(1120px, calc(100vw - 48px));
+  max-height: calc(100vh - 48px);
+}
+
+.qwen-benchmark-body {
+  display: grid;
+  gap: 14px;
+  padding: 16px 18px 20px;
+}
+
+.qwen-benchmark-file-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+}
+
+.qwen-benchmark-file-row code {
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid #e1e6ea;
+  border-radius: 8px;
+  background: #f7f9fa;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+.qwen-benchmark-profiles {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0;
+  padding: 12px;
+  border: 1px solid #e1e6ea;
+  border-radius: 10px;
+}
+
+.qwen-benchmark-profiles legend {
+  padding: 0 6px;
+  color: #68717d;
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.qwen-benchmark-profiles label {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 9px;
+  align-items: start;
+  padding: 10px;
+  border: 1px solid #edf0f2;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.qwen-benchmark-profiles input {
+  margin-top: 3px;
+}
+
+.qwen-benchmark-profiles strong,
+.qwen-benchmark-profiles small {
+  display: block;
+}
+
+.qwen-benchmark-profiles strong {
+  margin-bottom: 3px;
+  font-size: 13px;
+}
+
+.qwen-benchmark-profiles small {
+  color: #6f7984;
+  line-height: 1.35;
+}
+
+.qwen-benchmark-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.qwen-benchmark-live {
+  min-height: 46px;
+  padding: 12px 14px;
+  border: 1px solid #dfe6ec;
+  border-radius: 9px;
+  background: #f7fafc;
+  color: #3e5f7d;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.qwen-benchmark-results {
+  display: grid;
+  gap: 10px;
+}
+
+.qwen-benchmark-empty,
+.qwen-benchmark-note {
+  margin: 0;
+  color: #727c87;
+  font-size: 12px;
+}
+
+.qwen-benchmark-result {
+  padding: 13px 14px;
+  border: 1px solid #e2e7eb;
+  border-radius: 10px;
+  background: #fff;
+}
+
+.qwen-benchmark-result-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  align-items: baseline;
+  margin-bottom: 9px;
+}
+
+.qwen-benchmark-result-header h3 {
+  margin: 0;
+  font-size: 14px;
+}
+
+.qwen-benchmark-result-header strong {
+  white-space: nowrap;
+  font-size: 14px;
+}
+
+.qwen-benchmark-metrics {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 6px;
+  margin-bottom: 9px;
+}
+
+.qwen-benchmark-metric {
+  padding: 8px 9px;
+  border-radius: 7px;
+  background: #f6f8fa;
+}
+
+.qwen-benchmark-metric small,
+.qwen-benchmark-metric strong {
+  display: block;
+}
+
+.qwen-benchmark-metric small {
+  margin-bottom: 3px;
+  color: #7a8490;
+  font-size: 10px;
+}
+
+.qwen-benchmark-metric strong {
+  font-size: 12px;
+}
+
+.qwen-benchmark-result p {
+  margin: 0;
+  color: #4f5b67;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.qwen-benchmark-result details {
+  margin-top: 8px;
+}
+
+.qwen-benchmark-result summary {
+  cursor: pointer;
+  color: #68717d;
+  font-size: 11px;
+}
+
+.qwen-benchmark-result pre {
+  max-height: 260px;
+  margin: 8px 0 0;
+  padding: 10px;
+  overflow: auto;
+  border-radius: 7px;
+  background: #111820;
+  color: #e7edf3;
+  font-size: 10px;
+  line-height: 1.35;
+}
+
+@media (max-width: 1000px) {
+  .qwen-benchmark-profiles {
+    grid-template-columns: 1fr;
+  }
+
+  .qwen-benchmark-metrics {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
