@@ -121,8 +121,20 @@ let lastObjectVerificationDone = -1;
 let lastSemanticDone = -1;
 let analysisRefreshTimer: number | null = null;
 let searchFacetsSourceId: number | null = null;
+let latestAnalysisStatus: AnalysisWorkerStatus | null = null;
+
+function renderQwenLiveProgress(): void {
+  const progress = latestAnalysisStatus?.progress;
+  if (!progress || progress.kind !== "qwen3vl") return;
+
+  objectVerificationStageState.className = "stage-state running";
+  objectVerificationStageState.textContent = "Läuft";
+  objectVerificationStageCounts.textContent =
+    progress.message.replace(/^Qwen3-VL:\s*/, "");
+}
 
 function renderAnalysisStatus(status: AnalysisWorkerStatus): void {
+  latestAnalysisStatus = status;
   analysisWorkerState.className = "analysis-state";
 
   switch (status.state) {
@@ -153,6 +165,23 @@ function renderAnalysisStatus(status: AnalysisWorkerStatus): void {
   analysisQueue.textContent = status.queuedJobs.toLocaleString("de-DE");
   analysisActive.textContent = status.activeJobs.toLocaleString("de-DE");
   analysisMessage.textContent = status.message;
+
+  if (status.progress?.kind === "qwen3vl") {
+    const progress = status.progress;
+    if (
+      progress.current !== null &&
+      progress.total !== null &&
+      progress.total > 0
+    ) {
+      analysisWorkerState.textContent =
+        `Qwen ${progress.current.toLocaleString("de-DE")}/` +
+        progress.total.toLocaleString("de-DE");
+    } else {
+      analysisWorkerState.textContent = "Qwen läuft";
+    }
+  }
+
+  renderQwenLiveProgress();
 }
 
 function stageText(stats: PipelineStatus["technical"]): {
@@ -211,6 +240,10 @@ function renderPipelineStatus(status: PipelineStatus): void {
     semanticStageCounts,
     status.semanticEmbeddings
   );
+
+  // Ein Pipeline-Refresh darf den feineren Live-Status einer laufenden
+  // Qwen-Anfrage nicht mit den groben Job-Zählern überschreiben.
+  renderQwenLiveProgress();
 
   const visualDataChanged =
     status.thumbnails.done !== lastThumbnailDone ||
