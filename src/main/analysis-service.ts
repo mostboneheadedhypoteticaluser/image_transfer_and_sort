@@ -251,7 +251,7 @@ export class AnalysisService {
         await this.launch(candidate);
         this.devLog("PYTHON_SPAWN_READY", {
           label: candidate.label,
-          childPid: this.child?.pid ?? null,
+          childPid: this.status.pid,
           elapsedMs: Date.now() - candidateAt
         });
 
@@ -381,7 +381,7 @@ export class AnalysisService {
         });
         this.devLog("START_READY", {
           totalElapsedMs: Date.now() - startAt,
-          childPid: this.child?.pid ?? null,
+          childPid: this.status.pid,
           python: candidate.label
         });
         return;
@@ -738,7 +738,7 @@ export class AnalysisService {
 
   stop(): void {
     this.devLog("STOP_GRACEFUL_BEGIN", {
-      childPid: this.child?.pid ?? null
+      childPid: this.status.pid
     });
     this.stopping = true;
     const child = this.child;
@@ -774,7 +774,7 @@ export class AnalysisService {
   stopImmediately(): void {
     const stopAt = Date.now();
     this.devLog("STOP_IMMEDIATE_BEGIN", {
-      childPid: this.child?.pid ?? null
+      childPid: this.status.pid
     });
     this.stopping = true;
     const child = this.child;
