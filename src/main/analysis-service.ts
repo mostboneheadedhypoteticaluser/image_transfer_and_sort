@@ -1,5 +1,9 @@
 import { randomUUID } from "node:crypto";
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import {
+  spawn,
+  spawnSync,
+  type ChildProcessWithoutNullStreams
+} from "node:child_process";
 import { existsSync, readdirSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
@@ -547,7 +551,7 @@ export class AnalysisService {
     this.stopping = true;
     const child = this.child;
     if (!child) {
-      this.publish({ state: "STOPPED", pid: null });
+      this.publish({ state: "STOPPED", pid: null, progress: null });
       return;
     }
 
@@ -564,6 +568,76 @@ export class AnalysisService {
       if (this.child === child) this.killChild();
     }, 500);
     timer.unref();
+  }
+
+  /**
+   * Harte, synchrone Beendigung für den App-Shutdown.
+   *
+   * Ein laufender Qwen-Aufruf blockiert den Python-Worker in urllib und kann
+   * deshalb kein "shutdown" mehr aus stdin lesen. Beim normalen App-Ende darf
+   * Electron außerdem nicht verschwinden, bevor taskkill den von uns gestarteten
+   * Prozessbaum wirklich beendet hat. Unter Windows wird deshalb synchron
+   * Python + dessen llama-server-Kindprozess beendet.
+   */
+  stopImmediately(): void {
+    this.stopping = true;
+    const child = this.child;
+
+    if (!child) {
+      this.publish({
+        state: "STOPPED",
+        pid: null,
+        activeJobs: 0,
+        queuedJobs: 0,
+        progress: null,
+        message: "Analyse-Worker ist beendet."
+      });
+      return;
+    }
+
+    this.child = null;
+
+    const shutdownError = new Error(
+      "Analyse-Worker wurde wegen App-Beendigung gestoppt."
+    );
+    for (const pending of this.pending.values()) {
+      clearTimeout(pending.timeout);
+      pending.reject(shutdownError);
+    }
+    this.pending.clear();
+
+    try {
+      if (process.platform === "win32" && child.pid) {
+        // /T beendet nur den Prozessbaum dieses konkreten Python-Workers.
+        // Dadurch wird kein fremder llama-server auf dem System angefasst.
+        spawnSync(
+          "taskkill",
+          ["/PID", String(child.pid), "/T", "/F"],
+          {
+            stdio: "ignore",
+            windowsHide: true,
+            timeout: 15000
+          }
+        );
+      } else {
+        child.kill("SIGKILL");
+      }
+    } catch {
+      try {
+        child.kill("SIGKILL");
+      } catch {
+        // Prozess ist bereits beendet.
+      }
+    }
+
+    this.publish({
+      state: "STOPPED",
+      pid: null,
+      activeJobs: 0,
+      queuedJobs: 0,
+      progress: null,
+      message: "Analyse-Worker und Qwen wurden vollständig beendet."
+    });
   }
 
   private killChild(): void {
