@@ -386,6 +386,7 @@ export type CatalogMethod =
   | "completePetEmbeddingJob"
   | "getPetEmbeddingsForClustering"
   | "replacePetCandidates"
+  | "autoAssignKnownPetCandidates"
   | "listPetCandidates"
   | "listPets"
   | "confirmPetCandidate"
