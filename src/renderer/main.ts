@@ -512,7 +512,7 @@ function renderRows(rows: MediaRecord[], emptyText = "Noch keine Medien katalogi
         "Motive: " + visible.join(" · ") +
         (motifLabels.length > visible.length ? " …" : "");
       motifBadge.title =
-        "YOLOX-S erkannte Objekte: " + motifLabels.join(", ");
+        "Ensemble aus NanoDet + YOLOX-S: " + motifLabels.join(", ");
       stateCell.appendChild(motifBadge);
     }
 
