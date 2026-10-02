@@ -51,6 +51,28 @@ Damit können Analysemodelle später ersetzt oder erweitert werden, ohne Katalog
 `pet-embed-dogreid-v1` nutzt das externe ONNX-Modell **DogReID DINOv2-B14 0.2.0**. Die Session wird lazy geladen; Bilder ohne fusionierten Hundefund schließen den Job ohne Bilddekodierung und ohne Modellinferenz ab. Eingabe: RGB 224×224, ImageNet-Normalisierung, NCHW. Ausgabe: L2-normalisierter Merkmalsvektor.
 
 
+## Dev-Protokoll für Performance und Fehler
+
+Beim Start legt die Electron-App im Benutzer-Datenverzeichnis die Datei
+`analysis-dev.log` an. Sie enthält JSONL-Einträge aus Electron und dem
+Python-Analyse-Worker mit Zeitstempeln, PID, Laufzeiten und Fehlern.
+
+Gemessen werden unter anderem:
+
+- Spawn des Python-Workers, `ping` und `configure`
+- Importzeit von Pillow sowie OpenCV/Numpy
+- Suche nach `llama-server`
+- Import von PyTorch/Transformers
+- Ladezeit von SigLIP2 und Dog-ReID
+- Start- und Ladezeit des Qwen/llama.cpp-Servers
+- Dauer jeder Worker-Methode und jedes Qwen-Bild-/Kachel-/Crop-Aufrufs
+- Timeouts, stderr, Prozessabbrüche und Shutdown
+- freier Systemspeicher und Electron-RSS bei Electron-Ereignissen
+
+Das Protokoll kann in der Analyseansicht über **Dev-Protokoll öffnen** direkt
+geöffnet werden. Ab ungefähr 8 MB wird die vorherige Datei einmalig nach
+`analysis-dev.log.1` rotiert.
+
 ## Allgemeine Motiverkennung mit Qwen3-VL-8B-Thinking Q8_0
 
 Die allgemeine Motiverkennung ist vollständig von der funktionierenden
