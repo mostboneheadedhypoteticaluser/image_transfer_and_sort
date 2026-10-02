@@ -12,7 +12,7 @@ type CropBox = {
 type Request = {
   kind: "request";
   id: string;
-  mode?: "thumbnail" | "face-crop" | "pet-crop";
+  mode?: "thumbnail" | "preview" | "face-crop" | "pet-crop";
   inputPath: string;
   outputPath: string;
   maxWidth: number;
