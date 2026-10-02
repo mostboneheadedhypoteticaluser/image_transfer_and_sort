@@ -29,6 +29,8 @@ import type {
   RestoreResult,
   ResetCatalogResult,
   RetryAnalysisResult,
+  SearchFacets,
+  SearchFilter,
   ScanResult,
   SourceRecord,
   ThumbnailInfo,
@@ -245,6 +247,16 @@ function registerIpc(): void {
 
   ipcMain.handle("catalog:listMedia", (_event, sourceId: number, limit: number) =>
     catalog!.request<MediaRecord[]>("listMedia", { sourceId, limit })
+  );
+
+  ipcMain.handle("catalog:getSearchFacets", (_event, sourceId: number) =>
+    catalog!.request<SearchFacets>("getSearchFacets", { sourceId })
+  );
+
+  ipcMain.handle(
+    "catalog:searchMedia",
+    (_event, sourceId: number, filter: SearchFilter, limit: number) =>
+      catalog!.request<MediaRecord[]>("searchMedia", { sourceId, filter, limit })
   );
 
   ipcMain.handle("catalog:listDuplicateGroups", (_event, sourceId: number, limit: number) =>
