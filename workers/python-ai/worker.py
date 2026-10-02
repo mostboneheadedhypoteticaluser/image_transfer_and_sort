@@ -2334,7 +2334,17 @@ def qwen3vl_generate(
     progress_request_id: str | None = None,
     progress_label: str = "Qwen3-VL",
 ) -> str:
+    generation_started = time.perf_counter()
     port = qwen3vl_runtime()
+    width, height = image.size
+    dev_log(
+        "QWEN_GENERATE_BEGIN",
+        label=progress_label,
+        imageWidth=int(width),
+        imageHeight=int(height),
+        maxNewTokens=int(max_new_tokens),
+        port=port,
+    )
 
     # Für diese streng strukturierte Objektaufgabe brauchen wir keine langen
     # sichtbaren Denkprotokolle. Das gleiche 8B-Modell bleibt aktiv, aber die
@@ -2431,10 +2441,23 @@ def qwen3vl_generate(
                     last_progress_at = now
     except urllib_error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")
+        dev_log(
+            "QWEN_GENERATE_HTTP_ERROR",
+            label=progress_label,
+            elapsedMs=round((time.perf_counter() - generation_started) * 1000, 1),
+            status=exc.code,
+            detail=detail[:1200],
+        )
         raise RuntimeError(
             f"llama.cpp/Qwen3-VL HTTP {exc.code}: {detail[:1200]}"
         ) from exc
     except Exception as exc:
+        dev_log(
+            "QWEN_GENERATE_ERROR",
+            label=progress_label,
+            elapsedMs=round((time.perf_counter() - generation_started) * 1000, 1),
+            error=str(exc),
+        )
         raise RuntimeError(
             f"llama.cpp/Qwen3-VL Anfrage fehlgeschlagen: {exc}"
         ) from exc
@@ -2447,7 +2470,22 @@ def qwen3vl_generate(
             parts.append("".join(content_parts))
         result = "\n".join(parts).strip()
         if result:
+            dev_log(
+                "QWEN_GENERATE_OK",
+                label=progress_label,
+                elapsedMs=round((time.perf_counter() - generation_started) * 1000, 1),
+                chunks=chunk_count,
+                contentChars=sum(len(part) for part in content_parts),
+                reasoningChars=sum(len(part) for part in reasoning_parts),
+                streamed=True,
+            )
             return result
+        dev_log(
+            "QWEN_GENERATE_EMPTY",
+            label=progress_label,
+            elapsedMs=round((time.perf_counter() - generation_started) * 1000, 1),
+            chunks=chunk_count,
+        )
         raise RuntimeError("llama.cpp/Qwen3-VL hat eine leere Streaming-Antwort geliefert.")
 
     # Rückwärtskompatibler Fallback für llama.cpp-Builds, die trotz stream=True
@@ -2472,8 +2510,22 @@ def qwen3vl_generate(
         result = "\n".join(parts).strip()
         if not result:
             raise ValueError("leere Modellantwort")
+        dev_log(
+            "QWEN_GENERATE_OK",
+            label=progress_label,
+            elapsedMs=round((time.perf_counter() - generation_started) * 1000, 1),
+            streamed=False,
+            contentChars=len(result),
+        )
         return result
     except Exception as exc:
+        dev_log(
+            "QWEN_GENERATE_PARSE_ERROR",
+            label=progress_label,
+            elapsedMs=round((time.perf_counter() - generation_started) * 1000, 1),
+            error=str(exc),
+            rawPrefix=raw[:500],
+        )
         raise RuntimeError(
             "llama.cpp hat keine auswertbare Chat-Antwort geliefert: "
             f"{raw[:1000]}"
@@ -3371,25 +3423,72 @@ def handle(message: dict) -> bool:
 
 
 def main() -> int:
+    dev_log(
+        "PYTHON_WORKER_READY_FOR_STDIN",
+        startupElapsedMs=round((time.perf_counter() - _PROCESS_STARTED_AT) * 1000, 1),
+        pillow=Image is not None,
+        opencv=cv2 is not None,
+        numpy=np is not None,
+    )
+
     try:
         for line in sys.stdin:
             line = line.strip()
             if not line:
                 continue
 
+            request_started = time.perf_counter()
+            request_id = None
+            method = "unknown"
+            target = None
+
             try:
                 message = json.loads(line)
-                if not handle(message):
+                request_id = message.get("id")
+                method = str(message.get("method", "unknown"))
+                payload = message.get("payload") or {}
+                if isinstance(payload, dict):
+                    raw_target = payload.get("path")
+                    if isinstance(raw_target, str):
+                        target = raw_target
+
+                dev_log(
+                    "PY_REQUEST_BEGIN",
+                    requestId=request_id,
+                    method=method,
+                    target=target,
+                )
+
+                keep_running = handle(message)
+
+                dev_log(
+                    "PY_REQUEST_END",
+                    requestId=request_id,
+                    method=method,
+                    target=target,
+                    elapsedMs=round((time.perf_counter() - request_started) * 1000, 1),
+                    ok=True,
+                )
+
+                if not keep_running:
                     break
             except Exception as exc:
-                request_id = None
-                try:
-                    request_id = message.get("id")  # type: ignore[name-defined]
-                except Exception:
-                    pass
+                dev_log(
+                    "PY_REQUEST_ERROR",
+                    requestId=request_id,
+                    method=method,
+                    target=target,
+                    elapsedMs=round((time.perf_counter() - request_started) * 1000, 1),
+                    error=str(exc),
+                )
                 respond(request_id, error=str(exc))
     finally:
+        dev_log("PYTHON_WORKER_SHUTDOWN_BEGIN")
         unload_qwen3vl()
+        dev_log(
+            "PYTHON_WORKER_EXIT",
+            totalUptimeMs=round((time.perf_counter() - _PROCESS_STARTED_AT) * 1000, 1),
+        )
 
     return 0
 
