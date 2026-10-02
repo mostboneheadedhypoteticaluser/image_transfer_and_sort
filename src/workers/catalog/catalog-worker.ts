@@ -531,6 +531,24 @@ function normalizeHistoricalUnavailableJobs(): void {
 
 normalizeHistoricalUnavailableJobs();
 
+db.prepare(`
+  UPDATE analysis_jobs
+  SET
+    status='PENDING',
+    attempts=0,
+    result_json=NULL,
+    error_message=NULL,
+    started_at=NULL,
+    finished_at=NULL,
+    updated_at=CURRENT_TIMESTAMP
+  WHERE module='pet-detect-yolox-v1'
+    AND status='DONE'
+    AND (
+      result_json IS NULL
+      OR result_json NOT LIKE '%"objectCount"%'
+    )
+`).run();
+
 let scanRunning = false;
 
 function post(message: WorkerResponse): void {
@@ -1796,7 +1814,18 @@ function listAnalysisErrors(sourceId?: number, requestedLimit = 200) {
       m.extension
     FROM analysis_jobs j
     JOIN media_items m ON m.id=j.media_id
-    WHERE j.status IN ('FAILED','UNAVAILABLE')
+    WHERE (
+        j.status='FAILED'
+        OR (
+          j.status='UNAVAILABLE'
+          AND j.id=(
+            SELECT MIN(j2.id)
+            FROM analysis_jobs j2
+            WHERE j2.media_id=j.media_id
+              AND j2.status='UNAVAILABLE'
+          )
+        )
+      )
       ${sourceFilter}
     ORDER BY
       COALESCE(j.finished_at, j.updated_at) DESC,
@@ -1837,11 +1866,30 @@ function resetAnalysisJob(jobId: number): number {
     const absolutePath = String(job.absolute_path);
     if (!existsSync(absolutePath)) return 0;
 
+    const mediaId = Number(job.media_id);
+
     db.prepare(`
       UPDATE media_items
       SET availability='AVAILABLE', last_seen_at=CURRENT_TIMESTAMP
       WHERE id=?
-    `).run(Number(job.media_id));
+    `).run(mediaId);
+
+    const result = db.prepare(`
+      UPDATE analysis_jobs
+      SET
+        status='PENDING',
+        attempts=0,
+        input_sha256=?,
+        result_json=NULL,
+        error_message=NULL,
+        started_at=NULL,
+        finished_at=NULL,
+        updated_at=CURRENT_TIMESTAMP
+      WHERE media_id=?
+        AND status='UNAVAILABLE'
+    `).run(String(job.sha256), mediaId);
+
+    return Number(result.changes);
   }
 
   const mediaId = Number(job.media_id);
@@ -2050,7 +2098,7 @@ function failAnalysisJob(jobId: number, errorMessage: string) {
 
   const normalizedError = errorMessage.toLowerCase();
   const unavailable =
-    normalizedError.startsWith("datei ist nicht erreichbar:") ||
+    normalizedError.includes("nicht erreichbar:") ||
     normalizedError.includes("no such file or directory") ||
     normalizedError.includes("enoent") ||
     normalizedError.includes("input file is missing");
