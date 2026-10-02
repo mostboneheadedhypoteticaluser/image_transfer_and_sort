@@ -500,6 +500,22 @@ function renderRows(rows: MediaRecord[], emptyText = "Noch keine Medien katalogi
       stateCell.appendChild(ensembleBadge);
     }
 
+    const motifLabels = row.objectLabels.filter(
+      (label) => label !== "dog" && label !== "cat"
+    );
+
+    if (row.availability === "AVAILABLE" && motifLabels.length > 0) {
+      const motifBadge = document.createElement("span");
+      motifBadge.className = "badge motif";
+      const visible = motifLabels.slice(0, 3);
+      motifBadge.textContent =
+        "Motive: " + visible.join(" · ") +
+        (motifLabels.length > visible.length ? " …" : "");
+      motifBadge.title =
+        "YOLOX-S erkannte Objekte: " + motifLabels.join(", ");
+      stateCell.appendChild(motifBadge);
+    }
+
     const actionCell = document.createElement("td");
     if (row.availability === "MISSING" && row.recycleState === "RESTORABLE") {
       const restoreButton = document.createElement("button");
