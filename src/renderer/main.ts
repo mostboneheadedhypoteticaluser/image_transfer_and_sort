@@ -77,6 +77,8 @@ const petFusionStageState = document.querySelector<HTMLSpanElement>("#petFusionS
 const petFusionStageCounts = document.querySelector<HTMLElement>("#petFusionStageCounts")!;
 const petEmbeddingStageState = document.querySelector<HTMLSpanElement>("#petEmbeddingStageState")!;
 const petEmbeddingStageCounts = document.querySelector<HTMLElement>("#petEmbeddingStageCounts")!;
+const objectVerificationStageState = document.querySelector<HTMLSpanElement>("#objectVerificationStageState")!;
+const objectVerificationStageCounts = document.querySelector<HTMLElement>("#objectVerificationStageCounts")!;
 const semanticStageState = document.querySelector<HTMLSpanElement>("#semanticStageState")!;
 const semanticStageCounts = document.querySelector<HTMLElement>("#semanticStageCounts")!;
 const analysisErrorsButton = document.querySelector<HTMLButtonElement>("#analysisErrorsButton")!;
@@ -115,6 +117,7 @@ let lastFaceEmbeddingDone = -1;
 let lastPetDone = -1;
 let lastPetFusionDone = -1;
 let lastPetEmbeddingDone = -1;
+let lastObjectVerificationDone = -1;
 let lastSemanticDone = -1;
 let analysisRefreshTimer: number | null = null;
 let searchFacetsSourceId: number | null = null;
@@ -199,6 +202,11 @@ function renderPipelineStatus(status: PipelineStatus): void {
     status.petEmbeddings
   );
   renderStage(
+    objectVerificationStageState,
+    objectVerificationStageCounts,
+    status.objectVerification
+  );
+  renderStage(
     semanticStageState,
     semanticStageCounts,
     status.semanticEmbeddings
@@ -212,6 +220,7 @@ function renderPipelineStatus(status: PipelineStatus): void {
     status.petDetection.done !== lastPetDone ||
     status.petFusion.done !== lastPetFusionDone ||
     status.petEmbeddings.done !== lastPetEmbeddingDone ||
+    status.objectVerification.done !== lastObjectVerificationDone ||
     status.semanticEmbeddings.done !== lastSemanticDone;
 
   lastThumbnailDone = status.thumbnails.done;
@@ -221,6 +230,7 @@ function renderPipelineStatus(status: PipelineStatus): void {
   lastPetDone = status.petDetection.done;
   lastPetFusionDone = status.petFusion.done;
   lastPetEmbeddingDone = status.petEmbeddings.done;
+  lastObjectVerificationDone = status.objectVerification.done;
   lastSemanticDone = status.semanticEmbeddings.done;
 
   const stages = [
@@ -232,6 +242,7 @@ function renderPipelineStatus(status: PipelineStatus): void {
     status.petDetection,
     status.petFusion,
     status.petEmbeddings,
+    status.objectVerification,
     status.semanticEmbeddings
   ];
 
@@ -778,7 +789,8 @@ function renderRows(rows: MediaRecord[], emptyText = "Noch keine Medien katalogi
         "Motive: " + visible.join(" · ") +
         (motifLabels.length > visible.length ? " …" : "");
       motifBadge.title =
-        "Ensemble aus NanoDet + YOLOX-S: " + motifLabels.join(", ");
+        "Dreifach geprüft: RF-DETR Large + Grounding DINO + SigLIP2: " +
+        motifLabels.join(", ");
       stateCell.appendChild(motifBadge);
     }
 
@@ -1821,6 +1833,7 @@ const analysisModuleLabels: Record<string, string> = {
   "pet-detect-yolox-v1": "Haustierdetektor YOLOX-S",
   "pet-fuse-ensemble-v1": "Haustier-Ergebnisse fusionieren",
   "pet-embed-dogreid-v1": "Individuelle Hundemerkmale",
+  "object-detect-verified-v2": "Motive präzise prüfen (RF-DETR + Grounding DINO + SigLIP2)",
   "semantic-embed-siglip2-v1": "Semantikanalyse (SigLIP2 So400m NaFlex)"
 };
 
@@ -2399,6 +2412,7 @@ void window.imageSorter.analysis
       petDetection: { pending: 0, running: 0, done: 0, failed: 0, unavailable: 0 },
       petFusion: { pending: 0, running: 0, done: 0, failed: 0, unavailable: 0 },
       petEmbeddings: { pending: 0, running: 0, done: 0, failed: 0, unavailable: 0 },
+      objectVerification: { pending: 0, running: 0, done: 0, failed: 0, unavailable: 0 },
       semanticEmbeddings: { pending: 0, running: 0, done: 0, failed: 0, unavailable: 0 }
     });
   });
