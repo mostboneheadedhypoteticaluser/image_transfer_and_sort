@@ -14,3 +14,5 @@ workers/python-ai/.venv/
 
 .ai-venv/
 workers/python-ai/models/*.onnx
+
+workers/python-ai/models/siglip2-so400m-patch16-naflex/
