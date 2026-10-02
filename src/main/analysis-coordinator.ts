@@ -17,6 +17,7 @@ type PythonStage =
   | "petDetection"
   | "petFusion"
   | "petEmbeddings"
+  | "objectVerification"
   | "semanticEmbeddings";
 
 type ModuleSpec = {
@@ -31,6 +32,7 @@ type ModuleSpec = {
     | "completePetDetectionJob"
     | "completePetFusionJob"
     | "completePetEmbeddingJob"
+    | "completeVerifiedObjectDetectionJob"
     | "completeSemanticEmbeddingJob";
   label: string;
   timeoutMs: number;
@@ -102,6 +104,14 @@ const MODULES: ModuleSpec[] = [
     timeoutMs: 120000
   },
   {
+    module: "object-detect-verified-v2",
+    stage: "objectVerification",
+    workerMethod: "detect_verified_objects",
+    completeMethod: "completeVerifiedObjectDetectionJob",
+    label: "Motive präzise verifizieren",
+    timeoutMs: 3600000
+  },
+  {
     module: "semantic-embed-siglip2-v1",
     stage: "semanticEmbeddings",
     workerMethod: "extract_semantic_image_embedding",
@@ -120,6 +130,7 @@ type PythonPipelineStats = Pick<
   | "petDetection"
   | "petFusion"
   | "petEmbeddings"
+  | "objectVerification"
   | "semanticEmbeddings"
 >;
 
@@ -200,6 +211,7 @@ export class AnalysisCoordinator {
       petDetection: emptyStats(),
       petFusion: emptyStats(),
       petEmbeddings: emptyStats(),
+      objectVerification: emptyStats(),
       semanticEmbeddings: emptyStats()
     };
 
@@ -224,6 +236,7 @@ export class AnalysisCoordinator {
       result.petDetection.pending +
       result.petFusion.pending +
       result.petEmbeddings.pending +
+      result.objectVerification.pending +
       result.semanticEmbeddings.pending;
     const active =
       result.technical.running +
@@ -233,6 +246,7 @@ export class AnalysisCoordinator {
       result.petDetection.running +
       result.petFusion.running +
       result.petEmbeddings.running +
+      result.objectVerification.running +
       result.semanticEmbeddings.running;
 
     this.analysis.setQueueState(
@@ -280,6 +294,7 @@ export class AnalysisCoordinator {
         stats.petDetection.running +
         stats.petFusion.running +
         stats.petEmbeddings.running +
+        stats.objectVerification.running +
         stats.semanticEmbeddings.running;
 
       if (totalRunning > 0) return;
@@ -307,6 +322,7 @@ export class AnalysisCoordinator {
         stats.petDetection.pending +
         stats.petFusion.pending +
         stats.petEmbeddings.pending +
+        stats.objectVerification.pending +
         stats.semanticEmbeddings.pending - 1;
 
       this.analysis.setQueueState(
