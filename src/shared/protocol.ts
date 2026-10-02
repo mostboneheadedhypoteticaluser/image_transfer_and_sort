@@ -412,6 +412,7 @@ export type CatalogMethod =
   | "getFaceCropInfo"
   | "getThumbnailInfo"
   | "getMediaPreviewInfo"
+  | "getMediaPath"
   | "scanSource"
   | "restoreMedia"
   | "resetCatalog";
