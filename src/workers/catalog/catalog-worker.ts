@@ -592,6 +592,13 @@ db.prepare(`
     )
 `).run();
 
+// Nur wirklich veraltete Haustier-Fusionsjobs neu rechnen. Eine ältere
+// Migration prüfte hier fälschlich auf "objectFusionVersion". Dieses Feld wird
+// seit der Trennung von Haustier- und allgemeiner Motiverkennung nicht mehr in
+// result_json gespeichert und setzte dadurch bei JEDEM App-Start alle
+// Haustier-Fusionsjobs erneut auf PENDING. completePetFusionJob() setzte danach
+// wiederum Dog-ReID zurück – daher liefen die individuellen Hundemerkmale
+// unnötig bei jedem Start erneut.
 db.prepare(`
   UPDATE analysis_jobs
   SET
@@ -606,7 +613,7 @@ db.prepare(`
     AND status='DONE'
     AND (
       result_json IS NULL
-      OR result_json NOT LIKE '%"objectFusionVersion":"NanoDet+YOLOX-S consensus-v1"%'
+      OR result_json NOT LIKE '%"fusion":"NanoDet+YOLOX-S weighted-box-v1"%'
     )
 `).run();
 
@@ -3754,6 +3761,7 @@ function completePetFusionJob(jobId: number, result: unknown) {
     `).run(
       JSON.stringify({
         fusion: fusionVersion,
+        petFusionVersion: fusionVersion,
         petCount: written
       }),
       jobId
