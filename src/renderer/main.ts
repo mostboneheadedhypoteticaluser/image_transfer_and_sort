@@ -7,10 +7,12 @@ import type {
   PersonOverview,
   PetOverview,
   PipelineStatus,
+  SearchFacets,
+  SearchFilter,
   SourceRecord
 } from "../shared/protocol";
 
-type CatalogView = "media" | "duplicates" | "people" | "pets" | "recycle";
+type CatalogView = "media" | "search" | "duplicates" | "people" | "pets" | "recycle";
 
 const sourceSelect = document.querySelector<HTMLSelectElement>("#sourceSelect")!;
 const addSourceButton = document.querySelector<HTMLButtonElement>("#addSource")!;
@@ -32,11 +34,13 @@ const confirmedPersons = document.querySelector<HTMLDivElement>("#confirmedPerso
 const personStatus = document.querySelector<HTMLParagraphElement>("#personStatus")!;
 const refreshPeopleButton = document.querySelector<HTMLButtonElement>("#refreshPeople")!;
 const mediaTab = document.querySelector<HTMLButtonElement>("#mediaTab")!;
+const searchTab = document.querySelector<HTMLButtonElement>("#searchTab")!;
 const duplicateTab = document.querySelector<HTMLButtonElement>("#duplicateTab")!;
 const peopleTab = document.querySelector<HTMLButtonElement>("#peopleTab")!;
 const petsTab = document.querySelector<HTMLButtonElement>("#petsTab")!;
 const recycleTab = document.querySelector<HTMLButtonElement>("#recycleTab")!;
 const mediaTabCount = document.querySelector<HTMLSpanElement>("#mediaTabCount")!;
+const searchTabCount = document.querySelector<HTMLSpanElement>("#searchTabCount")!;
 const duplicateTabCount = document.querySelector<HTMLSpanElement>("#duplicateTabCount")!;
 const peopleTabCount = document.querySelector<HTMLSpanElement>("#peopleTabCount")!;
 const petsTabCount = document.querySelector<HTMLSpanElement>("#petsTabCount")!;
@@ -85,6 +89,15 @@ const imagePreviewDialog = document.querySelector<HTMLDialogElement>("#imagePrev
 const closeImagePreviewButton = document.querySelector<HTMLButtonElement>("#closeImagePreview")!;
 const imagePreviewImage = document.querySelector<HTMLImageElement>("#imagePreviewImage")!;
 const imagePreviewCaption = document.querySelector<HTMLDivElement>("#imagePreviewCaption")!;
+const searchPanel = document.querySelector<HTMLElement>("#searchPanel")!;
+const searchPersons = document.querySelector<HTMLDivElement>("#searchPersons")!;
+const searchPets = document.querySelector<HTMLDivElement>("#searchPets")!;
+const searchObjects = document.querySelector<HTMLDivElement>("#searchObjects")!;
+const searchMinDogs = document.querySelector<HTMLInputElement>("#searchMinDogs")!;
+const searchMinCats = document.querySelector<HTMLInputElement>("#searchMinCats")!;
+const runSearchButton = document.querySelector<HTMLButtonElement>("#runSearch")!;
+const resetSearchButton = document.querySelector<HTMLButtonElement>("#resetSearch")!;
+const searchSummary = document.querySelector<HTMLSpanElement>("#searchSummary")!;
 
 let sources: SourceRecord[] = [];
 let currentView: CatalogView = "media";
@@ -99,6 +112,7 @@ let lastPetDone = -1;
 let lastPetFusionDone = -1;
 let lastPetEmbeddingDone = -1;
 let analysisRefreshTimer: number | null = null;
+let searchFacetsSourceId: number | null = null;
 
 function renderAnalysisStatus(status: AnalysisWorkerStatus): void {
   analysisWorkerState.className = "analysis-state";
@@ -228,7 +242,10 @@ function renderPipelineStatus(status: PipelineStatus): void {
     // Die Medienliste darf während laufender Analyse automatisch aktualisiert
     // werden. Die Personenansicht enthält jedoch Eingabefelder; ein komplettes
     // Re-Rendern würde dort den Fokus/Cursor beim Tippen zerstören.
-    if (currentView === "media" && selectedSourceId() !== null) {
+    if (
+      (currentView === "media" || currentView === "search") &&
+      selectedSourceId() !== null
+    ) {
       void runSafely(refreshCatalog);
     }
   }, 500);
@@ -340,15 +357,243 @@ function statusFor(row: MediaRecord): { text: string; className: string } {
   return { text: "Fehlt", className: "badge missing" };
 }
 
+const MOTIF_LABELS_DE: Record<string, string> = {
+  person: "Person",
+  bicycle: "Fahrrad",
+  car: "Auto",
+  motorcycle: "Motorrad",
+  airplane: "Flugzeug",
+  bus: "Bus",
+  train: "Zug",
+  truck: "Lkw",
+  boat: "Boot",
+  "traffic light": "Ampel",
+  "fire hydrant": "Hydrant",
+  "stop sign": "Stoppschild",
+  "parking meter": "Parkscheinautomat",
+  bench: "Bank",
+  bird: "Vogel",
+  horse: "Pferd",
+  sheep: "Schaf",
+  cow: "Kuh",
+  elephant: "Elefant",
+  bear: "Bär",
+  zebra: "Zebra",
+  giraffe: "Giraffe",
+  backpack: "Rucksack",
+  umbrella: "Regenschirm",
+  handbag: "Handtasche",
+  tie: "Krawatte",
+  suitcase: "Koffer",
+  frisbee: "Frisbee",
+  skis: "Ski",
+  snowboard: "Snowboard",
+  "sports ball": "Ball",
+  kite: "Drachen",
+  "baseball bat": "Baseballschläger",
+  "baseball glove": "Baseballhandschuh",
+  skateboard: "Skateboard",
+  surfboard: "Surfbrett",
+  "tennis racket": "Tennisschläger",
+  bottle: "Flasche",
+  "wine glass": "Weinglas",
+  cup: "Tasse/Becher",
+  fork: "Gabel",
+  knife: "Messer",
+  spoon: "Löffel",
+  bowl: "Schüssel",
+  banana: "Banane",
+  apple: "Apfel",
+  sandwich: "Sandwich",
+  orange: "Orange",
+  broccoli: "Brokkoli",
+  carrot: "Karotte",
+  "hot dog": "Hotdog",
+  pizza: "Pizza",
+  donut: "Donut",
+  cake: "Kuchen",
+  chair: "Stuhl",
+  couch: "Sofa",
+  "potted plant": "Topfpflanze",
+  bed: "Bett",
+  "dining table": "Tisch",
+  toilet: "Toilette",
+  tv: "Fernseher",
+  laptop: "Laptop",
+  mouse: "Maus",
+  remote: "Fernbedienung",
+  keyboard: "Tastatur",
+  "cell phone": "Handy",
+  microwave: "Mikrowelle",
+  oven: "Backofen",
+  toaster: "Toaster",
+  sink: "Spüle",
+  refrigerator: "Kühlschrank",
+  book: "Buch",
+  clock: "Uhr",
+  vase: "Vase",
+  scissors: "Schere",
+  "teddy bear": "Teddybär",
+  "hair drier": "Haartrockner",
+  toothbrush: "Zahnbürste"
+};
+
+function checkedValues(container: HTMLElement): string[] {
+  return [...container.querySelectorAll<HTMLInputElement>('input[type="checkbox"]:checked')]
+    .map((input) => input.value);
+}
+
+function boundedCount(input: HTMLInputElement): number {
+  const value = Math.trunc(Number(input.value) || 0);
+  return Math.max(0, Math.min(20, value));
+}
+
+function currentSearchFilter(): SearchFilter {
+  return {
+    personIds: checkedValues(searchPersons)
+      .map(Number)
+      .filter((value) => Number.isInteger(value) && value > 0),
+    petIds: checkedValues(searchPets)
+      .map(Number)
+      .filter((value) => Number.isInteger(value) && value > 0),
+    objectLabels: checkedValues(searchObjects),
+    minDogs: boundedCount(searchMinDogs),
+    minCats: boundedCount(searchMinCats)
+  };
+}
+
+function searchCriterionCount(filter: SearchFilter): number {
+  return (
+    filter.personIds.length +
+    filter.petIds.length +
+    filter.objectLabels.length +
+    (filter.minDogs > 0 ? 1 : 0) +
+    (filter.minCats > 0 ? 1 : 0)
+  );
+}
+
+function appendFacet(
+  container: HTMLElement,
+  value: string,
+  label: string,
+  mediaCount: number,
+  checked: boolean
+): void {
+  const wrapper = document.createElement("label");
+  wrapper.className = "search-facet";
+
+  const input = document.createElement("input");
+  input.type = "checkbox";
+  input.value = value;
+  input.checked = checked;
+
+  const text = document.createElement("span");
+  text.textContent = label;
+
+  const count = document.createElement("small");
+  count.textContent = mediaCount.toLocaleString("de-DE");
+
+  wrapper.append(input, text, count);
+  container.appendChild(wrapper);
+}
+
+function renderSearchFacets(facets: SearchFacets): void {
+  const selectedPersons = new Set(checkedValues(searchPersons));
+  const selectedPets = new Set(checkedValues(searchPets));
+  const selectedObjects = new Set(checkedValues(searchObjects));
+
+  searchPersons.replaceChildren();
+  searchPets.replaceChildren();
+  searchObjects.replaceChildren();
+
+  for (const person of facets.persons) {
+    appendFacet(
+      searchPersons,
+      String(person.id),
+      person.name,
+      person.mediaCount,
+      selectedPersons.has(String(person.id))
+    );
+  }
+
+  for (const pet of facets.pets) {
+    appendFacet(
+      searchPets,
+      String(pet.id),
+      pet.name + (pet.petClass === "dog" ? " · Hund" : " · Katze"),
+      pet.mediaCount,
+      selectedPets.has(String(pet.id))
+    );
+  }
+
+  for (const object of facets.objects) {
+    appendFacet(
+      searchObjects,
+      object.label,
+      MOTIF_LABELS_DE[object.label] ?? object.label,
+      object.mediaCount,
+      selectedObjects.has(object.label)
+    );
+  }
+
+  const addEmpty = (container: HTMLElement, text: string) => {
+    if (container.childElementCount > 0) return;
+    const empty = document.createElement("span");
+    empty.className = "search-facet-empty";
+    empty.textContent = text;
+    container.appendChild(empty);
+  };
+
+  addEmpty(searchPersons, "Noch keine bestätigten Personen.");
+  addEmpty(searchPets, "Noch keine bestätigten Haustiere.");
+  addEmpty(searchObjects, "Noch keine belastbaren Motive analysiert.");
+}
+
+async function loadSearchFacets(sourceId: number): Promise<void> {
+  const facets = await window.imageSorter.catalog.getSearchFacets(sourceId);
+  renderSearchFacets(facets);
+  searchFacetsSourceId = sourceId;
+}
+
+async function runCombinedSearch(sourceId: number): Promise<void> {
+  const filter = currentSearchFilter();
+  const rows = await window.imageSorter.catalog.searchMedia(sourceId, filter, 1000);
+  renderRows(rows, "Keine Medien entsprechen allen ausgewählten Kriterien.");
+
+  const criteria = searchCriterionCount(filter);
+  searchTabCount.textContent = rows.length.toLocaleString("de-DE");
+  searchSummary.textContent =
+    rows.length.toLocaleString("de-DE") + " " +
+    (rows.length === 1 ? "Treffer" : "Treffer") +
+    (criteria > 0
+      ? " · " + criteria.toLocaleString("de-DE") + " UND-" +
+        (criteria === 1 ? "Kriterium" : "Kriterien")
+      : " · keine Einschränkung");
+}
+
+function clearSearchControls(): void {
+  for (const input of [
+    ...searchPersons.querySelectorAll<HTMLInputElement>('input[type="checkbox"]'),
+    ...searchPets.querySelectorAll<HTMLInputElement>('input[type="checkbox"]'),
+    ...searchObjects.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')
+  ]) {
+    input.checked = false;
+  }
+  searchMinDogs.value = "0";
+  searchMinCats.value = "0";
+}
+
 function setView(view: CatalogView): void {
   currentView = view;
 
   mediaTab.classList.toggle("active", view === "media");
+  searchTab.classList.toggle("active", view === "search");
   duplicateTab.classList.toggle("active", view === "duplicates");
   peopleTab.classList.toggle("active", view === "people");
   petsTab.classList.toggle("active", view === "pets");
   recycleTab.classList.toggle("active", view === "recycle");
 
+  searchPanel.hidden = view !== "search";
   duplicateView.hidden = view !== "duplicates";
   personView.hidden = view !== "people";
   petView.hidden = view !== "pets";
@@ -1709,6 +1954,7 @@ async function refreshCatalog(): Promise<void> {
     recycleCount.textContent = "0";
     lastScan.textContent = "—";
     mediaTabCount.textContent = "0";
+    searchTabCount.textContent = "0";
     duplicateTabCount.textContent = "0";
     peopleTabCount.textContent = "0";
     petsTabCount.textContent = "0";
@@ -1760,6 +2006,12 @@ async function refreshCatalog(): Promise<void> {
   if (currentView === "recycle") {
     const rows = await window.imageSorter.catalog.listRecycleMedia(sourceId, 500);
     renderRows(rows, "Keine wiederherstellbaren oder mehrdeutigen Papierkorb-Einträge.");
+    return;
+  }
+
+  if (currentView === "search") {
+    await loadSearchFacets(sourceId);
+    await runCombinedSearch(sourceId);
     return;
   }
 
@@ -1912,6 +2164,7 @@ resetButton.addEventListener("click", () => {
 });
 
 mediaTab.addEventListener("click", () => setView("media"));
+searchTab.addEventListener("click", () => setView("search"));
 duplicateTab.addEventListener("click", () => setView("duplicates"));
 peopleTab.addEventListener("click", () => setView("people"));
 petsTab.addEventListener("click", () => setView("pets"));
@@ -2014,7 +2267,30 @@ imagePreviewDialog.addEventListener("close", () => {
   imagePreviewCaption.textContent = "";
 });
 
-sourceSelect.addEventListener("change", () => void runSafely(refreshCatalog));
+sourceSelect.addEventListener("change", () => {
+  clearSearchControls();
+  searchFacetsSourceId = null;
+  searchTabCount.textContent = "0";
+  searchSummary.textContent = "Noch keine Suche ausgeführt.";
+  void runSafely(refreshCatalog);
+});
+
+runSearchButton.addEventListener("click", () => {
+  const sourceId = selectedSourceId();
+  if (sourceId === null) return;
+  void runSafely(async () => {
+    if (searchFacetsSourceId !== sourceId) await loadSearchFacets(sourceId);
+    await runCombinedSearch(sourceId);
+  });
+});
+
+resetSearchButton.addEventListener("click", () => {
+  const sourceId = selectedSourceId();
+  clearSearchControls();
+  if (sourceId === null) return;
+  void runSafely(() => runCombinedSearch(sourceId));
+});
+
 refreshButton.addEventListener("click", () => void runSafely(refreshCatalog));
 
 window.imageSorter.catalog.onProgress((progress) => {
