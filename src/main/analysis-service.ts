@@ -701,7 +701,7 @@ export class AnalysisService {
       // Ein abgelaufener Qwen-Aufruf darf nicht im Python-Prozess weiterlaufen
       // und alle folgenden Jobs blockieren. Worker + llama.cpp-Prozessbaum
       // werden beendet und anschließend frisch gestartet.
-      if (current.method === "detect_qwen3vl_objects") {
+      if (current.method === "detect_qwen3vl_objects" || current.method === "benchmark_qwen3vl") {
         this.publish({
           state: "STARTING",
           progress: null,
