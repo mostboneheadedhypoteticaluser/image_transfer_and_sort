@@ -122,3 +122,16 @@ Bekannte Hunde verwenden ausschließlich Nutzer-bestätigte `pet_assignments.ass
 Die automatische Zuordnung ist absichtlich streng: mindestens drei bestätigte Referenzen, hohe Centroid- und Mindestähnlichkeit sowie Abstand zum zweitbesten bekannten Hund. Automatische Fundstellen werden nicht rekursiv als neue Referenzbasis verwendet.
 
 Im Haustier-Reiter werden bestätigte und automatische Fundstellen getrennt gezählt. Eine automatische Fundstelle kann einzeln bestätigt werden; erst dann wird sie zu einer echten Referenz. Wird sie entfernt, bleibt die negative Zuordnung bestehen und verhindert eine erneute automatische Zuordnung zum gleichen Hund.
+
+
+## Motiverkennung v1
+
+Die bereits vorhandene YOLOX-S-Inferenz wird zusätzlich zur Hund-/Katzenerkennung für alle 80 COCO-Klassen ausgewertet. Dadurch entsteht keine zweite Modellinferenz pro Bild. Die allgemeinen Treffer werden versioniert in `object_detections` gespeichert; die Haustier-Fusion bleibt davon getrennt und verwendet weiterhin ausschließlich Hund/Katze aus NanoDet und YOLOX-S.
+
+Bestehende abgeschlossene YOLOX-Jobs ohne `objectCount` werden einmalig erneut eingeplant, damit ältere Katalogeinträge nachträglich Motivdaten erhalten. In der Medienliste werden erkannte Objektklassen als Motiv-Badge angezeigt. Die nächste Ausbaustufe nutzt diese Labels zusammen mit bestätigten Personen, bestätigten Haustieren und Metadaten für die kombinierte Suche.
+
+## Temporär nicht erreichbare Dateien
+
+Ein Python-Dateizugriff versucht einen katalogisierten Pfad mehrfach mit gestaffelten Wartezeiten und einem echten Lesezugriff. Das fängt insbesondere langsam aufwachende externe/rotierende Laufwerke ab.
+
+Bleibt die Datei unerreichbar, wird der Zustand als `UNAVAILABLE` getrennt von echten Analysefehlern geführt. Abhängige Analysejobs werden nicht als eigene fachliche AI-Fehler präsentiert. Die Diagnoseansicht bündelt unerreichbare Medien pro Datei und bietet Datei öffnen, Ordner öffnen sowie erneute Prüfung. Ist die Datei später wieder vorhanden, können alle blockierten Jobs dieses Mediums reaktiviert werden.
