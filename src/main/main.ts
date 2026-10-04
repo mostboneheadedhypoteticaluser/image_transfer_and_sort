@@ -375,6 +375,7 @@ function registerIpc(): void {
     // SigLIP2 kann lange rechnen; ein Reset darf nicht parallel einen alten
     // Job nachträglich wieder in die frisch geleerte Datenbank schreiben.
     analysisCoordinator?.stop();
+    analysisCoordinator?.disableAutomaticQwen();
     thumbnailCoordinator?.stop();
     analysis?.stop();
     thumbnailService?.stop();
@@ -443,6 +444,33 @@ function registerIpc(): void {
       path: logPath,
       characters: text.length
     };
+  });
+
+  ipcMain.handle("analysis:getAutomaticQwenState", () => ({
+    enabled: analysisCoordinator?.isAutomaticQwenEnabled() ?? false
+  }));
+
+  ipcMain.handle("analysis:startAutomaticQwen", async () => {
+    if (qwenBenchmarkMode || qwenBenchmarkPreparing) {
+      throw new Error(
+        "Qwen-Serienanalyse kann nicht gestartet werden, solange der Einzelbildtest aktiv ist."
+      );
+    }
+
+    if (!analysis || !analysisCoordinator) {
+      throw new Error("Analyse-Worker ist noch nicht initialisiert.");
+    }
+
+    analysisCoordinator.enableAutomaticQwen();
+
+    if (analysis.getStatus().state !== "READY") {
+      await analysis.start();
+    }
+    if (analysis.getStatus().state === "READY") {
+      await analysisCoordinator.start();
+    }
+
+    return { enabled: true };
   });
 
   ipcMain.handle("analysis:prepareQwenBenchmark", async () => {
