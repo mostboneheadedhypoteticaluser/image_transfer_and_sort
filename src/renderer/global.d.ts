@@ -39,6 +39,8 @@ declare global {
           path: string;
           characters: number;
         }>;
+        getAutomaticQwenState(): Promise<{ enabled: boolean }>;
+        startAutomaticQwen(): Promise<{ enabled: true }>;
         prepareQwenBenchmark(): Promise<{ paused: true }>;
         finishQwenBenchmark(): Promise<{ resumed: true }>;
         pickQwenBenchmarkImage(): Promise<string | null>;
