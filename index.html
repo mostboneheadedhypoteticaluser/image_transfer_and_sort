@@ -419,8 +419,8 @@
     <dialog id="qwenBenchmarkDialog" class="app-dialog qwen-benchmark-dialog">
       <div class="dialog-header">
         <div>
-          <h2>Qwen-Einzelbild-Benchmark</h2>
-          <p>Ein Bild stufenweise analysieren, ohne die Ergebnisse in den Katalog zu schreiben.</p>
+          <h2>MiniCPM-V 4.6 · Einzelbild-Benchmark</h2>
+          <p>Semantischen Bildinhalt mit einem kleinen, schnellen Vision-Modell testen – vom Gesamtbild bis zu vielen Kacheln.</p>
         </div>
         <button id="closeQwenBenchmark" class="dialog-close" type="button" aria-label="Schließen">×</button>
       </div>
@@ -432,22 +432,22 @@
         </div>
 
         <fieldset class="qwen-benchmark-profiles">
-          <legend>Teststufen</legend>
+          <legend>Teststufen · von klein nach groß</legend>
           <label>
             <input type="checkbox" name="qwenBenchmarkProfile" value="whole" checked />
-            <span><strong>1 · Gesamtbild</strong><small>1 Modellaufruf, keine Kacheln, keine Einzelprüfung.</small></span>
+            <span><strong>1 · Nur Gesamtbild</strong><small>1 Modellaufruf. Schnellster Basistest für den semantischen Bildinhalt.</small></span>
           </label>
           <label>
             <input type="checkbox" name="qwenBenchmarkProfile" value="tiles4" checked />
-            <span><strong>2 · Gesamtbild + 4 Kacheln</strong><small>Mehr Details, noch ohne Crop-Prüfung.</small></span>
+            <span><strong>2 · Gesamtbild + 4 Kacheln</strong><small>5 Modellaufrufe. Mehr Details bei weiterhin überschaubarem Aufwand.</small></span>
           </label>
           <label>
-            <input type="checkbox" name="qwenBenchmarkProfile" value="single-check" checked />
-            <span><strong>3 · Bis 6 Kacheln + 1 Prüfung</strong><small>Jeder Kandidat wird einmal am Ausschnitt bestätigt.</small></span>
+            <input type="checkbox" name="qwenBenchmarkProfile" value="tiles9" />
+            <span><strong>3 · Gesamtbild + 9 Kacheln</strong><small>10 Modellaufrufe. Für kleinere Motive und komplexere Bilder.</small></span>
           </label>
           <label>
-            <input type="checkbox" name="qwenBenchmarkProfile" value="full" checked />
-            <span><strong>4 · Vollanalyse</strong><small>Aktuelles Verfahren: bis 12 Kacheln und Doppelprüfung.</small></span>
+            <input type="checkbox" name="qwenBenchmarkProfile" value="tiles16" />
+            <span><strong>4 · Gesamtbild + 16 Kacheln</strong><small>17 Modellaufrufe. Maximale Detailstufe des kleinen Modells im Test.</small></span>
           </label>
         </fieldset>
 
@@ -465,9 +465,9 @@
         </div>
 
         <p class="qwen-benchmark-note">
-          Der erste Test kann zusätzlich die einmalige Modellladezeit enthalten. Diese wird separat ausgewiesen.
-          Hunde und Katzen können in der Testausgabe sichtbar sein; die Produktivpipeline überlässt ihre endgültige
-          Zuordnung weiterhin der Haustiererkennung.
+          Verwendet wird MiniCPM-V 4.6 Q4_K_M. Der erste Test enthält gegebenenfalls die einmalige Modellladezeit,
+          die separat ausgewiesen wird. Die Kachelergebnisse werden ohne zusätzlichen KI-Aufruf zusammengeführt.
+          Der Test schreibt nichts in den Katalog und verändert die Personen- oder Haustiererkennung nicht.
         </p>
       </div>
     </dialog>

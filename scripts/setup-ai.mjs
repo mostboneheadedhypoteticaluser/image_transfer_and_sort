@@ -282,9 +282,9 @@ run(venvPython(), [
 ]);
 
 console.log("");
-console.log("Prüfe/lade Qwen3-VL-8B-Thinking GGUF für die große Bildanalyse …");
+console.log("Prüfe/lade MiniCPM-V 4.6 Q4_K_M für den schnellen Einzelbildtest …");
 run(venvPython(), [
-  path.join(root, "workers", "python-ai", "setup_qwen3vl.py")
+  path.join(root, "workers", "python-ai", "setup_minicpm.py")
 ]);
 
 console.log("");
@@ -302,7 +302,10 @@ console.log(
   path.join(modelDir, "siglip2-so400m-patch16-naflex")
 );
 console.log(
-  "Qwen3-VL-8B-Thinking GGUF: " +
-  path.join(modelDir, "qwen3-vl-8b-thinking-gguf")
+  "MiniCPM-V 4.6 Q4_K_M: " +
+  path.join(modelDir, "minicpm-v-4.6-gguf")
+);
+console.log(
+  "Qwen3-VL: optional; vorhandene Dateien bleiben erhalten und werden vom Einzelbildtest nicht verwendet."
 );
 console.log("llama.cpp Server: " + llamaServer);

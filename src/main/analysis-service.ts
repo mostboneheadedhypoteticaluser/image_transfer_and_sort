@@ -338,31 +338,19 @@ export class AnalysisService {
           );
         }
 
+        // Das große Qwen-Modell ist ab jetzt optional. Der normale Worker,
+        // Personen-/Tiererkennung, SigLIP2 und der MiniCPM-Einzelbildtest
+        // dürfen auch ohne den rund 10-GB-Qwen-Block starten.
         if (
           capabilities.qwen3vlModel !== true ||
           capabilities.qwen3vlRuntime !== true ||
           capabilities.qwenObjectDetection !== true
         ) {
-          const missing: string[] = [];
-
-          if (capabilities.qwen3vlModel !== true) {
-            missing.push("Qwen3-VL GGUF Q8_0 / FP16-Vision-Projektor");
-          }
-          if (capabilities.qwen3vlRuntime !== true) {
-            missing.push("llama-server (llama.cpp)");
-          }
-          if (
-            capabilities.qwenObjectDetection !== true &&
-            missing.length === 0
-          ) {
-            missing.push("Qwen-Motiverkennungs-Laufzeit");
-          }
-
-          throw new Error(
-            "Qwen3-VL-Motiverkennung ist nicht vollständig bereit. Fehlt: " +
-            missing.join(", ") +
-            ". Bitte 'npm.cmd run setup:ai' ausführen."
-          );
+          this.devLog("QWEN_OPTIONAL_UNAVAILABLE", {
+            qwen3vlModel: capabilities.qwen3vlModel === true,
+            qwen3vlRuntime: capabilities.qwen3vlRuntime === true,
+            qwenObjectDetection: capabilities.qwenObjectDetection === true
+          });
         }
 
         const configureAt = Date.now();
@@ -542,8 +530,9 @@ export class AnalysisService {
               ? Math.max(0, Math.trunc(message.total))
               : null;
 
+          const pending = this.pending.get(requestId);
           const progress: AnalysisWorkerProgress = {
-            kind: "qwen3vl",
+            kind: pending?.method === "benchmark_minicpm" ? "minicpm" : "qwen3vl",
             phase:
               typeof message.phase === "string" && message.phase.trim()
                 ? message.phase.trim()
@@ -553,7 +542,6 @@ export class AnalysisService {
             message: message.message.trim()
           };
 
-          const pending = this.pending.get(requestId);
           if (pending) this.armPendingTimeout(requestId, pending);
 
           this.devLog("WORKER_PROGRESS", {
@@ -701,12 +689,16 @@ export class AnalysisService {
       // Ein abgelaufener Qwen-Aufruf darf nicht im Python-Prozess weiterlaufen
       // und alle folgenden Jobs blockieren. Worker + llama.cpp-Prozessbaum
       // werden beendet und anschließend frisch gestartet.
-      if (current.method === "detect_qwen3vl_objects" || current.method === "benchmark_qwen3vl") {
+      if (
+        current.method === "detect_qwen3vl_objects" ||
+        current.method === "benchmark_qwen3vl" ||
+        current.method === "benchmark_minicpm"
+      ) {
         this.publish({
           state: "STARTING",
           progress: null,
           message:
-            "Qwen3-VL hat zu lange keine Aktivität gemeldet. " +
+            "Das Vision-Modell hat zu lange keine Aktivität gemeldet. " +
             "Analyse-Worker wird sauber neu gestartet …"
         });
 
@@ -895,7 +887,7 @@ export class AnalysisService {
       this.child = null;
 
       const interruption = new Error(
-        "Analyse-Worker wurde für den Qwen-Einzelbildtest pausiert."
+        "Analyse-Worker wurde für den Einzelbildtest pausiert."
       );
       for (const pending of this.pending.values()) {
         clearTimeout(pending.timeout);
@@ -940,7 +932,7 @@ export class AnalysisService {
       pid: null,
       activeJobs: 0,
       progress: null,
-      message: "Standardanalyse pausiert · Qwen/llama.cpp für Einzeltest entladen."
+      message: "Standardanalyse pausiert · Vision-Modell/llama.cpp für Einzeltest entladen."
     });
   }
 

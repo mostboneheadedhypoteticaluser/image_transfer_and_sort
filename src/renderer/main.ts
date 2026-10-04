@@ -173,17 +173,21 @@ function benchmarkDuration(ms: number): string {
 }
 
 function benchmarkObjectSummary(stage: QwenBenchmarkStageResult): string {
-  if (stage.objects.length === 0) return "Keine bestätigten Motive.";
-
-  const counts = new Map<string, number>();
-  for (const object of stage.objects) {
-    counts.set(object.label, (counts.get(object.label) ?? 0) + 1);
+  const parts: string[] = [];
+  if (stage.semantic.description) parts.push(stage.semantic.description);
+  if (stage.semantic.subjects.length > 0) {
+    parts.push("Motive: " + stage.semantic.subjects.join(", "));
   }
-
-  return [...counts.entries()]
-    .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
-    .map(([label, count]) => count > 1 ? label + " ×" + count : label)
-    .join(" · ");
+  if (stage.semantic.actions.length > 0) {
+    parts.push("Handlung: " + stage.semantic.actions.join(", "));
+  }
+  if (stage.semantic.scenes.length > 0) {
+    parts.push("Szene: " + stage.semantic.scenes.join(", "));
+  }
+  if (stage.semantic.tags.length > 0) {
+    parts.push("Tags: " + stage.semantic.tags.join(", "));
+  }
+  return parts.length > 0 ? parts.join(" · ") : "Kein semantischer Inhalt erkannt.";
 }
 
 function renderQwenBenchmarkStage(stage: QwenBenchmarkStageResult): void {
@@ -200,8 +204,8 @@ function renderQwenBenchmarkStage(stage: QwenBenchmarkStageResult): void {
     const order: QwenBenchmarkProfile[] = [
       "whole",
       "tiles4",
-      "single-check",
-      "full"
+      "tiles9",
+      "tiles16"
     ];
     return order.indexOf(left.profile) - order.indexOf(right.profile);
   });
@@ -225,11 +229,11 @@ function renderQwenBenchmarkStage(stage: QwenBenchmarkStageResult): void {
 
     const metricValues: Array<[string, string]> = [
       ["Modell bereit", benchmarkDuration(result.timings.modelReadyMs)],
-      ["Motivsuche", benchmarkDuration(result.timings.discoveryMs)],
-      ["Prüfungen", benchmarkDuration(result.timings.verificationMs)],
+      ["Bildanalyse", benchmarkDuration(result.timings.discoveryMs)],
       ["Bildbereiche", result.regionCount.toLocaleString("de-DE")],
-      ["Kandidaten", result.candidateCount.toLocaleString("de-DE")],
-      ["Ergebnis", result.verifiedCount.toLocaleString("de-DE")]
+      ["Motive", result.semantic.subjects.length.toLocaleString("de-DE")],
+      ["Suchbegriffe", result.semantic.tags.length.toLocaleString("de-DE")],
+      ["Textfunde", result.semantic.visibleText.length.toLocaleString("de-DE")]
     ];
 
     for (const [label, value] of metricValues) {
@@ -264,7 +268,7 @@ function renderQwenBenchmarkProgress(status: AnalysisWorkerStatus): void {
   if (!qwenBenchmarkRunning) return;
 
   const progress = status.progress;
-  if (progress?.kind === "qwen3vl" && progress.message) {
+  if (progress?.kind === "minicpm" && progress.message) {
     qwenBenchmarkLive.textContent = progress.message;
   } else if (status.message) {
     qwenBenchmarkLive.textContent = status.message;
@@ -273,7 +277,7 @@ function renderQwenBenchmarkProgress(status: AnalysisWorkerStatus): void {
 
 function qwenBenchmarkCopyText(): string {
   const lines = [
-    "Qwen-Einzelbild-Benchmark",
+    "MiniCPM-V 4.6 · Einzelbild-Benchmark",
     "Datei: " + (qwenBenchmarkSelectedPath ?? "—"),
     ""
   ];
@@ -282,14 +286,17 @@ function qwenBenchmarkCopyText(): string {
     lines.push(
       stage.label,
       stage.description,
+      "Modell: " + stage.model,
       "Gesamt: " + benchmarkDuration(stage.timings.totalMs),
       "Modell bereit: " + benchmarkDuration(stage.timings.modelReadyMs),
-      "Motivsuche: " + benchmarkDuration(stage.timings.discoveryMs),
-      "Prüfungen: " + benchmarkDuration(stage.timings.verificationMs),
+      "Bildanalyse: " + benchmarkDuration(stage.timings.discoveryMs),
       "Bildbereiche: " + stage.regionCount.toLocaleString("de-DE"),
-      "Kandidaten: " + stage.candidateCount.toLocaleString("de-DE"),
-      "Ergebnis: " + stage.verifiedCount.toLocaleString("de-DE"),
-      "Motive: " + benchmarkObjectSummary(stage),
+      "Beschreibung: " + (stage.semantic.description || "—"),
+      "Motive: " + (stage.semantic.subjects.join(", ") || "—"),
+      "Handlungen: " + (stage.semantic.actions.join(", ") || "—"),
+      "Szene: " + (stage.semantic.scenes.join(", ") || "—"),
+      "Sichtbarer Text: " + (stage.semantic.visibleText.join(" | ") || "—"),
+      "Suchbegriffe: " + (stage.semantic.tags.join(", ") || "—"),
       ""
     );
   }
@@ -2521,7 +2528,7 @@ async function closeQwenBenchmarkAndResume(): Promise<void> {
     await window.imageSorter.analysis.finishQwenBenchmark();
     qwenBenchmarkDialog.close();
     progressText.textContent =
-      "Qwen-Einzeltest beendet. Normale Analyse läuft wieder weiter.";
+      "MiniCPM-Einzeltest beendet. Normale Analyse läuft wieder weiter.";
   } finally {
     closeQwenBenchmarkButton.disabled = false;
     pickQwenBenchmarkImageButton.disabled = false;
@@ -2537,12 +2544,12 @@ qwenBenchmarkButton.addEventListener("click", () => {
     pickQwenBenchmarkImageButton.disabled = true;
     runQwenBenchmarkButton.disabled = true;
     qwenBenchmarkLive.textContent =
-      "Standard-Qwen wird jetzt gestoppt und aus dem Speicher entladen …";
+      "Standardanalyse wird pausiert und große Vision-Modelle werden aus dem Speicher entladen …";
 
     try {
       await window.imageSorter.analysis.prepareQwenBenchmark();
       qwenBenchmarkLive.textContent =
-        "Standardanalyse ist vollständig pausiert und Qwen ist entladen. " +
+        "Standardanalyse ist vollständig pausiert. " +
         "Du kannst jetzt ein Bild auswählen.";
     } finally {
       qwenBenchmarkButton.disabled = false;
@@ -2604,7 +2611,7 @@ runQwenBenchmarkButton.addEventListener("click", () => {
     copyQwenBenchmarkButton.disabled = true;
     closeQwenBenchmarkButton.disabled = true;
     qwenBenchmarkLive.textContent =
-      "Standardanalyse ist pausiert. Qwen-Test wird vorbereitet …";
+      "Standardanalyse ist pausiert. MiniCPM-Test wird vorbereitet …";
 
     try {
       const result = await window.imageSorter.analysis.runQwenBenchmark(

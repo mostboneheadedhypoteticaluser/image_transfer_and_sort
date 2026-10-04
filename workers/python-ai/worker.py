@@ -143,6 +143,22 @@ QWEN3VL_MODEL_VERSION = (
 )
 QWEN3VL_CONTEXT_SIZE = 16384
 
+MINICPM_MODEL_DIR = os.path.join(
+    WORKER_DIR,
+    "models",
+    "minicpm-v-4.6-gguf",
+)
+MINICPM_MODEL_FILE = os.path.join(
+    MINICPM_MODEL_DIR,
+    "MiniCPM-V-4.6-Q4_K_M.gguf",
+)
+MINICPM_MMPROJ_FILE = os.path.join(
+    MINICPM_MODEL_DIR,
+    "mmproj-MiniCPM-V-4.6-Q8_0.gguf",
+)
+MINICPM_MODEL_VERSION = "MiniCPM-V 4.6 Q4_K_M + Vision Q8_0"
+MINICPM_CONTEXT_SIZE = 8192
+
 COCO_CLASS_NAMES = (
     "person", "bicycle", "car", "motorcycle", "airplane", "bus", "train",
     "truck", "boat", "traffic light", "fire hydrant", "stop sign",
@@ -167,9 +183,11 @@ _siglip2_coco_text_features = None
 _qwen_server_process = None
 _qwen_server_port = None
 _qwen_server_log_handle = None
+_vision_server_model = None
 _llama_server_cached = None
 _llama_server_searched = False
 QWEN_SERVER_LOG = os.path.join(WORKER_DIR, "llama-qwen3vl.log")
+MINICPM_SERVER_LOG = os.path.join(WORKER_DIR, "llama-minicpm-v46.log")
 
 
 @dataclass
@@ -291,6 +309,15 @@ def qwen_gguf_ready() -> bool:
     )
 
 
+def minicpm_gguf_ready() -> bool:
+    return (
+        os.path.isfile(MINICPM_MODEL_FILE)
+        and os.path.getsize(MINICPM_MODEL_FILE) > 500_000_000
+        and os.path.isfile(MINICPM_MMPROJ_FILE)
+        and os.path.getsize(MINICPM_MMPROJ_FILE) > 700_000_000
+    )
+
+
 def snapshot() -> dict:
     return {
         **asdict(config),
@@ -310,6 +337,8 @@ def snapshot() -> dict:
             ),
             "qwen3vlModel": qwen_gguf_ready(),
             "qwen3vlRuntime": find_llama_server() is not None,
+            "minicpmModel": minicpm_gguf_ready(),
+            "minicpmRuntime": find_llama_server() is not None,
             "torch": importlib.util.find_spec("torch") is not None,
             "transformers": importlib.util.find_spec("transformers") is not None,
             "onnxRuntime": importlib.util.find_spec("onnxruntime") is not None,
@@ -345,6 +374,12 @@ def snapshot() -> dict:
                 and ImageDraw is not None
                 and ImageOps is not None
                 and qwen_gguf_ready()
+                and find_llama_server() is not None
+            ),
+            "minicpmBenchmark": (
+                Image is not None
+                and ImageOps is not None
+                and minicpm_gguf_ready()
                 and find_llama_server() is not None
             ),
         },
@@ -1974,7 +2009,7 @@ def unload_siglip2() -> None:
 
 
 def unload_qwen3vl() -> None:
-    global _qwen_server_process, _qwen_server_port, _qwen_server_log_handle
+    global _qwen_server_process, _qwen_server_port, _qwen_server_log_handle, _vision_server_model
 
     process = _qwen_server_process
     if process is not None:
@@ -1985,6 +2020,7 @@ def unload_qwen3vl() -> None:
         )
     _qwen_server_process = None
     _qwen_server_port = None
+    _vision_server_model = None
 
     if process is not None and process.poll() is None:
         try:
@@ -2266,7 +2302,7 @@ def qwen_server_healthy(port: int, timeout: float = 1.0) -> bool:
 
 
 def qwen3vl_runtime() -> int:
-    global _qwen_server_process, _qwen_server_port, _qwen_server_log_handle
+    global _qwen_server_process, _qwen_server_port, _qwen_server_log_handle, _vision_server_model
 
     if Image is None or ImageDraw is None or ImageOps is None:
         raise RuntimeError(
@@ -2287,7 +2323,8 @@ def qwen3vl_runtime() -> int:
         )
 
     if (
-        _qwen_server_process is not None
+        _vision_server_model == "qwen3vl"
+        and _qwen_server_process is not None
         and _qwen_server_process.poll() is None
         and _qwen_server_port is not None
         and qwen_server_healthy(int(_qwen_server_port))
@@ -2350,6 +2387,7 @@ def qwen3vl_runtime() -> int:
         creationflags=creationflags,
     )
     _qwen_server_port = port
+    _vision_server_model = "qwen3vl"
     report_process_event(
         "qwen-server",
         "started",
@@ -3047,6 +3085,531 @@ def legacy_object_hints(hints: list[dict], image) -> list[dict]:
 
     return result
 
+
+
+
+MINICPM_BENCHMARK_PROFILES = {
+    "whole": {
+        "label": "1 · Nur Gesamtbild",
+        "description": "Ein MiniCPM-Aufruf auf dem verkleinerten Gesamtbild.",
+        "tiles": 0,
+    },
+    "tiles4": {
+        "label": "2 · Gesamtbild + 4 Kacheln",
+        "description": "Gesamtbild plus 2×2 Kacheln für mehr lokale Details.",
+        "tiles": 4,
+    },
+    "tiles9": {
+        "label": "3 · Gesamtbild + 9 Kacheln",
+        "description": "Gesamtbild plus 3×3 Kacheln für kleinere Motive.",
+        "tiles": 9,
+    },
+    "tiles16": {
+        "label": "4 · Gesamtbild + 16 Kacheln",
+        "description": "Gesamtbild plus 4×4 Kacheln als maximale Detailstufe des Tests.",
+        "tiles": 16,
+    },
+}
+
+
+def minicpm_runtime() -> int:
+    global _qwen_server_process, _qwen_server_port, _qwen_server_log_handle, _vision_server_model
+
+    if Image is None or ImageOps is None:
+        raise RuntimeError(
+            "Pillow fehlt. Einmal 'npm.cmd run setup:ai' ausführen."
+        )
+
+    if not minicpm_gguf_ready():
+        raise RuntimeError(
+            "MiniCPM-V 4.6 Q4_K_M oder der Q8-Vision-Projektor fehlt. "
+            "Einmal 'npm.cmd run setup:ai' ausführen."
+        )
+
+    executable = find_llama_server()
+    if executable is None:
+        raise RuntimeError(
+            "llama-server wurde nicht gefunden. Unter Windows bitte "
+            "'winget install llama.cpp' ausführen und die App neu starten."
+        )
+
+    if (
+        _vision_server_model == "minicpm"
+        and _qwen_server_process is not None
+        and _qwen_server_process.poll() is None
+        and _qwen_server_port is not None
+        and qwen_server_healthy(int(_qwen_server_port))
+    ):
+        dev_log(
+            "MINICPM_SERVER_REUSE",
+            serverPid=_qwen_server_process.pid,
+            port=int(_qwen_server_port),
+        )
+        return int(_qwen_server_port)
+
+    unload_qwen3vl()
+    unload_siglip2()
+
+    port = free_local_port()
+    os.makedirs(os.path.dirname(MINICPM_SERVER_LOG), exist_ok=True)
+    _qwen_server_log_handle = open(
+        MINICPM_SERVER_LOG,
+        "w",
+        encoding="utf-8",
+        buffering=1,
+    )
+
+    args = [
+        executable,
+        "-m",
+        MINICPM_MODEL_FILE,
+        "--mmproj",
+        MINICPM_MMPROJ_FILE,
+        "--host",
+        "127.0.0.1",
+        "--port",
+        str(port),
+        "-c",
+        str(MINICPM_CONTEXT_SIZE),
+        "-ngl",
+        "99",
+    ]
+
+    creationflags = 0
+    if os.name == "nt":
+        creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+    started = time.perf_counter()
+    dev_log(
+        "MINICPM_SERVER_START_BEGIN",
+        executable=executable,
+        port=port,
+        context=MINICPM_CONTEXT_SIZE,
+        model=MINICPM_MODEL_FILE,
+        mmproj=MINICPM_MMPROJ_FILE,
+    )
+
+    _qwen_server_process = subprocess.Popen(
+        args,
+        stdin=subprocess.DEVNULL,
+        stdout=_qwen_server_log_handle,
+        stderr=subprocess.STDOUT,
+        creationflags=creationflags,
+    )
+    _qwen_server_port = port
+    _vision_server_model = "minicpm"
+    report_process_event(
+        "qwen-server",
+        "started",
+        pid=_qwen_server_process.pid,
+        port=port,
+    )
+
+    deadline = time.monotonic() + 120.0
+    while time.monotonic() < deadline:
+        if _qwen_server_process.poll() is not None:
+            detail = qwen_server_log_tail()
+            unload_qwen3vl()
+            raise RuntimeError(
+                "llama.cpp konnte MiniCPM-V 4.6 nicht starten. "
+                "Gegebenenfalls llama.cpp aktualisieren."
+                + (f" Log: {detail}" if detail else "")
+            )
+        if qwen_server_healthy(port, timeout=1.0):
+            dev_log(
+                "MINICPM_SERVER_READY",
+                serverPid=_qwen_server_process.pid,
+                port=port,
+                elapsedMs=round((time.perf_counter() - started) * 1000, 1),
+            )
+            return port
+        time.sleep(0.5)
+
+    detail = qwen_server_log_tail()
+    unload_qwen3vl()
+    raise RuntimeError(
+        "llama.cpp hat MiniCPM-V 4.6 nicht innerhalb von 120 Sekunden geladen."
+        + (f" Log: {detail}" if detail else "")
+    )
+
+
+def minicpm_generate(
+    image,
+    prompt: str,
+    progress_request_id: str | None = None,
+    progress_label: str = "MiniCPM-V 4.6",
+) -> str:
+    port = minicpm_runtime()
+    started = time.perf_counter()
+    width, height = image.size
+
+    dev_log(
+        "MINICPM_GENERATE_BEGIN",
+        label=progress_label,
+        imageWidth=int(width),
+        imageHeight=int(height),
+        port=port,
+    )
+
+    payload = {
+        "model": "MiniCPM-V-4.6",
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": image_data_uri(image)},
+                    },
+                    {"type": "text", "text": prompt},
+                ],
+            }
+        ],
+        "temperature": 0.1,
+        "max_tokens": 384,
+        "stream": False,
+    }
+
+    body = json.dumps(payload).encode("utf-8")
+    request = urllib_request.Request(
+        f"http://127.0.0.1:{port}/v1/chat/completions",
+        data=body,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+
+    report_progress(
+        progress_request_id,
+        f"MiniCPM: {progress_label} · Modell antwortet …",
+        phase="minicpm-generation",
+    )
+
+    try:
+        with urllib_request.urlopen(request, timeout=600.0) as response:
+            raw = response.read().decode("utf-8", errors="replace")
+        value = json.loads(raw)
+        choices = value.get("choices") or []
+        message = choices[0].get("message") if choices else None
+        if not isinstance(message, dict):
+            raise ValueError("choices[0].message fehlt")
+        content = message.get("content")
+        if not isinstance(content, str) or not content.strip():
+            raise ValueError("leere Modellantwort")
+        result = content.strip()
+    except urllib_error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(
+            f"llama.cpp/MiniCPM HTTP {exc.code}: {detail[:1200]}"
+        ) from exc
+    except Exception as exc:
+        raise RuntimeError(
+            f"llama.cpp/MiniCPM Anfrage fehlgeschlagen: {exc}"
+        ) from exc
+
+    dev_log(
+        "MINICPM_GENERATE_OK",
+        label=progress_label,
+        elapsedMs=round((time.perf_counter() - started) * 1000, 1),
+        contentChars=len(result),
+    )
+    return result
+
+
+def minicpm_clean_list(value, limit: int = 24) -> list[str]:
+    if isinstance(value, str):
+        values = [value]
+    elif isinstance(value, list):
+        values = value
+    else:
+        values = []
+
+    result: list[str] = []
+    seen: set[str] = set()
+    for item in values:
+        text = " ".join(str(item).strip().split())
+        key = text.casefold()
+        if not text or key in seen:
+            continue
+        seen.add(key)
+        result.append(text[:120])
+        if len(result) >= limit:
+            break
+    return result
+
+
+def minicpm_semantic_region(
+    image,
+    progress_request_id: str | None,
+    progress_label: str,
+) -> dict:
+    # Für den semantischen Index brauchen wir keine Bounding-Boxes und keine
+    # lange Begründung. Das kleine Modell darf dadurch sehr kurz antworten.
+    prompt = """
+Analysiere ausschließlich den sichtbaren Inhalt dieses Bildausschnitts.
+Gib eine knappe, sachliche semantische Beschreibung für eine Bildsuche zurück.
+Keine Spekulationen über Namen, Beziehungen, Ereignisse oder Orte, die nicht
+eindeutig sichtbar sind. Nenne konkrete Gegenstände, Tiere, Personen, Handlungen,
+den Umgebungstyp und deutlich lesbaren Text.
+
+Antworte NUR als JSON-Objekt in genau dieser Form:
+{
+  "description": "ein kurzer deutscher Satz",
+  "subjects": ["konkretes Hauptmotiv"],
+  "actions": ["sichtbare Handlung"],
+  "scenes": ["Umgebung oder Ortstyp"],
+  "visibleText": ["deutlich lesbarer Text"],
+  "tags": ["5 bis 15 konkrete deutsche Suchbegriffe"]
+}
+
+Leere Kategorien als [] zurückgeben. Begriffe nicht unnötig doppeln.
+""".strip()
+
+    output = minicpm_generate(
+        image,
+        prompt,
+        progress_request_id=progress_request_id,
+        progress_label=progress_label,
+    )
+
+    try:
+        value = last_json_value(output, dict)
+    except Exception as exc:
+        raise RuntimeError(
+            "MiniCPM hat keine auswertbare JSON-Antwort geliefert. "
+            f"Antwortanfang: {output[:300]!r}"
+        ) from exc
+
+    return {
+        "description": " ".join(str(value.get("description", "")).strip().split())[:500],
+        "subjects": minicpm_clean_list(value.get("subjects"), 24),
+        "actions": minicpm_clean_list(value.get("actions"), 16),
+        "scenes": minicpm_clean_list(value.get("scenes"), 12),
+        "visibleText": minicpm_clean_list(value.get("visibleText"), 24),
+        "tags": minicpm_clean_list(value.get("tags"), 30),
+    }
+
+
+def minicpm_grid_regions(image, tile_count: int) -> list[tuple[int, int, int, int, str]]:
+    width, height = image.size
+    regions: list[tuple[int, int, int, int, str]] = [
+        (0, 0, width, height, "whole-image")
+    ]
+    if tile_count <= 0:
+        return regions
+
+    side = int(round(math.sqrt(tile_count)))
+    if side * side != tile_count:
+        raise RuntimeError(f"Ungültige MiniCPM-Kachelzahl: {tile_count}")
+
+    overlap = 0.06
+    for row in range(side):
+        base_top = int(round(row * height / side))
+        base_bottom = int(round((row + 1) * height / side))
+        for col in range(side):
+            base_left = int(round(col * width / side))
+            base_right = int(round((col + 1) * width / side))
+            pad_x = int(round((base_right - base_left) * overlap))
+            pad_y = int(round((base_bottom - base_top) * overlap))
+            regions.append((
+                max(0, base_left - pad_x),
+                max(0, base_top - pad_y),
+                min(width, base_right + pad_x),
+                min(height, base_bottom + pad_y),
+                "tile",
+            ))
+    return regions
+
+
+def minicpm_merge_semantics(region_results: list[dict]) -> dict:
+    if not region_results:
+        return {
+            "description": "",
+            "subjects": [],
+            "actions": [],
+            "scenes": [],
+            "visibleText": [],
+            "tags": [],
+        }
+
+    whole = region_results[0]["semantic"]
+    merged = {
+        "description": str(whole.get("description", "")),
+        "subjects": [],
+        "actions": [],
+        "scenes": [],
+        "visibleText": [],
+        "tags": [],
+    }
+
+    limits = {
+        "subjects": 40,
+        "actions": 30,
+        "scenes": 20,
+        "visibleText": 40,
+        "tags": 60,
+    }
+    for key in ("subjects", "actions", "scenes", "visibleText", "tags"):
+        values = []
+        for region in region_results:
+            values.extend(region["semantic"].get(key, []))
+        merged[key] = minicpm_clean_list(values, limits[key])
+
+    return merged
+
+
+def benchmark_minicpm(
+    file_path: str,
+    profile_name: str,
+    progress_request_id: str | None = None,
+) -> dict:
+    if Image is None or ImageOps is None:
+        raise RuntimeError(
+            "Pillow fehlt. Einmal 'npm.cmd run setup:ai' ausführen."
+        )
+
+    profile = MINICPM_BENCHMARK_PROFILES.get(profile_name)
+    if profile is None:
+        raise RuntimeError(f"Unbekannte MiniCPM-Benchmark-Stufe: {profile_name}")
+
+    total_started = time.perf_counter()
+    file_name = os.path.basename(file_path)
+    label = str(profile["label"])
+
+    prepare_started = time.perf_counter()
+    prepare_for_qwen()
+    prepare_ms = (time.perf_counter() - prepare_started) * 1000.0
+
+    load_started = time.perf_counter()
+    try:
+        with Image.open(file_path) as source:
+            source.load()
+            image = ImageOps.exif_transpose(source).convert("RGB")
+    except Exception as exc:
+        raise RuntimeError(
+            f"Bild konnte für den MiniCPM-Test nicht gelesen werden: {exc}"
+        ) from exc
+    image_load_ms = (time.perf_counter() - load_started) * 1000.0
+
+    try:
+        report_progress(
+            progress_request_id,
+            f"MiniCPM-Test {label}: Modell wird geladen · {file_name}",
+            phase="minicpm-model",
+        )
+        model_started = time.perf_counter()
+        minicpm_runtime()
+        model_ready_ms = (time.perf_counter() - model_started) * 1000.0
+
+        regions = minicpm_grid_regions(image, int(profile["tiles"]))
+        region_results: list[dict] = []
+        discovery_started = time.perf_counter()
+
+        for index, (left, top, right, bottom, kind) in enumerate(regions, start=1):
+            display_kind = "Gesamtbild" if kind == "whole-image" else "Kachel"
+            report_progress(
+                progress_request_id,
+                (
+                    f"MiniCPM-Test {label}: {display_kind} "
+                    f"{index}/{len(regions)} · {file_name}"
+                ),
+                phase="minicpm-regions",
+                current=index,
+                total=len(regions),
+            )
+
+            owns_region = kind != "whole-image"
+            region = image.crop((left, top, right, bottom)) if owns_region else image
+
+            # Eine riesige Originalaufnahme bringt dem kleinen Vision-Encoder
+            # kaum zusätzlichen Nutzen, kostet aber beim Kodieren viel Zeit.
+            owns_scaled = False
+            if max(region.size) > 1280:
+                scaled = region.copy()
+                scaled.thumbnail((1280, 1280), Image.Resampling.LANCZOS)
+                analysis_image = scaled
+                owns_scaled = True
+            else:
+                analysis_image = region
+
+            region_started = time.perf_counter()
+            try:
+                semantic = minicpm_semantic_region(
+                    analysis_image,
+                    progress_request_id,
+                    f"{display_kind} {index}/{len(regions)}",
+                )
+            finally:
+                if owns_scaled:
+                    analysis_image.close()
+                if owns_region:
+                    region.close()
+                gc.collect()
+
+            region_results.append({
+                "name": "whole-image" if kind == "whole-image" else f"tile-{index - 1}",
+                "kind": kind,
+                "x": int(left),
+                "y": int(top),
+                "width": int(right - left),
+                "height": int(bottom - top),
+                "durationMs": round((time.perf_counter() - region_started) * 1000.0, 1),
+                "semantic": semantic,
+            })
+
+        discovery_ms = (time.perf_counter() - discovery_started) * 1000.0
+        semantic = minicpm_merge_semantics(region_results)
+        total_ms = (time.perf_counter() - total_started) * 1000.0
+
+        report_progress(
+            progress_request_id,
+            (
+                f"MiniCPM-Test {label}: fertig · {len(regions)} Bildbereiche · "
+                f"{len(semantic['tags'])} Suchbegriffe · "
+                f"{format_live_duration(total_ms / 1000.0)}"
+            ),
+            phase="minicpm-done",
+            current=len(regions),
+            total=len(regions),
+        )
+
+        result = {
+            "path": file_path,
+            "profile": profile_name,
+            "label": label,
+            "description": str(profile["description"]),
+            "model": MINICPM_MODEL_VERSION,
+            "imageWidth": int(image.width),
+            "imageHeight": int(image.height),
+            "regionCount": len(regions),
+            # Alt-Felder bleiben für IPC-Abwärtskompatibilität erhalten.
+            "candidateCount": len(semantic["subjects"]),
+            "verifiedCount": len(semantic["tags"]),
+            "rejectedCount": 0,
+            "timings": {
+                "prepareMs": round(prepare_ms, 1),
+                "imageLoadMs": round(image_load_ms, 1),
+                "modelReadyMs": round(model_ready_ms, 1),
+                "discoveryMs": round(discovery_ms, 1),
+                "verificationMs": 0.0,
+                "totalMs": round(total_ms, 1),
+            },
+            "semantic": semantic,
+            "regions": region_results,
+            "objects": [],
+        }
+
+        dev_log(
+            "MINICPM_BENCHMARK_DONE",
+            profile=profile_name,
+            target=file_path,
+            regionCount=len(regions),
+            tags=len(semantic["tags"]),
+            timings=result["timings"],
+        )
+        return result
+    finally:
+        image.close()
+        gc.collect()
 
 
 QWEN_BENCHMARK_PROFILES = {
@@ -3859,6 +4422,19 @@ def handle(message: dict) -> bool:
         )
         return True
 
+
+    if method == "benchmark_minicpm":
+        file_path = require_file(payload)
+        profile = str(payload.get("profile", "")).strip()
+        respond(
+            request_id,
+            result=benchmark_minicpm(
+                file_path,
+                profile,
+                progress_request_id=request_id,
+            ),
+        )
+        return True
 
     if method == "benchmark_qwen3vl":
         file_path = require_file(payload)

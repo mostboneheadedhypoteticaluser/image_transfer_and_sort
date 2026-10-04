@@ -1,5 +1,5 @@
 export type AnalysisWorkerProgress = {
-  kind: "qwen3vl";
+  kind: "qwen3vl" | "minicpm";
   phase: string;
   current: number | null;
   total: number | null;
@@ -22,8 +22,8 @@ export type AnalysisWorkerStatus = {
 export type QwenBenchmarkProfile =
   | "whole"
   | "tiles4"
-  | "single-check"
-  | "full";
+  | "tiles9"
+  | "tiles16";
 
 export type QwenBenchmarkObject = {
   label: string;
@@ -45,11 +45,32 @@ export type QwenBenchmarkTimings = {
   totalMs: number;
 };
 
+export type QwenBenchmarkSemantic = {
+  description: string;
+  subjects: string[];
+  actions: string[];
+  scenes: string[];
+  visibleText: string[];
+  tags: string[];
+};
+
+export type QwenBenchmarkRegion = {
+  name: string;
+  kind: "whole-image" | "tile";
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  durationMs: number;
+  semantic: QwenBenchmarkSemantic;
+};
+
 export type QwenBenchmarkStageResult = {
   path: string;
   profile: QwenBenchmarkProfile;
   label: string;
   description: string;
+  model: string;
   imageWidth: number;
   imageHeight: number;
   regionCount: number;
@@ -57,6 +78,8 @@ export type QwenBenchmarkStageResult = {
   verifiedCount: number;
   rejectedCount: number;
   timings: QwenBenchmarkTimings;
+  semantic: QwenBenchmarkSemantic;
+  regions: QwenBenchmarkRegion[];
   objects: QwenBenchmarkObject[];
 };
 

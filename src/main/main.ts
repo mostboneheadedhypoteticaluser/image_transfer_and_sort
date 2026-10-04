@@ -489,7 +489,7 @@ function registerIpc(): void {
     await enterQwenBenchmarkMode();
 
     const options: OpenDialogOptions = {
-      title: "Bild für Qwen-Einzeltest auswählen",
+      title: "Bild für MiniCPM-Einzeltest auswählen",
       properties: ["openFile"],
       filters: [
         {
@@ -516,14 +516,14 @@ function registerIpc(): void {
     ): Promise<QwenBenchmarkRunResult> => {
       const normalizedPath = typeof filePath === "string" ? filePath.trim() : "";
       if (!normalizedPath) {
-        throw new Error("Bitte zuerst ein Bild für den Qwen-Test auswählen.");
+        throw new Error("Bitte zuerst ein Bild für den MiniCPM-Test auswählen.");
       }
 
       const allowed: QwenBenchmarkProfile[] = [
         "whole",
         "tiles4",
-        "single-check",
-        "full"
+        "tiles9",
+        "tiles16"
       ];
       const selected = [...new Set(profiles)].filter(
         (profile): profile is QwenBenchmarkProfile =>
@@ -531,7 +531,7 @@ function registerIpc(): void {
       );
 
       if (selected.length === 0) {
-        throw new Error("Bitte mindestens eine Qwen-Teststufe auswählen.");
+        throw new Error("Bitte mindestens eine MiniCPM-Teststufe auswählen.");
       }
 
       await enterQwenBenchmarkMode();
@@ -541,19 +541,19 @@ function registerIpc(): void {
         await analysis.start();
       }
       if (analysis.getStatus().state !== "READY") {
-        throw new Error("Analyse-Worker ist für den Qwen-Test nicht bereit.");
+        throw new Error("Analyse-Worker ist für den MiniCPM-Test nicht bereit.");
       }
 
       const results: QwenBenchmarkStageResult[] = [];
 
         for (const profile of selected) {
           const stage = await analysis.request<QwenBenchmarkStageResult>(
-            "benchmark_qwen3vl",
+            "benchmark_minicpm",
             {
               path: normalizedPath,
               profile
             },
-            1800000
+            600000
           );
 
           results.push(stage);
