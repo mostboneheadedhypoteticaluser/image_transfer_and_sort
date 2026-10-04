@@ -234,6 +234,10 @@ export class AnalysisCoordinator {
     }
   }
 
+  disableAutomaticQwen(): void {
+    this.automaticQwenEnabled = false;
+  }
+
   private async enqueueExistingSources(): Promise<void> {
     const sources = await this.catalog.request<SourceRecord[]>("listSources");
 
