@@ -39,6 +39,10 @@ const api = {
       path: string;
       characters: number;
     }> => ipcRenderer.invoke("analysis:copyDevLog"),
+    getAutomaticQwenState: (): Promise<{ enabled: boolean }> =>
+      ipcRenderer.invoke("analysis:getAutomaticQwenState"),
+    startAutomaticQwen: (): Promise<{ enabled: true }> =>
+      ipcRenderer.invoke("analysis:startAutomaticQwen"),
     prepareQwenBenchmark: (): Promise<{ paused: true }> =>
       ipcRenderer.invoke("analysis:prepareQwenBenchmark"),
     finishQwenBenchmark: (): Promise<{ resumed: true }> =>
