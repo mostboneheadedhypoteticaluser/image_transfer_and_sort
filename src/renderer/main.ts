@@ -1,4 +1,3 @@
-import "./style.css";
 import type {
   AnalysisErrorRecord,
   AnalysisWorkerStatus,
@@ -86,6 +85,7 @@ const semanticStageCounts = document.querySelector<HTMLElement>("#semanticStageC
 const analysisErrorsButton = document.querySelector<HTMLButtonElement>("#analysisErrorsButton")!;
 const analysisDevLogButton = document.querySelector<HTMLButtonElement>("#analysisDevLogButton")!;
 const analysisCopyDevLogButton = document.querySelector<HTMLButtonElement>("#analysisCopyDevLogButton")!;
+const qwenAutomaticButton = document.querySelector<HTMLButtonElement>("#qwenAutomaticButton")!;
 const qwenBenchmarkButton = document.querySelector<HTMLButtonElement>("#qwenBenchmarkButton")!;
 const qwenBenchmarkDialog = document.querySelector<HTMLDialogElement>("#qwenBenchmarkDialog")!;
 const closeQwenBenchmarkButton = document.querySelector<HTMLButtonElement>("#closeQwenBenchmark")!;
@@ -141,6 +141,18 @@ let latestAnalysisStatus: AnalysisWorkerStatus | null = null;
 let qwenBenchmarkSelectedPath: string | null = null;
 let qwenBenchmarkRunning = false;
 let qwenBenchmarkStages: QwenBenchmarkStageResult[] = [];
+let automaticQwenEnabled = false;
+
+function renderAutomaticQwenState(enabled: boolean): void {
+  automaticQwenEnabled = enabled;
+  qwenAutomaticButton.disabled = enabled;
+  qwenAutomaticButton.textContent = enabled
+    ? "Qwen-Serienanalyse aktiv"
+    : "Qwen-Serienanalyse starten";
+  qwenAutomaticButton.title = enabled
+    ? "Die normale Qwen-Warteschlange ist für diese App-Sitzung freigegeben."
+    : "Qwen wird beim App-Start absichtlich nicht automatisch geladen. Erst dieser Klick startet die Serienanalyse.";
+}
 
 function benchmarkDuration(ms: number): string {
   const totalSeconds = Math.max(0, Math.round(ms / 1000));
@@ -2472,6 +2484,26 @@ analysisCopyDevLogButton.addEventListener("click", () => {
   });
 });
 
+qwenAutomaticButton.addEventListener("click", () => {
+  if (automaticQwenEnabled) return;
+
+  void runSafely(async () => {
+    qwenAutomaticButton.disabled = true;
+    progressText.textContent =
+      "Qwen-Serienanalyse wird freigegeben. Das große Modell wird erst beim nächsten Qwen-Job geladen …";
+
+    try {
+      const result = await window.imageSorter.analysis.startAutomaticQwen();
+      renderAutomaticQwenState(result.enabled);
+      progressText.textContent =
+        "Qwen-Serienanalyse ist aktiv. Einzelbildtests pausieren sie weiterhin automatisch.";
+    } catch (error) {
+      renderAutomaticQwenState(false);
+      throw error;
+    }
+  });
+});
+
 async function closeQwenBenchmarkAndResume(): Promise<void> {
   if (qwenBenchmarkRunning) {
     qwenBenchmarkLive.textContent =
@@ -2759,6 +2791,11 @@ window.imageSorter.pets.onUpdated(() => {
     }
   });
 });
+
+void window.imageSorter.analysis
+  .getAutomaticQwenState()
+  .then((state) => renderAutomaticQwenState(state.enabled))
+  .catch(() => renderAutomaticQwenState(false));
 
 void window.imageSorter.analysis
   .getPipelineStatus()
