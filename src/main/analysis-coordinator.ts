@@ -159,6 +159,12 @@ export class AnalysisCoordinator {
   private stopped = true;
   private benchmarkPaused = false;
 
+  // Qwen ist absichtlich NICHT automatisch aktiv. Das 8B-GGUF samt
+  // llama.cpp-Kontext belegt auf diesem Rechner sehr viel Hauptspeicher.
+  // Während wir die Einzelbild-Profile vermessen, darf ein alter PENDING-Job
+  // deshalb nicht schon direkt beim App-Start das Modell laden.
+  private automaticQwenEnabled = false;
+
   constructor(
     private readonly catalog: CatalogService,
     private readonly analysis: AnalysisService,
@@ -214,6 +220,20 @@ export class AnalysisCoordinator {
     this.benchmarkPaused = false;
   }
 
+  isAutomaticQwenEnabled(): boolean {
+    return this.automaticQwenEnabled;
+  }
+
+  enableAutomaticQwen(): void {
+    this.automaticQwenEnabled = true;
+
+    // Falls alle leichteren Stufen bereits fertig sind, muss die Queue nicht
+    // bis zum nächsten Intervall warten.
+    if (!this.stopped && !this.benchmarkPaused) {
+      void this.pump();
+    }
+  }
+
   private async enqueueExistingSources(): Promise<void> {
     const sources = await this.catalog.request<SourceRecord[]>("listSources");
 
@@ -255,6 +275,17 @@ export class AnalysisCoordinator {
       this.onStats(stage, result[stage]);
     }
 
+    // Solange die Qwen-Serienanalyse nicht ausdrücklich gestartet wurde,
+    // zählen deren wartende Jobs nicht als aktive Worker-Warteschlange. Die
+    // Pipeline-Kachel zeigt sie weiterhin als offen, aber der Worker bleibt
+    // speicherschonend ohne llama.cpp-Modell.
+    const qwenQueued = this.automaticQwenEnabled
+      ? result.objectVerification.pending
+      : 0;
+    const qwenActive = this.automaticQwenEnabled
+      ? result.objectVerification.running
+      : 0;
+
     const queued =
       result.technical.pending +
       result.imageMetadata.pending +
@@ -263,7 +294,7 @@ export class AnalysisCoordinator {
       result.petDetection.pending +
       result.petFusion.pending +
       result.petEmbeddings.pending +
-      result.objectVerification.pending +
+      qwenQueued +
       result.semanticEmbeddings.pending;
     const active =
       result.technical.running +
@@ -273,15 +304,22 @@ export class AnalysisCoordinator {
       result.petDetection.running +
       result.petFusion.running +
       result.petEmbeddings.running +
-      result.objectVerification.running +
+      qwenActive +
       result.semanticEmbeddings.running;
+
+    const pausedQwen =
+      !this.automaticQwenEnabled &&
+      (result.objectVerification.pending > 0 ||
+        result.objectVerification.running > 0);
 
     this.analysis.setQueueState(
       queued,
       active,
       queued > 0 || active > 0
         ? "Bildanalyse verarbeitet Medien im Hintergrund."
-        : "Python-Analyse ist aktuell abgearbeitet."
+        : pausedQwen
+          ? "Qwen-Serienanalyse pausiert · Einzelbildtest ist frei."
+          : "Python-Analyse ist aktuell abgearbeitet."
     );
 
     return result;
@@ -292,6 +330,13 @@ export class AnalysisCoordinator {
     // folgen erst danach; Qwen3-VL ist als schwerste Stufe ganz zuletzt.
     // Innerhalb einer Stufe bleibt das jeweilige Modell für die Bildserie geladen.
     for (const spec of MODULES) {
+      if (
+        spec.module === "object-detect-qwen3vl-gguf-v2" &&
+        !this.automaticQwenEnabled
+      ) {
+        continue;
+      }
+
       const stats = await this.catalog.request<AnalysisQueueStats>(
         "getAnalysisQueueStats",
         { module: spec.module }
