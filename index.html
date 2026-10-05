@@ -297,18 +297,18 @@
 
                 <section class="search-group search-group-wide semantic-search-group">
                   <h4>Semantischer Bildinhalt · SigLIP2</h4>
-                  <p>Freier Suchtext, z. B. „Hund im Schnee“, „Wald“, „Rettungshundetraining“ oder „Person mit Hund neben einem Fahrzeug“. Der Score ist ein SigLIP2-Ähnlichkeitswert und keine statistische Wahrscheinlichkeit.</p>
+                  <p>Freier Suchtext, z. B. „Hund beim Abseilen“, „Hund im Schnee“ oder „Person mit Hund neben einem Fahrzeug“. Die Suche kombiniert gespeicherte Qwen-4B-Beschreibungen, Motive, Handlungen, Tags und Konzepte mit SigLIP2, wenn der Analyse-Worker gerade frei ist.</p>
                   <div class="semantic-search-row">
                     <input id="searchSemanticQuery" type="text" maxlength="300" autocomplete="off" placeholder="Semantischen Bildinhalt beschreiben …" />
                     <label for="searchSemanticMinProbability">
-                      Mindest-Score
+                      Mindest-Relevanz
                       <span class="semantic-score-input">
                         <input id="searchSemanticMinProbability" type="number" min="0" max="99" step="1" value="65" />
                         <span>%</span>
                       </span>
                     </label>
                   </div>
-                  <small class="semantic-search-note">Standard 65 % ist bewusst streng gewählt. Niedriger erhöht die Trefferzahl, aber auch mögliche Fehlzuordnungen.</small>
+                  <small class="semantic-search-note">Standard 65 % ist bewusst streng gewählt. Ein exakter Qwen-Konzept-/Motivtreffer kann ein Bild auch dann finden, wenn SigLIP2 schwächer ist. Die Suche startet Qwen nicht erneut.</small>
                 </section>
 
                 <section class="search-group search-group-wide">
