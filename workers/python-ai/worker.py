@@ -4770,10 +4770,8 @@ def qwen3vl4b_generate(
         )
         raise RuntimeError(
             "Qwen3-VL 4B hat für diesen Bildbereich zu lange gebraucht. "
-            (
-                "Der Aufruf wurde nach spätestens "
-                f"{int(QWEN3VL4B_REGION_TIMEOUT_SECONDS)} Sekunden abgebrochen."
-            )
+            "Der Aufruf wurde nach spätestens "
+            f"{int(QWEN3VL4B_REGION_TIMEOUT_SECONDS)} Sekunden abgebrochen."
         ) from exc
     except Exception as exc:
         dev_log(
