@@ -406,8 +406,16 @@ export class CatalogWatchService {
         sourceId
       });
 
-      source.lastScanAt = new Date().toISOString();
+      const finishedAt = new Date().toISOString();
+      source.lastScanAt = finishedAt;
       source.scanning = false;
+
+      // resolveSourceRoot kann einen umbenannten Quellordner übernommen haben.
+      // Erst den Watcher auf den neuen Pfad setzen, dann das Ergebnis melden.
+      await this.syncSources();
+      const currentSource = this.sources.get(sourceId) ?? source;
+      currentSource.lastScanAt = finishedAt;
+      currentSource.scanning = false;
 
       const summary =
         result.added.toLocaleString("de-DE") + " neu · " +
@@ -418,18 +426,14 @@ export class CatalogWatchService {
 
       this.emit({
         sourceId,
-        sourcePath: source.sourcePath,
+        sourcePath: currentSource.sourcePath,
         kind: "SCAN_FINISHED",
-        occurredAt: source.lastScanAt,
+        occurredAt: finishedAt,
         message: "Katalog automatisch aktualisiert: " + summary,
         changedPath: null,
         automatic,
         scanResult: result
       });
-
-      // resolveSourceRoot kann einen umbenannten Quellordner übernommen haben.
-      // Danach muss der Watcher auf den neuen Pfad zeigen.
-      await this.syncSources();
     } catch (error) {
       source.scanning = false;
       const message = error instanceof Error ? error.message : String(error);
