@@ -542,7 +542,9 @@ export class AnalysisService {
                 ? "minicpm"
                 : pending?.method === "benchmark_qwen3vl2b"
                   ? "qwen3vl2b"
-                  : "qwen3vl",
+                  : pending?.method === "benchmark_qwen3vl4b"
+                    ? "qwen3vl4b"
+                    : "qwen3vl",
             phase:
               typeof message.phase === "string" && message.phase.trim()
                 ? message.phase.trim()
@@ -703,7 +705,8 @@ export class AnalysisService {
         current.method === "detect_qwen3vl_objects" ||
         current.method === "benchmark_qwen3vl" ||
         current.method === "benchmark_minicpm" ||
-        current.method === "benchmark_qwen3vl2b"
+        current.method === "benchmark_qwen3vl2b" ||
+        current.method === "benchmark_qwen3vl4b"
       ) {
         this.publish({
           state: "STARTING",
