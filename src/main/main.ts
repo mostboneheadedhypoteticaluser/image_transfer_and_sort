@@ -625,6 +625,12 @@ function registerIpc(): void {
   );
 
   ipcMain.handle(
+    "analysis:countErrors",
+    (_event, sourceId?: number): Promise<number> =>
+      catalog!.request<number>("countAnalysisErrors", { sourceId })
+  );
+
+  ipcMain.handle(
     "analysis:retryJob",
     (_event, jobId: number): Promise<RetryAnalysisResult> =>
       catalog!.request<RetryAnalysisResult>("retryAnalysisJob", { jobId })
