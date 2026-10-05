@@ -71,6 +71,8 @@ const api = {
     },
     listErrors: (sourceId?: number, limit = 200): Promise<AnalysisErrorRecord[]> =>
       ipcRenderer.invoke("analysis:listErrors", sourceId, limit),
+    countErrors: (sourceId?: number): Promise<number> =>
+      ipcRenderer.invoke("analysis:countErrors", sourceId),
     retryJob: (jobId: number): Promise<RetryAnalysisResult> =>
       ipcRenderer.invoke("analysis:retryJob", jobId),
     retryAll: (sourceId?: number): Promise<RetryAnalysisResult> =>
