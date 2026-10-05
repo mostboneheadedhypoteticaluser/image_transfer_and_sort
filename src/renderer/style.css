@@ -153,6 +153,121 @@ button.table-action {
   animation: scan 1.1s ease-in-out infinite alternate;
 }
 
+.watch-row {
+  display: flex;
+  align-items: center;
+  gap: 10px 14px;
+  margin-top: 10px;
+  flex-wrap: wrap;
+}
+
+.watch-row small {
+  color: #6f7984;
+  font-size: 11px;
+}
+
+.watch-state {
+  display: inline-flex;
+  align-items: center;
+  min-height: 26px;
+  padding: 0 9px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 750;
+  background: #eef2f5;
+  color: #50606f;
+}
+
+.watch-state.watching {
+  background: #eef7f1;
+  color: #25653c;
+}
+
+.watch-state.scanning {
+  background: #fff6df;
+  color: #75570f;
+}
+
+.watch-state.fallback {
+  background: #fff7e8;
+  color: #7f5d18;
+}
+
+.watch-state.error {
+  background: #fff0ef;
+  color: #8d302d;
+}
+
+.watch-history-panel {
+  margin-top: 9px;
+  border-top: 1px solid #edf0f2;
+  padding-top: 9px;
+}
+
+.watch-history-panel summary {
+  cursor: pointer;
+  color: #53606d;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.watch-history {
+  display: grid;
+  gap: 5px;
+  margin-top: 8px;
+  max-height: 220px;
+  overflow: auto;
+}
+
+.watch-history-entry {
+  display: grid;
+  grid-template-columns: 66px 88px minmax(0, 1fr);
+  gap: 8px;
+  align-items: baseline;
+  padding: 6px 8px;
+  border-radius: 7px;
+  background: #f8fafb;
+  font-size: 10px;
+}
+
+.watch-history-entry time {
+  color: #7a8490;
+  font-variant-numeric: tabular-nums;
+}
+
+.watch-history-kind {
+  font-weight: 800;
+  color: #4e5c68;
+}
+
+.watch-history-entry.added .watch-history-kind {
+  color: #25653c;
+}
+
+.watch-history-entry.moved .watch-history-kind {
+  color: #315f86;
+}
+
+.watch-history-entry.changed .watch-history-kind {
+  color: #765711;
+}
+
+.watch-history-entry.missing .watch-history-kind,
+.watch-history-entry.recycle .watch-history-kind {
+  color: #8d302d;
+}
+
+.watch-history-path {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.watch-history-empty {
+  padding: 8px;
+  color: #7a8490;
+  font-size: 10px;
+}
+
 @keyframes scan {
   from { transform: translateX(-100%); }
   to { transform: translateX(250%); }
