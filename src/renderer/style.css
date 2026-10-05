@@ -258,6 +258,18 @@ th:nth-child(6) { width: 13%; }
   font-size: 10px;
 }
 
+.semantic-match-reasons {
+  display: block;
+  margin-top: 5px;
+  padding: 5px 7px;
+  border-radius: 6px;
+  background: #f2f7f4;
+  color: #315f43;
+  font-size: 10px;
+  line-height: 1.35;
+  white-space: normal;
+}
+
 .empty {
   text-align: center;
   color: #7a8490;
@@ -1614,6 +1626,11 @@ td .badge + .badge {
 .badge.semantic {
   background: #eef7f1;
   color: #2f6242;
+}
+
+.badge.catalog-semantic {
+  background: #eaf5ef;
+  color: #245d3a;
 }
 
 .semantic-search-row {
