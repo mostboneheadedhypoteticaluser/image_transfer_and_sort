@@ -366,8 +366,9 @@ export class CatalogWatchService {
       source.debounceTimer = null;
       const paths = [...source.pendingPaths];
       source.pendingPaths.clear();
-      this.requestScan(
+      this.requestChangedPaths(
         source.sourceId,
+        paths,
         paths.length > 0
           ? "Dateisystemänderung: " + paths.slice(0, 3).join(", ")
           : "Dateisystemänderung",
@@ -400,13 +401,27 @@ export class CatalogWatchService {
     try {
       while (!this.stopped && this.pendingScans.size > 0) {
         const first = this.pendingScans.entries().next().value as
-          | [number, { automatic: boolean; trigger: string }]
+          | [
+              number,
+              {
+                automatic: boolean;
+                trigger: string;
+                paths: string[] | null;
+                full: boolean;
+              }
+            ]
           | undefined;
         if (!first) break;
 
         const [sourceId, request] = first;
         this.pendingScans.delete(sourceId);
-        await this.performScan(sourceId, request.trigger, request.automatic);
+        await this.performScan(
+          sourceId,
+          request.trigger,
+          request.automatic,
+          request.paths,
+          request.full
+        );
       }
     } finally {
       this.processingScans = false;
@@ -416,7 +431,9 @@ export class CatalogWatchService {
   private async performScan(
     sourceId: number,
     trigger: string,
-    automatic: boolean
+    automatic: boolean,
+    paths: string[] | null,
+    full: boolean
   ): Promise<void> {
     const source = this.sources.get(sourceId);
     if (!source || this.stopped) return;
