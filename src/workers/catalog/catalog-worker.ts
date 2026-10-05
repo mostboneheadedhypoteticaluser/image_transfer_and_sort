@@ -7129,6 +7129,7 @@ function getMediaDetails(mediaId: number) {
       module,
       status,
       attempts,
+      result_json,
       error_message,
       started_at,
       finished_at,
@@ -7181,6 +7182,10 @@ function getMediaDetails(mediaId: number) {
     lastMovedAt: media.last_moved_at ? String(media.last_moved_at) : null,
     recyclePath: media.recycle_path ? String(media.recycle_path) : null,
     duplicateCount: Math.max(0, Number(media.duplicate_count ?? 0)),
+    technicalProbe: (() => {
+      const row = jobs.find((job) => String(job.module) === "file-probe-v1");
+      return row ? jsonObject(row.result_json) : null;
+    })(),
     imageMetadata: metadata
       ? {
           width: Number(metadata.width),
