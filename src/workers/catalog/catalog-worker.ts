@@ -2456,6 +2456,33 @@ function getAnalysisQueueStats(sourceId?: number, module = "file-probe-v1") {
 }
 
 
+function countAnalysisErrors(sourceId?: number): number {
+  const sourceFilter = sourceId === undefined ? "" : "AND m.source_id=?";
+  const args: number[] = sourceId === undefined ? [] : [sourceId];
+
+  const row = db.prepare(`
+    SELECT COUNT(*) AS count
+    FROM analysis_jobs j
+    JOIN media_items m ON m.id=j.media_id
+    WHERE (
+        j.status='FAILED'
+        OR (
+          j.status='UNAVAILABLE'
+          AND j.id=(
+            SELECT MIN(j2.id)
+            FROM analysis_jobs j2
+            WHERE j2.media_id=j.media_id
+              AND j2.status='UNAVAILABLE'
+          )
+        )
+      )
+      ${sourceFilter}
+  `).get(...args);
+
+  return Number(row?.count ?? 0);
+}
+
+
 function listAnalysisErrors(sourceId?: number, requestedLimit = 200) {
   const limit = Math.max(1, Math.min(1000, Math.trunc(requestedLimit || 200)));
   const sourceFilter = sourceId === undefined ? "" : "AND m.source_id=?";
@@ -8204,6 +8231,10 @@ async function dispatch(method: CatalogMethod, payload: Record<string, unknown> 
       return listAnalysisErrors(
         payload.sourceId === undefined ? undefined : asNumber(payload.sourceId, "sourceId"),
         payload.limit === undefined ? 200 : asNumber(payload.limit, "limit")
+      );
+    case "countAnalysisErrors":
+      return countAnalysisErrors(
+        payload.sourceId === undefined ? undefined : asNumber(payload.sourceId, "sourceId")
       );
     case "retryAnalysisJob":
       return retryAnalysisJob(asNumber(payload.jobId, "jobId"));
