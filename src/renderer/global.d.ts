@@ -1,6 +1,7 @@
 import type {
   AnalysisErrorRecord,
   AnalysisWorkerStatus,
+  QwenBenchmarkModel,
   QwenBenchmarkProfile,
   QwenBenchmarkRunResult,
   QwenBenchmarkStageResult,
@@ -46,6 +47,7 @@ declare global {
         pickQwenBenchmarkImage(): Promise<string | null>;
         runQwenBenchmark(
           filePath: string,
+          model: QwenBenchmarkModel,
           profiles: QwenBenchmarkProfile[]
         ): Promise<QwenBenchmarkRunResult>;
         onQwenBenchmarkStage(
