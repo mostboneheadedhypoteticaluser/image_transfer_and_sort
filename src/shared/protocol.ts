@@ -512,6 +512,7 @@ export type CatalogMethod =
   | "getObjectDetectionsForFusion"
   | "completePetFusionJob"
   | "completeVerifiedObjectDetectionJob"
+  | "completeCatalogSemanticJob"
   | "getPetDetectionsForEmbedding"
   | "completePetEmbeddingJob"
   | "completeSemanticEmbeddingJob"
