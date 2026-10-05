@@ -537,7 +537,12 @@ export class AnalysisService {
 
           const pending = this.pending.get(requestId);
           const progress: AnalysisWorkerProgress = {
-            kind: pending?.method === "benchmark_minicpm" ? "minicpm" : "qwen3vl",
+            kind:
+              pending?.method === "benchmark_minicpm"
+                ? "minicpm"
+                : pending?.method === "benchmark_qwen3vl2b"
+                  ? "qwen3vl2b"
+                  : "qwen3vl",
             phase:
               typeof message.phase === "string" && message.phase.trim()
                 ? message.phase.trim()
@@ -697,7 +702,8 @@ export class AnalysisService {
       if (
         current.method === "detect_qwen3vl_objects" ||
         current.method === "benchmark_qwen3vl" ||
-        current.method === "benchmark_minicpm"
+        current.method === "benchmark_minicpm" ||
+        current.method === "benchmark_qwen3vl2b"
       ) {
         this.publish({
           state: "STARTING",
