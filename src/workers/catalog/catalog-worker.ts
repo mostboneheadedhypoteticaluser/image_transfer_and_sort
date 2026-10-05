@@ -3,8 +3,12 @@ import { existsSync } from "node:fs";
 import { stat } from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";
 import { randomUUID } from "node:crypto";
-import { walkMedia, type DiscoveredDirectory } from "../../catalog/file-scanner";
-import { IMAGE_EXTENSIONS } from "../../catalog/constants";
+import {
+  walkMedia,
+  type DiscoveredDirectory,
+  type DiscoveredFile
+} from "../../catalog/file-scanner";
+import { IMAGE_EXTENSIONS, MEDIA_EXTENSIONS } from "../../catalog/constants";
 import { sha256File } from "../../catalog/hash";
 import {
   findRenamedSibling,
@@ -2880,6 +2884,666 @@ function failAnalysisJob(jobId: number, errorMessage: string) {
   return { failed: true };
 }
 
+function enqueueAllAnalysisJobs(sourceId: number): void {
+  for (const module of [
+    "file-probe-v1",
+    "thumbnail-v1",
+    "image-metadata-v1",
+    "face-detect-yunet-v1",
+    "face-embed-sface-v1",
+    "pet-detect-nanodet-v1",
+    "pet-detect-yolox-v1",
+    "pet-fuse-ensemble-v1",
+    "pet-embed-dogreid-v1",
+    "semantic-embed-siglip2-v1",
+    "catalog-semantic-qwen3vl4b-v3"
+  ]) {
+    enqueueAnalysisJobs(sourceId, module);
+  }
+}
+
+function normalizeChangedRelativePath(root: string, raw: unknown): string | null {
+  if (typeof raw !== "string" || !raw.trim()) return null;
+
+  const candidate = path.resolve(root, raw.trim());
+  const relative = path.relative(root, candidate);
+
+  if (
+    relative === "" ||
+    relative === "." ||
+    relative.startsWith(".." + path.sep) ||
+    path.isAbsolute(relative)
+  ) {
+    return relative === "" || relative === "." ? "" : null;
+  }
+
+  return relative.split(path.sep).join("/");
+}
+
+async function discoveredFileFromPath(
+  root: string,
+  absolutePath: string
+): Promise<DiscoveredFile | null> {
+  const extension = path.extname(absolutePath).toLowerCase();
+  if (!MEDIA_EXTENSIONS.has(extension)) return null;
+
+  const info = await stat(absolutePath, { bigint: true });
+  if (!info.isFile()) return null;
+
+  return {
+    absolutePath,
+    relativePath: path.relative(root, absolutePath).split(path.sep).join("/"),
+    extension,
+    sizeBytes: Number(info.size),
+    mtimeMs: Number(info.mtimeMs),
+    deviceId: info.dev.toString(),
+    inode: info.ino.toString()
+  };
+}
+
+async function reconcileSourceChanges(
+  sourceId: number,
+  rawPaths: unknown
+): Promise<ScanResult> {
+  const requestedPaths = Array.isArray(rawPaths)
+    ? [...new Set(
+        rawPaths
+          .filter((value): value is string => typeof value === "string")
+          .map((value) => value.trim())
+          .filter(Boolean)
+      )]
+    : [];
+
+  // Leere/zu große Ereignisgruppen sind absichtlich Vollscan-Fälle.
+  if (requestedPaths.length === 0 || requestedPaths.length > 24) {
+    return scanSource(sourceId);
+  }
+
+  const root = await resolveSourceRoot(sourceId);
+  const relativePaths: string[] = [];
+
+  for (const rawPath of requestedPaths) {
+    const relative = normalizeChangedRelativePath(root, rawPath);
+    if (relative === null || relative === "") {
+      return scanSource(sourceId);
+    }
+    relativePaths.push(relative);
+  }
+
+  // Ein verschwundener katalogisierter Ordner kann ein Rename, Move oder
+  // Löschen eines ganzen Teilbaums sein. Dafür ist der bestehende Vollscan
+  // bewusst die sichere Wahrheit.
+  const preDirectoryIndex = loadDirectoryIndex(sourceId);
+  for (const relativePath of relativePaths) {
+    const absolutePath = path.join(root, ...relativePath.split("/"));
+    try {
+      const info = await stat(absolutePath);
+      if (info.isDirectory()) continue;
+    } catch {
+      if (preDirectoryIndex.byPath.has(relativePath)) {
+        return scanSource(sourceId);
+      }
+    }
+  }
+
+  if (scanRunning) throw new Error("Es läuft bereits ein Scan.");
+  scanRunning = true;
+
+  let scanId: number | null = null;
+  let discovered = 0;
+  let added = 0;
+  let moved = 0;
+  let changed = 0;
+  let unchanged = 0;
+  let missing = 0;
+  let recycleBin = 0;
+  let errors = 0;
+  const changes: CatalogChange[] = [];
+
+  try {
+    const started = db.prepare("INSERT INTO scans(source_id) VALUES(?)").run(sourceId);
+    scanId = Number(started.lastInsertRowid);
+
+    const token = randomUUID();
+    const { byPath, byHash, byIdentity } = loadIndex(sourceId);
+    const directoryIndex = loadDirectoryIndex(sourceId);
+    const seenIds = new Set<number>();
+    const seenDirectoryIds = new Set<number>();
+    const readErrorPaths: string[] = [];
+    const scannedDirectoryPrefixes = new Set<string>();
+    const missingPaths: string[] = [];
+    const processedFiles = new Set<string>();
+
+    const touch = db.prepare(`
+      UPDATE media_items
+      SET
+        absolute_path=?,
+        device_id=?,
+        inode=?,
+        availability='AVAILABLE',
+        in_recycle_bin=0,
+        recycle_path=NULL,
+        recycle_detected_at=NULL,
+        scan_token=?,
+        last_seen_at=CURRENT_TIMESTAMP
+      WHERE id=?
+    `);
+
+    const statOnly = db.prepare(`
+      UPDATE media_items
+      SET
+        absolute_path=?,
+        size_bytes=?,
+        mtime_ms=?,
+        device_id=?,
+        inode=?,
+        availability='AVAILABLE',
+        in_recycle_bin=0,
+        recycle_path=NULL,
+        recycle_detected_at=NULL,
+        scan_token=?,
+        last_seen_at=CURRENT_TIMESTAMP
+      WHERE id=?
+    `);
+
+    const updateContent = db.prepare(`
+      UPDATE media_items
+      SET
+        absolute_path=?,
+        extension=?,
+        size_bytes=?,
+        mtime_ms=?,
+        sha256=?,
+        device_id=?,
+        inode=?,
+        availability='AVAILABLE',
+        in_recycle_bin=0,
+        recycle_path=NULL,
+        recycle_detected_at=NULL,
+        scan_token=?,
+        last_seen_at=CURRENT_TIMESTAMP,
+        last_changed_at=CURRENT_TIMESTAMP
+      WHERE id=?
+    `);
+
+    const moveExisting = db.prepare(`
+      UPDATE media_items
+      SET
+        relative_path=?,
+        absolute_path=?,
+        extension=?,
+        size_bytes=?,
+        mtime_ms=?,
+        sha256=?,
+        device_id=?,
+        inode=?,
+        availability='AVAILABLE',
+        in_recycle_bin=0,
+        recycle_path=NULL,
+        recycle_detected_at=NULL,
+        scan_token=?,
+        last_seen_at=CURRENT_TIMESTAMP,
+        last_moved_at=CURRENT_TIMESTAMP
+      WHERE id=?
+    `);
+
+    const insertMedia = db.prepare(`
+      INSERT INTO media_items(
+        source_id,
+        relative_path,
+        absolute_path,
+        extension,
+        size_bytes,
+        mtime_ms,
+        sha256,
+        device_id,
+        inode,
+        availability,
+        in_recycle_bin,
+        scan_token
+      )
+      VALUES(?,?,?,?,?,?,?,?,?,'AVAILABLE',0,?)
+    `);
+
+    const reconcileFile = async (file: DiscoveredFile): Promise<void> => {
+      const normalizedAbsolute = normalizeForComparison(file.absolutePath);
+      if (processedFiles.has(normalizedAbsolute)) return;
+      processedFiles.add(normalizedAbsolute);
+      discovered += 1;
+
+      const previous = byPath.get(file.relativePath);
+
+      if (previous) {
+        seenIds.add(previous.id);
+
+        if (
+          previous.sizeBytes === file.sizeBytes &&
+          previous.mtimeMs === file.mtimeMs &&
+          (
+            !identityKey(previous.deviceId, previous.inode) ||
+            sameIdentity(
+              previous.deviceId,
+              previous.inode,
+              file.deviceId,
+              file.inode
+            )
+          )
+        ) {
+          touch.run(
+            file.absolutePath,
+            file.deviceId,
+            file.inode,
+            token,
+            previous.id
+          );
+          previous.absolutePath = file.absolutePath;
+          previous.deviceId = file.deviceId;
+          previous.inode = file.inode;
+          previous.availability = "AVAILABLE";
+          unchanged += 1;
+          return;
+        }
+
+        const hash = await sha256File(file.absolutePath);
+
+        if (previous.sha256 === hash) {
+          statOnly.run(
+            file.absolutePath,
+            file.sizeBytes,
+            file.mtimeMs,
+            file.deviceId,
+            file.inode,
+            token,
+            previous.id
+          );
+          previous.absolutePath = file.absolutePath;
+          previous.sizeBytes = file.sizeBytes;
+          previous.mtimeMs = file.mtimeMs;
+          previous.deviceId = file.deviceId;
+          previous.inode = file.inode;
+          previous.availability = "AVAILABLE";
+          unchanged += 1;
+          return;
+        }
+
+        updateContent.run(
+          file.absolutePath,
+          file.extension,
+          file.sizeBytes,
+          file.mtimeMs,
+          hash,
+          file.deviceId,
+          file.inode,
+          token,
+          previous.id
+        );
+        previous.absolutePath = file.absolutePath;
+        previous.extension = file.extension;
+        previous.sizeBytes = file.sizeBytes;
+        previous.mtimeMs = file.mtimeMs;
+        previous.sha256 = hash;
+        previous.deviceId = file.deviceId;
+        previous.inode = file.inode;
+        previous.availability = "AVAILABLE";
+        changed += 1;
+        changes.push({
+          kind: "CHANGED",
+          mediaId: previous.id,
+          path: file.relativePath,
+          previousPath: null
+        });
+        return;
+      }
+
+      const identityCandidate = await uniqueIdentityMoveCandidate(
+        file.deviceId,
+        file.inode,
+        byIdentity,
+        seenIds
+      );
+
+      if (identityCandidate) {
+        const previousPath = identityCandidate.relativePath;
+        moveExisting.run(
+          file.relativePath,
+          file.absolutePath,
+          file.extension,
+          file.sizeBytes,
+          file.mtimeMs,
+          identityCandidate.sha256,
+          file.deviceId,
+          file.inode,
+          token,
+          identityCandidate.id
+        );
+
+        byPath.delete(previousPath);
+        identityCandidate.relativePath = file.relativePath;
+        identityCandidate.absolutePath = file.absolutePath;
+        identityCandidate.extension = file.extension;
+        identityCandidate.sizeBytes = file.sizeBytes;
+        identityCandidate.mtimeMs = file.mtimeMs;
+        identityCandidate.deviceId = file.deviceId;
+        identityCandidate.inode = file.inode;
+        identityCandidate.availability = "AVAILABLE";
+        byPath.set(file.relativePath, identityCandidate);
+        seenIds.add(identityCandidate.id);
+        moved += 1;
+        changes.push({
+          kind: "MOVED",
+          mediaId: identityCandidate.id,
+          path: file.relativePath,
+          previousPath
+        });
+        return;
+      }
+
+      const hash = await sha256File(file.absolutePath);
+      const moveCandidate = await uniqueMoveCandidate(
+        hash,
+        file.sizeBytes,
+        file.deviceId,
+        file.inode,
+        byHash,
+        seenIds
+      );
+
+      if (moveCandidate) {
+        const previousPath = moveCandidate.relativePath;
+        moveExisting.run(
+          file.relativePath,
+          file.absolutePath,
+          file.extension,
+          file.sizeBytes,
+          file.mtimeMs,
+          hash,
+          file.deviceId,
+          file.inode,
+          token,
+          moveCandidate.id
+        );
+
+        byPath.delete(previousPath);
+        moveCandidate.relativePath = file.relativePath;
+        moveCandidate.absolutePath = file.absolutePath;
+        moveCandidate.extension = file.extension;
+        moveCandidate.sizeBytes = file.sizeBytes;
+        moveCandidate.mtimeMs = file.mtimeMs;
+        moveCandidate.deviceId = file.deviceId;
+        moveCandidate.inode = file.inode;
+        moveCandidate.availability = "AVAILABLE";
+        byPath.set(file.relativePath, moveCandidate);
+        seenIds.add(moveCandidate.id);
+        moved += 1;
+        changes.push({
+          kind: "MOVED",
+          mediaId: moveCandidate.id,
+          path: file.relativePath,
+          previousPath
+        });
+        return;
+      }
+
+      const inserted = insertMedia.run(
+        sourceId,
+        file.relativePath,
+        file.absolutePath,
+        file.extension,
+        file.sizeBytes,
+        file.mtimeMs,
+        hash,
+        file.deviceId,
+        file.inode,
+        token
+      );
+
+      const insertedMedia: IndexedMedia = {
+        id: Number(inserted.lastInsertRowid),
+        relativePath: file.relativePath,
+        absolutePath: file.absolutePath,
+        extension: file.extension,
+        sizeBytes: file.sizeBytes,
+        mtimeMs: file.mtimeMs,
+        sha256: hash,
+        deviceId: file.deviceId,
+        inode: file.inode,
+        availability: "AVAILABLE",
+        inRecycleBin: false
+      };
+
+      byPath.set(insertedMedia.relativePath, insertedMedia);
+      const hashItems = byHash.get(hash) ?? [];
+      hashItems.push(insertedMedia);
+      byHash.set(hash, hashItems);
+      const identity = identityKey(file.deviceId, file.inode);
+      if (identity) {
+        const identityItems = byIdentity.get(identity) ?? [];
+        identityItems.push(insertedMedia);
+        byIdentity.set(identity, identityItems);
+      }
+
+      seenIds.add(insertedMedia.id);
+      added += 1;
+      changes.push({
+        kind: "ADDED",
+        mediaId: insertedMedia.id,
+        path: insertedMedia.relativePath,
+        previousPath: null
+      });
+    };
+
+    // Zuerst alles verarbeiten, was aktuell existiert. Dadurch kann bei einem
+    // Datei-Rename die neue Stelle die alte media_id übernehmen, bevor das
+    // verschwundene alte Watcher-Ereignis betrachtet wird.
+    for (const relativePath of relativePaths) {
+      const absolutePath = path.join(root, ...relativePath.split("/"));
+
+      let info;
+      try {
+        info = await stat(absolutePath);
+      } catch {
+        missingPaths.push(relativePath);
+        continue;
+      }
+
+      if (info.isFile()) {
+        const file = await discoveredFileFromPath(root, absolutePath);
+        if (file) {
+          try {
+            await reconcileFile(file);
+          } catch {
+            errors += 1;
+            readErrorPaths.push(absolutePath);
+          }
+        }
+        continue;
+      }
+
+      if (!info.isDirectory()) continue;
+
+      scannedDirectoryPrefixes.add(relativePath);
+      for await (const file of walkMedia(absolutePath, {
+        onError: (readError) => {
+          errors += 1;
+          readErrorPaths.push(readError.path);
+        },
+        onDirectory: async (directory) => {
+          const sourceRelative = path
+            .relative(root, directory.absolutePath)
+            .split(path.sep)
+            .join("/");
+          moved += reconcileDirectory(
+            sourceId,
+            root,
+            {
+              ...directory,
+              relativePath: sourceRelative
+            },
+            token,
+            directoryIndex,
+            seenDirectoryIds,
+            byPath,
+            changes
+          );
+        }
+      })) {
+        const sourceRelative = path
+          .relative(root, file.absolutePath)
+          .split(path.sep)
+          .join("/");
+
+        try {
+          await reconcileFile({
+            ...file,
+            relativePath: sourceRelative
+          });
+        } catch {
+          errors += 1;
+          readErrorPaths.push(file.absolutePath);
+        }
+      }
+    }
+
+    const markMissing = db.prepare(`
+      UPDATE media_items
+      SET availability='MISSING'
+      WHERE id=?
+    `);
+
+    const markMissingMedia = (media: IndexedMedia): void => {
+      if (media.availability !== "AVAILABLE" || seenIds.has(media.id)) return;
+      if (pathAffectedByReadError(media.absolutePath, readErrorPaths)) return;
+
+      markMissing.run(media.id);
+      media.availability = "MISSING";
+      missing += 1;
+      changes.push({
+        kind: "MISSING",
+        mediaId: media.id,
+        path: media.relativePath,
+        previousPath: null
+      });
+    };
+
+    for (const relativePath of missingPaths) {
+      const media = byPath.get(relativePath);
+      if (media) markMissingMedia(media);
+    }
+
+    for (const prefix of scannedDirectoryPrefixes) {
+      for (const media of byPath.values()) {
+        if (pathIsInside(media.relativePath, prefix)) {
+          markMissingMedia(media);
+        }
+      }
+    }
+
+    recycleBin = await refreshRecycleStatus(sourceId);
+    const recycleState = db.prepare(`
+      SELECT in_recycle_bin, recycle_ambiguous
+      FROM media_items
+      WHERE id=?
+    `);
+
+    for (const change of changes) {
+      if (change.kind !== "MISSING") continue;
+      const state = recycleState.get(change.mediaId);
+      if (state?.in_recycle_bin) change.kind = "RECYCLE";
+      else if (state?.recycle_ambiguous) change.kind = "RECYCLE_AMBIGUOUS";
+    }
+
+    reactivateAvailableMediaJobs(sourceId);
+    enqueueAllAnalysisJobs(sourceId);
+
+    const result: ScanResult = {
+      mode: "INCREMENTAL",
+      discovered,
+      added,
+      moved,
+      changed,
+      unchanged,
+      missing,
+      recycleBin,
+      errors,
+      changes: changes.slice(0, 500)
+    };
+
+    db.prepare(`
+      UPDATE scans
+      SET
+        finished_at=CURRENT_TIMESTAMP,
+        status='DONE',
+        discovered_count=?,
+        added_count=?,
+        moved_count=?,
+        changed_count=?,
+        unchanged_count=?,
+        missing_count=?,
+        recycle_bin_count=?,
+        error_count=?
+      WHERE id=?
+    `).run(
+      discovered,
+      added,
+      moved,
+      changed,
+      unchanged,
+      missing,
+      recycleBin,
+      errors,
+      scanId
+    );
+
+    progress(
+      sourceId,
+      discovered,
+      "Schnellabgleich fertig: " +
+      added.toLocaleString("de-DE") + " neu · " +
+      moved.toLocaleString("de-DE") + " verschoben · " +
+      changed.toLocaleString("de-DE") + " geändert · " +
+      missing.toLocaleString("de-DE") + " fehlend."
+    );
+
+    return result;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+
+    if (scanId !== null) {
+      db.prepare(`
+        UPDATE scans
+        SET
+          finished_at=CURRENT_TIMESTAMP,
+          status='FAILED',
+          discovered_count=?,
+          added_count=?,
+          moved_count=?,
+          changed_count=?,
+          unchanged_count=?,
+          missing_count=?,
+          recycle_bin_count=?,
+          error_count=?,
+          error_message=?
+        WHERE id=?
+      `).run(
+        discovered,
+        added,
+        moved,
+        changed,
+        unchanged,
+        missing,
+        recycleBin,
+        errors + 1,
+        message,
+        scanId
+      );
+    }
+
+    throw error;
+  } finally {
+    scanRunning = false;
+  }
+}
+
 async function scanSource(sourceId: number): Promise<ScanResult> {
   if (scanRunning) throw new Error("Es läuft bereits ein Scan.");
   scanRunning = true;
@@ -3311,19 +3975,10 @@ async function scanSource(sourceId: number): Promise<ScanResult> {
     }
 
     reactivateAvailableMediaJobs(sourceId);
-    enqueueAnalysisJobs(sourceId, "file-probe-v1");
-    enqueueAnalysisJobs(sourceId, "thumbnail-v1");
-    enqueueAnalysisJobs(sourceId, "image-metadata-v1");
-    enqueueAnalysisJobs(sourceId, "face-detect-yunet-v1");
-    enqueueAnalysisJobs(sourceId, "face-embed-sface-v1");
-    enqueueAnalysisJobs(sourceId, "pet-detect-nanodet-v1");
-    enqueueAnalysisJobs(sourceId, "pet-detect-yolox-v1");
-    enqueueAnalysisJobs(sourceId, "pet-fuse-ensemble-v1");
-    enqueueAnalysisJobs(sourceId, "pet-embed-dogreid-v1");
-    enqueueAnalysisJobs(sourceId, "semantic-embed-siglip2-v1");
-    enqueueAnalysisJobs(sourceId, "catalog-semantic-qwen3vl4b-v3");
+    enqueueAllAnalysisJobs(sourceId);
 
     const result: ScanResult = {
+      mode: "FULL",
       discovered,
       added,
       moved,
@@ -7744,6 +8399,11 @@ async function dispatch(method: CatalogMethod, payload: Record<string, unknown> 
       return getMediaPath(asNumber(payload.mediaId, "mediaId"));
     case "scanSource":
       return scanSource(asNumber(payload.sourceId, "sourceId"));
+    case "reconcileSourceChanges":
+      return reconcileSourceChanges(
+        asNumber(payload.sourceId, "sourceId"),
+        payload.paths
+      );
     case "restoreMedia":
       return restoreMedia(asNumber(payload.mediaId, "mediaId"));
     case "resetCatalog":
