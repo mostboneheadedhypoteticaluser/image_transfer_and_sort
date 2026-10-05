@@ -33,6 +33,7 @@ type ModuleSpec = {
     | "completePetFusionJob"
     | "completePetEmbeddingJob"
     | "completeVerifiedObjectDetectionJob"
+    | "completeCatalogSemanticJob"
     | "completeSemanticEmbeddingJob";
   label: string;
   timeoutMs: number;
@@ -112,11 +113,11 @@ const MODULES: ModuleSpec[] = [
     timeoutMs: 1800000
   },
   {
-    module: "object-detect-qwen3vl-gguf-v2",
+    module: "catalog-semantic-qwen3vl4b-v3",
     stage: "objectVerification",
-    workerMethod: "detect_qwen3vl_objects",
-    completeMethod: "completeVerifiedObjectDetectionJob",
-    label: "Motive · Qwen3-VL-8B Q8_0 Vollbild/Kacheln",
+    workerMethod: "analyze_catalog_qwen3vl4b",
+    completeMethod: "completeCatalogSemanticJob",
+    label: "Kataloginhalt · Qwen3-VL 4B Gesamtbild + 4 Teilbilder",
     // Inaktivitäts-Watchdog statt absoluter Jobdauer. Fortschrittsereignisse
     // aus dem Worker setzen diese Frist jeweils neu.
     timeoutMs: 1800000
@@ -159,11 +160,10 @@ export class AnalysisCoordinator {
   private stopped = true;
   private benchmarkPaused = false;
 
-  // Qwen ist absichtlich NICHT automatisch aktiv. Das 8B-GGUF samt
-  // llama.cpp-Kontext belegt auf diesem Rechner sehr viel Hauptspeicher.
-  // Während wir die Einzelbild-Profile vermessen, darf ein alter PENDING-Job
-  // deshalb nicht schon direkt beim App-Start das Modell laden.
-  private automaticQwenEnabled = false;
+  // Die 4B-Kataloganalyse läuft wieder automatisch. Sie bleibt bewusst die
+  // letzte Pipeline-Stufe, damit neue Bilder zuerst alle schnellen technischen,
+  // Personen-, Haustier- und SigLIP2-Stufen erhalten.
+  private automaticQwenEnabled = true;
 
   constructor(
     private readonly catalog: CatalogService,
@@ -335,7 +335,7 @@ export class AnalysisCoordinator {
     // Innerhalb einer Stufe bleibt das jeweilige Modell für die Bildserie geladen.
     for (const spec of MODULES) {
       if (
-        spec.module === "object-detect-qwen3vl-gguf-v2" &&
+        spec.module === "catalog-semantic-qwen3vl4b-v3" &&
         !this.automaticQwenEnabled
       ) {
         continue;
@@ -447,20 +447,6 @@ export class AnalysisCoordinator {
           );
 
           extraPayload = { pets };
-        }
-
-        if (spec.module === "object-detect-qwen3vl-gguf-v2") {
-          // Die alten Detektoren sind nur zusätzliche Recall-Hinweise.
-          // Qwen analysiert Gesamtbild und Kacheln unabhängig davon und muss
-          // jeden Hinweis anschließend selbst doppelt bestätigen.
-          const hints = await this.catalog.request<
-            Array<Record<string, unknown>>
-          >("getObjectDetectionsForFusion", {
-            mediaId: job.mediaId,
-            inputSha256: job.sha256
-          });
-
-          extraPayload = { hints };
         }
 
         const result = await this.analysis.request<Record<string, unknown>>(
