@@ -237,6 +237,7 @@ export type MediaDetails = {
   lastMovedAt: string | null;
   recyclePath: string | null;
   duplicateCount: number;
+  technicalProbe: Record<string, unknown> | null;
   imageMetadata: {
     width: number;
     height: number;
