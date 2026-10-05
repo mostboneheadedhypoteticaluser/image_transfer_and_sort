@@ -1773,6 +1773,32 @@ td .badge + .badge {
   background: #fff;
 }
 
+.qwen-benchmark-result.waiting {
+  background: #fafbfc;
+}
+
+.qwen-benchmark-result.running {
+  border-color: #aac8df;
+  background: #f6fbff;
+}
+
+.qwen-benchmark-result.error {
+  border-color: #e4b8b5;
+  background: #fff8f7;
+}
+
+.qwen-benchmark-result.done {
+  border-color: #cfded4;
+}
+
+.qwen-benchmark-stage-note {
+  display: block;
+  margin-top: 7px;
+  color: #7a8490;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
 .qwen-benchmark-result-header {
   display: flex;
   justify-content: space-between;
