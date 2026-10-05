@@ -8,6 +8,7 @@ import { ThumbnailService } from "./thumbnail-service";
 import { ThumbnailCoordinator } from "./thumbnail-coordinator";
 import { PersonService } from "./person-service";
 import { PetService } from "./pet-service";
+import { CatalogWatchService } from "./catalog-watch-service";
 import type {
   AnalysisErrorRecord,
   AnalysisQueueStats,
@@ -17,6 +18,7 @@ import type {
   QwenBenchmarkRunResult,
   QwenBenchmarkStageResult,
   CatalogStats,
+  CatalogWatchSnapshot,
   ConfirmPersonResult,
   ConfirmPetResult,
   DuplicateGroup,
@@ -51,6 +53,7 @@ let thumbnailService: ThumbnailService | null = null;
 let thumbnailCoordinator: ThumbnailCoordinator | null = null;
 let personService: PersonService | null = null;
 let petService: PetService | null = null;
+let catalogWatchService: CatalogWatchService | null = null;
 let thumbnailCacheRoot = "";
 let personRefreshTimer: NodeJS.Timeout | null = null;
 let personRefreshRunning = false;
@@ -298,12 +301,20 @@ function registerIpc(): void {
     catalog!.request<SourceRecord[]>("listSources")
   );
 
-  ipcMain.handle("catalog:addSource", (_event, sourcePath: string) =>
-    catalog!.request<SourceRecord>("addSource", { path: sourcePath })
-  );
+  ipcMain.handle("catalog:addSource", async (_event, sourcePath: string) => {
+    const source = await catalog!.request<SourceRecord>("addSource", {
+      path: sourcePath
+    });
+    await catalogWatchService?.sourceAdded(source.id);
+    return source;
+  });
 
   ipcMain.handle("catalog:getStats", (_event, sourceId: number) =>
     catalog!.request<CatalogStats>("getStats", { sourceId })
+  );
+
+  ipcMain.handle("catalog:getWatchSnapshot", (): CatalogWatchSnapshot =>
+    catalogWatchService?.getSnapshot() ?? { sources: [], history: [] }
   );
 
   ipcMain.handle("catalog:listMedia", (_event, sourceId: number, limit: number) =>
@@ -379,9 +390,11 @@ function registerIpc(): void {
     catalog!.request<MediaDetails | null>("getMediaDetails", { mediaId })
   );
 
-  ipcMain.handle("catalog:scanSource", (_event, sourceId: number) =>
-    catalog!.request<ScanResult>("scanSource", { sourceId })
-  );
+  ipcMain.handle("catalog:scanSource", async (_event, sourceId: number) => {
+    const result = await catalog!.request<ScanResult>("scanSource", { sourceId });
+    await catalogWatchService?.syncSources();
+    return result;
+  });
 
   ipcMain.handle("catalog:restoreMedia", (_event, mediaId: number) =>
     catalog!.request<RestoreResult>("restoreMedia", { mediaId })
@@ -389,6 +402,7 @@ function registerIpc(): void {
 
   ipcMain.handle("catalog:resetCatalog", async () => {
     semanticTextCache.clear();
+    catalogWatchService?.stop();
 
     // Laufende Analyse-/Thumbnail-Jobs zuerst sauber anhalten. Insbesondere
     // SigLIP2 kann lange rechnen; ein Reset darf nicht parallel einen alten
@@ -437,6 +451,7 @@ function registerIpc(): void {
       }
     }
 
+    await catalogWatchService?.start(false);
     return result;
   });
 
@@ -853,6 +868,9 @@ app.whenReady().then(() => {
 
   personService = new PersonService(catalog, analysis);
   petService = new PetService(catalog, analysis);
+  catalogWatchService = new CatalogWatchService(catalog, (event) => {
+    sendToRenderer("catalog:watchEvent", event);
+  });
 
   catalog.start();
   thumbnailService.start();
@@ -1045,6 +1063,7 @@ app.whenReady().then(() => {
 
   windowRef = createWindow();
 
+  void catalogWatchService.start(true);
   void thumbnailCoordinator.start();
 
   void analysis.start().then(() => {
@@ -1077,6 +1096,7 @@ function shutdownServicesImmediately(): void {
     personRefreshTimer = null;
   }
 
+  catalogWatchService?.stop();
   analysisCoordinator?.stop();
   thumbnailCoordinator?.stop();
 
