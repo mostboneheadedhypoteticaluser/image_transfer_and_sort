@@ -35,7 +35,12 @@ export class CatalogWatchService {
   private readonly history: CatalogWatchEvent[] = [];
   private readonly pendingScans = new Map<
     number,
-    { automatic: boolean; trigger: string }
+    {
+      automatic: boolean;
+      trigger: string;
+      paths: string[] | null;
+      full: boolean;
+    }
   >();
   private processingScans = false;
   private safetyTimer: NodeJS.Timeout | null = null;
@@ -147,7 +152,34 @@ export class CatalogWatchService {
 
     // Pro Quelle reicht ein ausstehender Scan. Weitere Ereignisse werden von
     // diesem Scan automatisch mit erfasst.
-    this.pendingScans.set(sourceId, { automatic, trigger });
+    this.pendingScans.set(sourceId, {
+      automatic,
+      trigger,
+      paths: null,
+      full: true
+    });
+    void this.processScanQueue();
+  }
+
+  requestChangedPaths(
+    sourceId: number,
+    paths: string[],
+    trigger = "Dateisystemänderung",
+    automatic = true
+  ): void {
+    if (this.stopped || !this.sources.has(sourceId)) return;
+
+    const existing = this.pendingScans.get(sourceId);
+    if (existing?.full) return;
+
+    const unique = [...new Set([...(existing?.paths ?? []), ...paths].filter(Boolean))];
+
+    this.pendingScans.set(sourceId, {
+      automatic,
+      trigger,
+      paths: unique.length > 0 && unique.length <= 24 ? unique : null,
+      full: unique.length === 0 || unique.length > 24
+    });
     void this.processScanQueue();
   }
 
