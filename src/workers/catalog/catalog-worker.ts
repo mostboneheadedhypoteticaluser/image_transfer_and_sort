@@ -968,8 +968,8 @@ function semanticSearchTokens(query: string): string[] {
 
 function semanticSearchTokenMatches(queryToken: string, candidate: string): boolean {
   if (queryToken === candidate) return true;
-  if (queryToken.length >= 5 && candidate.startsWith(queryToken)) return true;
-  if (candidate.length >= 5 && queryToken.startsWith(candidate)) return true;
+  if (queryToken.length >= 4 && candidate.startsWith(queryToken)) return true;
+  if (candidate.length >= 4 && queryToken.startsWith(candidate)) return true;
   return false;
 }
 
@@ -1345,7 +1345,11 @@ function listMedia(
     if (siglipActive && semantic) {
       const dimension = Number(row.semantic_dimension);
 
-      if (dimension === semantic.vector.length && row.semantic_vector) {
+      if (
+        dimension === semantic.vector.length &&
+        row.semantic_vector &&
+        String(row.semantic_model ?? "") === semantic.model
+      ) {
         const imageVector = vectorFromBlob(row.semantic_vector, dimension);
         let dot = 0;
         for (let index = 0; index < dimension; index += 1) {
