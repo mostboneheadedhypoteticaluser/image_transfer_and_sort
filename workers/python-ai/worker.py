@@ -4291,6 +4291,34 @@ Leere Kategorien als [] zurückgeben. Begriffe nicht unnötig doppeln.
     }
 
 
+def analyze_catalog_qwen3vl4b(
+    file_path: str,
+    progress_request_id: str | None = None,
+) -> dict:
+    """
+    Produktionsprofil für den vollständigen Bildkatalog.
+    Bewusst identisch zum bewährten Benchmarkprofil:
+    1 Gesamtbild + 4 überlappende 2x2-Teilbilder.
+    """
+    result = benchmark_qwen3vl4b(
+        file_path,
+        "tiles4",
+        progress_request_id=progress_request_id,
+    )
+
+    return {
+        "model": result.get("model", QWEN3VL4B_MODEL_VERSION),
+        "profile": "whole+4",
+        "profileVersion": "qwen3vl4b-catalog-whole-plus-4-v1",
+        "regionCount": int(result.get("regionCount", 5)),
+        "imageWidth": int(result.get("imageWidth", 0)),
+        "imageHeight": int(result.get("imageHeight", 0)),
+        "semantic": result.get("semantic") or {},
+        "regions": result.get("regions") or [],
+        "timings": result.get("timings") or {},
+    }
+
+
 def benchmark_qwen3vl2b(
     file_path: str,
     profile_name: str,
@@ -5778,6 +5806,18 @@ def handle(message: dict) -> bool:
         )
         return True
 
+
+    if method == "analyze_catalog_qwen3vl4b":
+        file_path = require_file(payload)
+        verify_expected_size(file_path, payload)
+        respond(
+            request_id,
+            result=analyze_catalog_qwen3vl4b(
+                file_path,
+                progress_request_id=request_id,
+            ),
+        )
+        return True
 
     if method == "benchmark_minicpm":
         file_path = require_file(payload)
