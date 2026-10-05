@@ -514,10 +514,23 @@
 
     <dialog id="imagePreviewDialog" class="image-preview-dialog">
       <button id="closeImagePreview" class="image-preview-close" type="button" aria-label="Schließen">×</button>
-      <div class="image-preview-stage">
-        <img id="imagePreviewImage" alt="" />
+      <div class="image-preview-layout">
+        <div class="image-preview-main">
+          <div class="image-preview-stage">
+            <img id="imagePreviewImage" alt="" />
+          </div>
+          <div id="imagePreviewCaption" class="image-preview-caption"></div>
+        </div>
+        <aside class="image-preview-sidebar" aria-label="Bilddetails">
+          <div class="image-preview-sidebar-header">
+            <strong>Bilddaten</strong>
+            <small>Alle aktuell im Katalog vorhandenen Informationen</small>
+          </div>
+          <div id="imagePreviewDetails" class="image-preview-details">
+            <div class="image-preview-detail-loading">Daten werden geladen …</div>
+          </div>
+        </aside>
       </div>
-      <div id="imagePreviewCaption" class="image-preview-caption"></div>
     </dialog>
 
     <script type="module" src="/src/renderer/main.ts"></script>
