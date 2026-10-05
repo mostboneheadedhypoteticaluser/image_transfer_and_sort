@@ -12,6 +12,7 @@ import type {
   AnalysisErrorRecord,
   AnalysisQueueStats,
   AnalysisWorkerStatus,
+  QwenBenchmarkModel,
   QwenBenchmarkProfile,
   QwenBenchmarkRunResult,
   QwenBenchmarkStageResult,
@@ -489,7 +490,7 @@ function registerIpc(): void {
     await enterQwenBenchmarkMode();
 
     const options: OpenDialogOptions = {
-      title: "Bild für MiniCPM-Einzeltest auswählen",
+      title: "Bild für Vision-Einzeltest auswählen",
       properties: ["openFile"],
       filters: [
         {
@@ -512,12 +513,16 @@ function registerIpc(): void {
     async (
       _event,
       filePath: string,
+      model: QwenBenchmarkModel,
       profiles: QwenBenchmarkProfile[]
     ): Promise<QwenBenchmarkRunResult> => {
       const normalizedPath = typeof filePath === "string" ? filePath.trim() : "";
       if (!normalizedPath) {
-        throw new Error("Bitte zuerst ein Bild für den MiniCPM-Test auswählen.");
+        throw new Error("Bitte zuerst ein Bild für den Vision-Test auswählen.");
       }
+
+      const allowedModels: QwenBenchmarkModel[] = ["minicpm", "qwen3vl2b"];
+      const selectedModel = allowedModels.includes(model) ? model : "minicpm";
 
       const allowed: QwenBenchmarkProfile[] = [
         "whole",
@@ -531,7 +536,7 @@ function registerIpc(): void {
       );
 
       if (selected.length === 0) {
-        throw new Error("Bitte mindestens eine MiniCPM-Teststufe auswählen.");
+        throw new Error("Bitte mindestens eine Teststufe auswählen.");
       }
 
       await enterQwenBenchmarkMode();
@@ -541,27 +546,32 @@ function registerIpc(): void {
         await analysis.start();
       }
       if (analysis.getStatus().state !== "READY") {
-        throw new Error("Analyse-Worker ist für den MiniCPM-Test nicht bereit.");
+        throw new Error("Analyse-Worker ist für den Vision-Test nicht bereit.");
       }
 
+      const workerMethod =
+        selectedModel === "qwen3vl2b"
+          ? "benchmark_qwen3vl2b"
+          : "benchmark_minicpm";
       const results: QwenBenchmarkStageResult[] = [];
 
-        for (const profile of selected) {
-          const stage = await analysis.request<QwenBenchmarkStageResult>(
-            "benchmark_minicpm",
-            {
-              path: normalizedPath,
-              profile
-            },
-            600000
-          );
+      for (const profile of selected) {
+        const stage = await analysis.request<QwenBenchmarkStageResult>(
+          workerMethod,
+          {
+            path: normalizedPath,
+            profile
+          },
+          600000
+        );
 
-          results.push(stage);
-          sendToRenderer("analysis:qwenBenchmarkStage", stage);
-        }
+        results.push(stage);
+        sendToRenderer("analysis:qwenBenchmarkStage", stage);
+      }
 
       return {
         path: normalizedPath,
+        model: selectedModel,
         results
       };
     }
