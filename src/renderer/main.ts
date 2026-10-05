@@ -2949,7 +2949,8 @@ const analysisModuleLabels: Record<string, string> = {
   "pet-detect-yolox-v1": "Haustierdetektor YOLOX-S",
   "pet-fuse-ensemble-v1": "Haustier-Ergebnisse fusionieren",
   "pet-embed-dogreid-v1": "Individuelle Hundemerkmale",
-  "object-detect-qwen3vl-gguf-v2": "Motive · Qwen3-VL-8B Q8_0 Vollbild/Kachel + Doppelprüfung",
+  "catalog-semantic-qwen3vl4b-v3": "Kataloginhalt · Qwen3-VL 4B · Gesamtbild + 4 Teilbilder",
+  "object-detect-qwen3vl-gguf-v2": "Legacy · Qwen3-VL-8B",
   "semantic-embed-siglip2-v1": "Semantikanalyse (SigLIP2 So400m NaFlex)"
 };
 
