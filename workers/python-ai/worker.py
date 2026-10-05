@@ -20,6 +20,19 @@ from dataclasses import asdict, dataclass
 from datetime import datetime
 from typing import Any
 
+# Das JSON-Protokoll zwischen Electron und Python ist UTF-8. Unter Windows
+# übernimmt Python für umgeleitete stdin/stdout/stderr sonst je nach Umgebung
+# die aktive ANSI-Codepage (z. B. cp1252). Modellantworten können aber beliebige
+# Unicode-Zeichen enthalten. Deshalb die Pipes ausdrücklich auf UTF-8 setzen.
+for _stream_name in ("stdin", "stdout", "stderr"):
+    _stream = getattr(sys, _stream_name, None)
+    _reconfigure = getattr(_stream, "reconfigure", None)
+    if callable(_reconfigure):
+        try:
+            _reconfigure(encoding="utf-8", errors="strict")
+        except Exception:
+            pass
+
 _PROCESS_STARTED_AT = time.perf_counter()
 _DEV_LOG_PATH = os.environ.get("IMAGE_SORTER_DEV_LOG", "").strip()
 
@@ -392,7 +405,10 @@ def respond(request_id: str | None, *, result=None, error: str | None = None) ->
         message["result"] = result
     else:
         message["error"] = error
-    print(json.dumps(message, ensure_ascii=False), flush=True)
+    # ASCII-escaping hält das Zeilenprotokoll selbst dann robust, wenn eine
+    # Windows-Umgebung die Pipe-Encoding-Vorgabe ignoriert. JSON.parse stellt
+    # die ursprünglichen Unicode-Zeichen auf der Electron-Seite wieder her.
+    print(json.dumps(message, ensure_ascii=True), flush=True)
 
 
 def report_progress(
@@ -418,7 +434,7 @@ def report_progress(
     if total is not None:
         event["total"] = int(total)
 
-    print(json.dumps(event, ensure_ascii=False), flush=True)
+    print(json.dumps(event, ensure_ascii=True), flush=True)
 
 
 def report_process_event(
@@ -438,7 +454,7 @@ def report_process_event(
     if port is not None:
         event["port"] = int(port)
 
-    print(json.dumps(event, ensure_ascii=False), flush=True)
+    print(json.dumps(event, ensure_ascii=True), flush=True)
 
 
 def require_file(payload: dict) -> str:
