@@ -338,18 +338,25 @@ export class AnalysisService {
           );
         }
 
-        // Das große Qwen-Modell ist ab jetzt optional. Der normale Worker,
-        // Personen-/Tiererkennung, SigLIP2 und der MiniCPM-Einzelbildtest
-        // dürfen auch ohne den rund 10-GB-Qwen-Block starten.
+        // Qwen3-VL 4B ist jetzt reguläre automatische Katalogstufe.
+        // Ohne das 4B-GGUF oder llama.cpp wäre die Queue dauerhaft fehlerhaft,
+        // deshalb wird die Verfügbarkeit bereits beim Worker-Start geprüft.
         if (
-          capabilities.qwen3vlModel !== true ||
-          capabilities.qwen3vlRuntime !== true ||
-          capabilities.qwenObjectDetection !== true
+          capabilities.qwen3vl4bModel !== true ||
+          capabilities.qwen3vl4bRuntime !== true ||
+          capabilities.qwen3vl4bBenchmark !== true
         ) {
-          this.devLog("QWEN_OPTIONAL_UNAVAILABLE", {
-            qwen3vlModel: capabilities.qwen3vlModel === true,
-            qwen3vlRuntime: capabilities.qwen3vlRuntime === true,
-            qwenObjectDetection: capabilities.qwenObjectDetection === true
+          throw new Error(
+            "Qwen3-VL 4B Instruct Q4_K_M oder llama.cpp fehlt für die automatische " +
+            "Kataloganalyse. Bitte 'npm.cmd run setup:ai' ausführen."
+          );
+        }
+
+        // Das frühere 8B-Modell bleibt nur Legacy/optional. Es wird von der
+        // Katalogpipeline nicht mehr verwendet.
+        if (capabilities.qwen3vlModel !== true) {
+          this.devLog("QWEN8B_LEGACY_UNAVAILABLE", {
+            qwen3vlModel: false
           });
         }
 
