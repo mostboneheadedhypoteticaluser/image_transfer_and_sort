@@ -22,6 +22,7 @@ import type {
   DuplicateGroup,
   FaceCropInfo,
   MediaPreviewInfo,
+  MediaDetails,
   MediaRecord,
   MergePersonsResult,
   MergePetsResult,
@@ -372,6 +373,10 @@ function registerIpc(): void {
 
   ipcMain.handle("catalog:listRecycleMedia", (_event, sourceId: number, limit: number) =>
     catalog!.request<MediaRecord[]>("listRecycleMedia", { sourceId, limit })
+  );
+
+  ipcMain.handle("catalog:getMediaDetails", (_event, mediaId: number) =>
+    catalog!.request<MediaDetails | null>("getMediaDetails", { mediaId })
   );
 
   ipcMain.handle("catalog:scanSource", (_event, sourceId: number) =>
