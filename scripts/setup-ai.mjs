@@ -294,6 +294,12 @@ run(venvPython(), [
 ]);
 
 console.log("");
+console.log("Prüfe/lade Qwen3-VL-4B-Instruct Q4_K_M für die nächste Qualitätsstufe …");
+run(venvPython(), [
+  path.join(root, "workers", "python-ai", "setup_qwen3vl4b.py")
+]);
+
+console.log("");
 console.log("Prüfe llama.cpp …");
 const llamaServer = requireLlamaCpp();
 
@@ -314,6 +320,10 @@ console.log(
 console.log(
   "Qwen3-VL-2B-Instruct Q4_K_M: " +
   path.join(modelDir, "qwen3-vl-2b-instruct-gguf")
+);
+console.log(
+  "Qwen3-VL-4B-Instruct Q4_K_M: " +
+  path.join(modelDir, "qwen3-vl-4b-instruct-gguf")
 );
 console.log(
   "Qwen3-VL 8B Legacy: optional; vorhandene Dateien bleiben erhalten."
