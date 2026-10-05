@@ -167,9 +167,9 @@ function renderAutomaticQwenState(enabled: boolean): void {
 }
 
 function benchmarkModelLabel(model: QwenBenchmarkModel): string {
-  return model === "qwen3vl2b"
-    ? "Qwen3-VL 2B Instruct Q4_K_M"
-    : "MiniCPM-V 4.6 Q4_K_M";
+  if (model === "qwen3vl4b") return "Qwen3-VL 4B Instruct Q4_K_M";
+  if (model === "qwen3vl2b") return "Qwen3-VL 2B Instruct Q4_K_M";
+  return "MiniCPM-V 4.6 Q4_K_M";
 }
 
 function benchmarkDuration(ms: number): string {
@@ -332,7 +332,8 @@ function renderQwenBenchmarkResults(): void {
       ["Bildbereiche", result.regionCount.toLocaleString("de-DE")],
       ["Motive", result.semantic.subjects.length.toLocaleString("de-DE")],
       ["Suchbegriffe", result.semantic.tags.length.toLocaleString("de-DE")],
-      ["Textfunde", result.semantic.visibleText.length.toLocaleString("de-DE")]
+      ["Textfunde", result.semantic.visibleText.length.toLocaleString("de-DE")],
+      ["JSON", result.semantic.repaired ? "repariert" : "direkt"]
     ];
 
     for (const [label, value] of metricValues) {
@@ -349,6 +350,12 @@ function renderQwenBenchmarkResults(): void {
     const summary = document.createElement("p");
     summary.textContent = benchmarkObjectSummary(result);
 
+    const repairedNote = document.createElement("small");
+    repairedNote.className = "qwen-benchmark-stage-note";
+    repairedNote.textContent = result.semantic.repaired
+      ? "Die Modellantwort war formal unvollständig. Vollständig gelieferte Felder wurden automatisch übernommen."
+      : "";
+
     const details = document.createElement("details");
     const detailsSummary = document.createElement("summary");
     detailsSummary.textContent = "Rohdaten anzeigen";
@@ -356,7 +363,11 @@ function renderQwenBenchmarkResults(): void {
     pre.textContent = JSON.stringify(result, null, 2);
     details.append(detailsSummary, pre);
 
-    card.append(header, metrics, summary, details);
+    if (result.semantic.repaired) {
+      card.append(header, metrics, summary, repairedNote, details);
+    } else {
+      card.append(header, metrics, summary, details);
+    }
     qwenBenchmarkResults.appendChild(card);
   }
 
@@ -387,7 +398,11 @@ function renderQwenBenchmarkProgress(status: AnalysisWorkerStatus): void {
 
   const progress = status.progress;
   const expectedKind =
-    qwenBenchmarkModelInRun === "qwen3vl2b" ? "qwen3vl2b" : "minicpm";
+    qwenBenchmarkModelInRun === "qwen3vl4b"
+      ? "qwen3vl4b"
+      : qwenBenchmarkModelInRun === "qwen3vl2b"
+        ? "qwen3vl2b"
+        : "minicpm";
   if (progress?.kind === expectedKind && progress.message) {
     qwenBenchmarkLive.textContent = progress.message;
     qwenBenchmarkProgressCurrent = {
