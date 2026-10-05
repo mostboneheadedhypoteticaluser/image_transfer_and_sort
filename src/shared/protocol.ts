@@ -590,6 +590,21 @@ export type DuplicateGroup = {
   items: DuplicateItem[];
 };
 
+export type CatalogChangeKind =
+  | "ADDED"
+  | "MOVED"
+  | "CHANGED"
+  | "MISSING"
+  | "RECYCLE"
+  | "RECYCLE_AMBIGUOUS";
+
+export type CatalogChange = {
+  kind: CatalogChangeKind;
+  mediaId: number;
+  path: string;
+  previousPath: string | null;
+};
+
 export type ScanResult = {
   discovered: number;
   added: number;
@@ -599,6 +614,40 @@ export type ScanResult = {
   missing: number;
   recycleBin: number;
   errors: number;
+  changes: CatalogChange[];
+};
+
+export type CatalogWatchEventKind =
+  | "WATCHING"
+  | "CHANGE_DETECTED"
+  | "SCAN_STARTED"
+  | "SCAN_FINISHED"
+  | "FALLBACK"
+  | "ERROR";
+
+export type CatalogWatchEvent = {
+  sourceId: number;
+  sourcePath: string;
+  kind: CatalogWatchEventKind;
+  occurredAt: string;
+  message: string;
+  changedPath: string | null;
+  automatic: boolean;
+  scanResult: ScanResult | null;
+};
+
+export type CatalogWatchSourceState = {
+  sourceId: number;
+  sourcePath: string;
+  state: "WATCHING" | "FALLBACK" | "SCANNING" | "ERROR";
+  recursive: boolean;
+  lastEventAt: string | null;
+  lastScanAt: string | null;
+};
+
+export type CatalogWatchSnapshot = {
+  sources: CatalogWatchSourceState[];
+  history: CatalogWatchEvent[];
 };
 
 export type RestoreResult = {
