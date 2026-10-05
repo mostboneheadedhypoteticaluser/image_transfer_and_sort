@@ -1,6 +1,7 @@
 import type {
   AnalysisErrorRecord,
   AnalysisWorkerStatus,
+  QwenBenchmarkModel,
   QwenBenchmarkProfile,
   QwenBenchmarkStageResult,
   DuplicateGroup,
@@ -95,6 +96,9 @@ const copyQwenBenchmarkButton = document.querySelector<HTMLButtonElement>("#copy
 const qwenBenchmarkFilePath = document.querySelector<HTMLElement>("#qwenBenchmarkFilePath")!;
 const qwenBenchmarkLive = document.querySelector<HTMLDivElement>("#qwenBenchmarkLive")!;
 const qwenBenchmarkResults = document.querySelector<HTMLDivElement>("#qwenBenchmarkResults")!;
+const qwenBenchmarkModelInputs = Array.from(
+  document.querySelectorAll<HTMLInputElement>('input[name="qwenBenchmarkModel"]')
+);
 const qwenBenchmarkProfileInputs = Array.from(
   document.querySelectorAll<HTMLInputElement>('input[name="qwenBenchmarkProfile"]')
 );
@@ -140,6 +144,7 @@ let searchFacetsSourceId: number | null = null;
 let latestAnalysisStatus: AnalysisWorkerStatus | null = null;
 let qwenBenchmarkSelectedPath: string | null = null;
 let qwenBenchmarkRunning = false;
+let qwenBenchmarkModelInRun: QwenBenchmarkModel = "minicpm";
 let qwenBenchmarkStages: QwenBenchmarkStageResult[] = [];
 let qwenBenchmarkProfilesInRun: QwenBenchmarkProfile[] = [];
 let qwenBenchmarkProgressCurrent: {
@@ -159,6 +164,12 @@ function renderAutomaticQwenState(enabled: boolean): void {
   qwenAutomaticButton.title = enabled
     ? "Die normale Qwen-Warteschlange ist für diese App-Sitzung freigegeben."
     : "Qwen wird beim App-Start absichtlich nicht automatisch geladen. Erst dieser Klick startet die Serienanalyse.";
+}
+
+function benchmarkModelLabel(model: QwenBenchmarkModel): string {
+  return model === "qwen3vl2b"
+    ? "Qwen3-VL 2B Instruct Q4_K_M"
+    : "MiniCPM-V 4.6 Q4_K_M";
 }
 
 function benchmarkDuration(ms: number): string {
@@ -375,7 +386,9 @@ function renderQwenBenchmarkProgress(status: AnalysisWorkerStatus): void {
   if (!qwenBenchmarkRunning) return;
 
   const progress = status.progress;
-  if (progress?.kind === "minicpm" && progress.message) {
+  const expectedKind =
+    qwenBenchmarkModelInRun === "qwen3vl2b" ? "qwen3vl2b" : "minicpm";
+  if (progress?.kind === expectedKind && progress.message) {
     qwenBenchmarkLive.textContent = progress.message;
     qwenBenchmarkProgressCurrent = {
       current: progress.current,
@@ -390,7 +403,7 @@ function renderQwenBenchmarkProgress(status: AnalysisWorkerStatus): void {
 
 function qwenBenchmarkCopyText(): string {
   const lines = [
-    "MiniCPM-V 4.6 · Einzelbild-Benchmark",
+    benchmarkModelLabel(qwenBenchmarkModelInRun) + " · Einzelbild-Benchmark",
     "Datei: " + (qwenBenchmarkSelectedPath ?? "—"),
     ""
   ];
@@ -2706,6 +2719,10 @@ runQwenBenchmarkButton.addEventListener("click", () => {
       return;
     }
 
+    const selectedModelInput = qwenBenchmarkModelInputs.find(
+      (input) => input.checked
+    );
+    const model = (selectedModelInput?.value ?? "minicpm") as QwenBenchmarkModel;
     const profiles = qwenBenchmarkProfileInputs
       .filter((input) => input.checked)
       .map((input) => input.value as QwenBenchmarkProfile);
@@ -2716,6 +2733,7 @@ runQwenBenchmarkButton.addEventListener("click", () => {
     }
 
     qwenBenchmarkRunning = true;
+    qwenBenchmarkModelInRun = model;
     qwenBenchmarkStages = [];
     qwenBenchmarkProfilesInRun = [...profiles];
     qwenBenchmarkProgressCurrent = null;
@@ -2725,12 +2743,16 @@ runQwenBenchmarkButton.addEventListener("click", () => {
     pickQwenBenchmarkImageButton.disabled = true;
     copyQwenBenchmarkButton.disabled = true;
     closeQwenBenchmarkButton.disabled = true;
+    for (const input of qwenBenchmarkModelInputs) input.disabled = true;
     qwenBenchmarkLive.textContent =
-      "Standardanalyse ist pausiert. MiniCPM-Test wird vorbereitet …";
+      "Standardanalyse ist pausiert. " +
+      benchmarkModelLabel(model) +
+      " wird vorbereitet …";
 
     try {
       const result = await window.imageSorter.analysis.runQwenBenchmark(
         qwenBenchmarkSelectedPath,
+        model,
         profiles
       );
 
@@ -2748,13 +2770,14 @@ runQwenBenchmarkButton.addEventListener("click", () => {
       qwenBenchmarkRunError =
         error instanceof Error ? error.message : String(error);
       qwenBenchmarkLive.textContent =
-        "MiniCPM-Test abgebrochen: " + qwenBenchmarkRunError;
+        benchmarkModelLabel(model) + " abgebrochen: " + qwenBenchmarkRunError;
     } finally {
       qwenBenchmarkRunning = false;
       renderQwenBenchmarkResults();
       runQwenBenchmarkButton.disabled = false;
       pickQwenBenchmarkImageButton.disabled = false;
       closeQwenBenchmarkButton.disabled = false;
+      for (const input of qwenBenchmarkModelInputs) input.disabled = false;
       copyQwenBenchmarkButton.disabled = qwenBenchmarkStages.length === 0;
     }
   });
