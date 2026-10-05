@@ -1747,6 +1747,60 @@ td .badge + .badge {
   flex-wrap: wrap;
 }
 
+.qwen-benchmark-search-probe {
+  display: grid;
+  grid-template-columns: minmax(210px, auto) minmax(0, 1fr);
+  gap: 12px;
+  align-items: center;
+  padding: 11px 12px;
+  border: 1px solid #e1e6ea;
+  border-radius: 9px;
+  background: #fff;
+}
+
+.qwen-benchmark-search-probe strong,
+.qwen-benchmark-search-probe small {
+  display: block;
+}
+
+.qwen-benchmark-search-probe strong {
+  margin-bottom: 2px;
+  font-size: 12px;
+}
+
+.qwen-benchmark-search-probe small {
+  color: #7a8490;
+  font-size: 11px;
+}
+
+.qwen-benchmark-search-probe input {
+  width: 100%;
+  min-width: 0;
+}
+
+.qwen-benchmark-probe-result {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-radius: 7px;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.qwen-benchmark-probe-result.strong {
+  background: #eef7f1;
+  color: #25653c;
+}
+
+.qwen-benchmark-probe-result.partial {
+  background: #fff8e8;
+  color: #7a5b18;
+}
+
+.qwen-benchmark-probe-result.weak {
+  background: #fff1f0;
+  color: #8d302d;
+}
+
 .qwen-benchmark-live {
   min-height: 46px;
   padding: 12px 14px;
@@ -1880,7 +1934,8 @@ td .badge + .badge {
 
 @media (max-width: 1000px) {
   .qwen-benchmark-profiles,
-  .qwen-benchmark-models {
+  .qwen-benchmark-models,
+  .qwen-benchmark-search-probe {
     grid-template-columns: 1fr;
   }
 
