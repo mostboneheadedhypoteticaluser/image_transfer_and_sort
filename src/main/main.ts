@@ -327,20 +327,31 @@ function registerIpc(): void {
         const cacheKey = query.toLocaleLowerCase("de-DE");
         semantic = semanticTextCache.get(cacheKey) ?? null;
 
-        if (!semantic) {
-          if (!analysis || analysis.getStatus().state !== "READY") {
-            throw new Error(
-              "Die semantische Suche ist noch nicht bereit. " +
-              "Bitte AI-Setup und Analyse-Worker prüfen."
-            );
-          }
+        if (!semantic && analysis) {
+          const status = analysis.getStatus();
 
-          semantic = await analysis.request<SemanticTextEmbedding>(
-            "extract_semantic_text_embedding",
-            { text: query },
-            1800000
-          );
-          semanticTextCache.set(cacheKey, semantic);
+          // Eine laufende Kataloganalyse darf durch eine Suche nicht
+          // unterbrochen werden. In diesem Fall sucht der Katalog sofort nur
+          // in den bereits gespeicherten Qwen-4B-Feldern. Ist der Worker frei,
+          // kommt zusätzlich SigLIP2 für das hybride Ranking dazu.
+          if (
+            status.state === "READY" &&
+            status.activeJobs === 0 &&
+            !qwenBenchmarkMode &&
+            !qwenBenchmarkPreparing
+          ) {
+            try {
+              semantic = await analysis.request<SemanticTextEmbedding>(
+                "extract_semantic_text_embedding",
+                { text: query },
+                1800000
+              );
+              semanticTextCache.set(cacheKey, semantic);
+            } catch {
+              // Qwen-Textindex bleibt als sofortiger Fallback nutzbar.
+              semantic = null;
+            }
+          }
         }
       }
 
