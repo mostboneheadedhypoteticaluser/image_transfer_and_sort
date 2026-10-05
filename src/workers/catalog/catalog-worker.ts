@@ -18,6 +18,7 @@ import {
   type RecycleBinItem
 } from "./recycle-bin";
 import type {
+  CatalogChange,
   CatalogMethod,
   RestoreResult,
   SearchFacets,
@@ -1818,7 +1819,8 @@ function applyDirectoryMove(
   oldPrefix: string,
   newPrefix: string,
   directoryIndex: DirectoryIndex,
-  mediaByPath: Map<string, IndexedMedia>
+  mediaByPath: Map<string, IndexedMedia>,
+  changes: CatalogChange[]
 ): number {
   if (oldPrefix === newPrefix) return 0;
 
@@ -1862,9 +1864,16 @@ function applyDirectoryMove(
     }
 
     for (const media of affectedMedia) {
-      const newRelativePath = replaceDirectoryPrefix(media.relativePath, oldPrefix, newPrefix);
+      const previousPath = media.relativePath;
+      const newRelativePath = replaceDirectoryPrefix(previousPath, oldPrefix, newPrefix);
       const newAbsolutePath = path.join(root, ...newRelativePath.split("/"));
       updateMedia.run(newRelativePath, newAbsolutePath, media.id, sourceId);
+      changes.push({
+        kind: "MOVED",
+        mediaId: media.id,
+        path: newRelativePath,
+        previousPath
+      });
     }
 
     db.exec("COMMIT");
@@ -1913,7 +1922,8 @@ function reconcileDirectory(
   scanToken: string,
   directoryIndex: DirectoryIndex,
   seenDirectoryIds: Set<number>,
-  mediaByPath: Map<string, IndexedMedia>
+  mediaByPath: Map<string, IndexedMedia>,
+  changes: CatalogChange[]
 ): number {
   const existingAtPath = directoryIndex.byPath.get(directory.relativePath);
 
@@ -1955,7 +1965,8 @@ function reconcileDirectory(
       candidate.relativePath,
       directory.relativePath,
       directoryIndex,
-      mediaByPath
+      mediaByPath,
+      changes
     );
 
     const movedDirectory = directoryIndex.all.get(candidate.id)!;
@@ -2882,6 +2893,7 @@ async function scanSource(sourceId: number): Promise<ScanResult> {
   let missing = 0;
   let recycleBin = 0;
   let errors = 0;
+  const changes: CatalogChange[] = [];
 
   try {
     const root = await resolveSourceRoot(sourceId);
@@ -3011,7 +3023,8 @@ async function scanSource(sourceId: number): Promise<ScanResult> {
           token,
           directoryIndex,
           seenDirectoryIds,
-          byPath
+          byPath,
+          changes
         );
       }
     })) {
@@ -3081,6 +3094,12 @@ async function scanSource(sourceId: number): Promise<ScanResult> {
               previous.deviceId = file.deviceId;
               previous.inode = file.inode;
               changed += 1;
+              changes.push({
+                kind: "CHANGED",
+                mediaId: previous.id,
+                path: file.relativePath,
+                previousPath: null
+              });
             }
           }
         } else {
@@ -3092,6 +3111,7 @@ async function scanSource(sourceId: number): Promise<ScanResult> {
           );
 
           if (identityCandidate) {
+            const previousPath = identityCandidate.relativePath;
             moveExisting.run(
               file.relativePath,
               file.absolutePath,
@@ -3117,6 +3137,12 @@ async function scanSource(sourceId: number): Promise<ScanResult> {
 
             seenIds.add(identityCandidate.id);
             moved += 1;
+            changes.push({
+              kind: "MOVED",
+              mediaId: identityCandidate.id,
+              path: file.relativePath,
+              previousPath
+            });
           } else {
             const hash = await sha256File(file.absolutePath);
             const moveCandidate = await uniqueMoveCandidate(
@@ -3129,6 +3155,7 @@ async function scanSource(sourceId: number): Promise<ScanResult> {
             );
 
             if (moveCandidate) {
+              const previousPath = moveCandidate.relativePath;
               moveExisting.run(
                 file.relativePath,
                 file.absolutePath,
@@ -3154,6 +3181,12 @@ async function scanSource(sourceId: number): Promise<ScanResult> {
 
               seenIds.add(moveCandidate.id);
               moved += 1;
+              changes.push({
+                kind: "MOVED",
+                mediaId: moveCandidate.id,
+                path: file.relativePath,
+                previousPath
+              });
             } else {
               const inserted = insertMedia.run(
                 sourceId,
@@ -3196,6 +3229,12 @@ async function scanSource(sourceId: number): Promise<ScanResult> {
 
               seenIds.add(insertedMedia.id);
               added += 1;
+              changes.push({
+                kind: "ADDED",
+                mediaId: insertedMedia.id,
+                path: insertedMedia.relativePath,
+                previousPath: null
+              });
             }
           }
         }
@@ -3220,7 +3259,7 @@ async function scanSource(sourceId: number): Promise<ScanResult> {
     `).run(sourceId, token);
 
     const staleRows = db.prepare(`
-      SELECT id, absolute_path
+      SELECT id, absolute_path, relative_path
       FROM media_items
       WHERE source_id=?
         AND scan_token<>?
@@ -3244,6 +3283,12 @@ async function scanSource(sourceId: number): Promise<ScanResult> {
 
         markMissing.run(Number(row.id));
         missing += 1;
+        changes.push({
+          kind: "MISSING",
+          mediaId: Number(row.id),
+          path: String(row.relative_path),
+          previousPath: null
+        });
       }
       db.exec("COMMIT");
     } catch (error) {
@@ -3252,6 +3297,19 @@ async function scanSource(sourceId: number): Promise<ScanResult> {
     }
 
     recycleBin = await refreshRecycleStatus(sourceId);
+
+    const recycleState = db.prepare(`
+      SELECT in_recycle_bin, recycle_ambiguous
+      FROM media_items
+      WHERE id=?
+    `);
+    for (const change of changes) {
+      if (change.kind !== "MISSING") continue;
+      const state = recycleState.get(change.mediaId);
+      if (state?.in_recycle_bin) change.kind = "RECYCLE";
+      else if (state?.recycle_ambiguous) change.kind = "RECYCLE_AMBIGUOUS";
+    }
+
     reactivateAvailableMediaJobs(sourceId);
     enqueueAnalysisJobs(sourceId, "file-probe-v1");
     enqueueAnalysisJobs(sourceId, "thumbnail-v1");
@@ -3273,7 +3331,8 @@ async function scanSource(sourceId: number): Promise<ScanResult> {
       unchanged,
       missing,
       recycleBin,
-      errors
+      errors,
+      changes: changes.slice(0, 500)
     };
 
     db.prepare(`
