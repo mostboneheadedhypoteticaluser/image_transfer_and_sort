@@ -542,7 +542,8 @@ export class AnalysisService {
                 ? "minicpm"
                 : pending?.method === "benchmark_qwen3vl2b"
                   ? "qwen3vl2b"
-                  : pending?.method === "benchmark_qwen3vl4b"
+                  : pending?.method === "benchmark_qwen3vl4b" ||
+                    pending?.method === "analyze_catalog_qwen3vl4b"
                     ? "qwen3vl4b"
                     : "qwen3vl",
             phase:
@@ -703,6 +704,7 @@ export class AnalysisService {
       // werden beendet und anschließend frisch gestartet.
       if (
         current.method === "detect_qwen3vl_objects" ||
+        current.method === "analyze_catalog_qwen3vl4b" ||
         current.method === "benchmark_qwen3vl" ||
         current.method === "benchmark_minicpm" ||
         current.method === "benchmark_qwen3vl2b" ||
