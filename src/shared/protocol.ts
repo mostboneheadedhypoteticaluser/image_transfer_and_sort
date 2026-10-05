@@ -1,5 +1,5 @@
 export type AnalysisWorkerProgress = {
-  kind: "qwen3vl" | "minicpm" | "qwen3vl2b";
+  kind: "qwen3vl" | "minicpm" | "qwen3vl2b" | "qwen3vl4b";
   phase: string;
   current: number | null;
   total: number | null;
@@ -19,7 +19,7 @@ export type AnalysisWorkerStatus = {
   progress?: AnalysisWorkerProgress | null;
 };
 
-export type QwenBenchmarkModel = "minicpm" | "qwen3vl2b";
+export type QwenBenchmarkModel = "minicpm" | "qwen3vl2b" | "qwen3vl4b";
 
 export type QwenBenchmarkProfile =
   | "whole"
@@ -54,6 +54,7 @@ export type QwenBenchmarkSemantic = {
   scenes: string[];
   visibleText: string[];
   tags: string[];
+  repaired?: boolean;
 };
 
 export type QwenBenchmarkRegion = {
