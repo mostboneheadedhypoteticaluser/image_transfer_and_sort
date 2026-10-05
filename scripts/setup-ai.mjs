@@ -288,6 +288,12 @@ run(venvPython(), [
 ]);
 
 console.log("");
+console.log("Prüfe/lade Qwen3-VL-2B-Instruct Q4_K_M für den Vergleichstest …");
+run(venvPython(), [
+  path.join(root, "workers", "python-ai", "setup_qwen3vl2b.py")
+]);
+
+console.log("");
 console.log("Prüfe llama.cpp …");
 const llamaServer = requireLlamaCpp();
 
@@ -306,6 +312,10 @@ console.log(
   path.join(modelDir, "minicpm-v-4.6-gguf")
 );
 console.log(
-  "Qwen3-VL: optional; vorhandene Dateien bleiben erhalten und werden vom Einzelbildtest nicht verwendet."
+  "Qwen3-VL-2B-Instruct Q4_K_M: " +
+  path.join(modelDir, "qwen3-vl-2b-instruct-gguf")
+);
+console.log(
+  "Qwen3-VL 8B Legacy: optional; vorhandene Dateien bleiben erhalten."
 );
 console.log("llama.cpp Server: " + llamaServer);
