@@ -3341,7 +3341,7 @@ def minicpm_generate(
         label=progress_label,
         imageWidth=int(width),
         imageHeight=int(height),
-        maxNewTokens=384,
+        maxNewTokens=192,
         reasoning="off",
         port=port,
     )
@@ -4044,7 +4044,7 @@ def qwen3vl2b_generate(
         label=progress_label,
         imageWidth=int(width),
         imageHeight=int(height),
-        maxNewTokens=192,
+        maxNewTokens=384,
         reasoning="off",
         port=port,
     )
@@ -4192,7 +4192,7 @@ def qwen3vl2b_generate(
         )
         raise RuntimeError(
             "Qwen3-VL 2B hat für diesen Bildbereich zu lange gebraucht. "
-            "Der Aufruf wurde nach spätestens 180 Sekunden abgebrochen."
+            "Der Aufruf wurde nach spätestens 240 Sekunden abgebrochen."
         ) from exc
     except Exception as exc:
         dev_log(
@@ -4560,7 +4560,7 @@ def qwen3vl4b_generate(
         label=progress_label,
         imageWidth=int(width),
         imageHeight=int(height),
-        maxNewTokens=192,
+        maxNewTokens=384,
         reasoning="off",
         port=port,
     )
@@ -4613,7 +4613,7 @@ def qwen3vl4b_generate(
                 now = time.monotonic()
                 if now >= hard_deadline:
                     raise TimeoutError(
-                        "Qwen3-VL-4B-Antwort hat das 180-Sekunden-Limit überschritten."
+                        "Qwen3-VL-4B-Antwort hat das 240-Sekunden-Limit überschritten."
                     )
 
                 line = raw_line.decode("utf-8", errors="replace").strip()
