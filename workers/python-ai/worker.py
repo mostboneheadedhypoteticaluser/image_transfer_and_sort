@@ -207,8 +207,8 @@ QWEN3VL4B_CONTEXT_SIZE = 8192
 # Komplexe Bildbereiche können auf dem N305 deutlich länger als vier Minuten
 # benötigen. 7 Minuten pro Bereich geben dem 4B-Modell ausreichend Spielraum,
 # ohne einen tatsächlich festhängenden Aufruf unbegrenzt laufen zu lassen.
-QWEN3VL4B_REGION_TIMEOUT_SECONDS = 420.0
-QWEN3VL4B_SOCKET_TIMEOUT_SECONDS = 360.0
+QWEN3VL4B_REGION_TIMEOUT_SECONDS = 600.0
+QWEN3VL4B_SOCKET_TIMEOUT_SECONDS = 540.0
 
 COCO_CLASS_NAMES = (
     "person", "bicycle", "car", "motorcycle", "airplane", "bus", "train",
