@@ -660,43 +660,12 @@ db.prepare(`
     AND error_message LIKE '%BaseModelOutputWithPooling%object has no attribute%detach%'
 `).run();
 
-// Die alte Qwen-Ausführung hatte einen absoluten 2-Stunden-Timeout. Solche
-// bereits erzeugten Fehler werden nach Einführung des Aktivitäts-Watchdogs
-// automatisch noch einmal sauber gestartet.
+// Die frühere Qwen-8B-Serienstufe ist vollständig durch die neue
+// Qwen3-VL-4B-Katalogsemantik ersetzt. Alte Jobzustände werden entfernt;
+// vorhandene Bild-/Suchdaten bleiben davon unberührt.
 db.prepare(`
-  UPDATE analysis_jobs
-  SET
-    status='PENDING',
-    attempts=0,
-    result_json=NULL,
-    error_message=NULL,
-    started_at=NULL,
-    finished_at=NULL,
-    updated_at=CURRENT_TIMESTAMP
+  DELETE FROM analysis_jobs
   WHERE module='object-detect-qwen3vl-gguf-v2'
-    AND status='FAILED'
-    AND error_message='Zeitüberschreitung bei Analyse-Worker-Methode detect_qwen3vl_objects.'
-`).run();
-
-// Erfolgreiche Qwen-v2-Ergebnisse stammen noch aus dem ungebremsten
-// Thinking-Pfad. Sie werden einmalig mit der strukturierten v3-Ausführung
-// neu berechnet, damit der Katalog keine gemischten Motivgenerationen enthält.
-db.prepare(`
-  UPDATE analysis_jobs
-  SET
-    status='PENDING',
-    attempts=0,
-    result_json=NULL,
-    error_message=NULL,
-    started_at=NULL,
-    finished_at=NULL,
-    updated_at=CURRENT_TIMESTAMP
-  WHERE module='object-detect-qwen3vl-gguf-v2'
-    AND status='DONE'
-    AND (
-      result_json IS NULL
-      OR result_json NOT LIKE '%"verificationVersion":"qwen3vl-gguf-object-v3"%'
-    )
 `).run();
 
 let scanRunning = false;
@@ -2119,7 +2088,6 @@ function enqueueAnalysisJobs(sourceId: number, module = "file-probe-v1") {
     "pet-detect-yolox-v1",
     "pet-fuse-ensemble-v1",
     "pet-embed-dogreid-v1",
-    "object-detect-qwen3vl-gguf-v2",
     "catalog-semantic-qwen3vl4b-v3",
     "semantic-embed-siglip2-v1"
   ]);
@@ -3062,8 +3030,8 @@ async function scanSource(sourceId: number): Promise<ScanResult> {
     enqueueAnalysisJobs(sourceId, "pet-detect-yolox-v1");
     enqueueAnalysisJobs(sourceId, "pet-fuse-ensemble-v1");
     enqueueAnalysisJobs(sourceId, "pet-embed-dogreid-v1");
-    enqueueAnalysisJobs(sourceId, "object-detect-qwen3vl-gguf-v2");
     enqueueAnalysisJobs(sourceId, "semantic-embed-siglip2-v1");
+    enqueueAnalysisJobs(sourceId, "catalog-semantic-qwen3vl4b-v3");
 
     const result: ScanResult = {
       discovered,
