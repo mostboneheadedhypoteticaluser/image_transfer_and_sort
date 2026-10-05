@@ -1,5 +1,5 @@
 export type AnalysisWorkerProgress = {
-  kind: "qwen3vl" | "minicpm";
+  kind: "qwen3vl" | "minicpm" | "qwen3vl2b";
   phase: string;
   current: number | null;
   total: number | null;
@@ -18,6 +18,8 @@ export type AnalysisWorkerStatus = {
   message: string;
   progress?: AnalysisWorkerProgress | null;
 };
+
+export type QwenBenchmarkModel = "minicpm" | "qwen3vl2b";
 
 export type QwenBenchmarkProfile =
   | "whole"
@@ -85,6 +87,7 @@ export type QwenBenchmarkStageResult = {
 
 export type QwenBenchmarkRunResult = {
   path: string;
+  model: QwenBenchmarkModel;
   results: QwenBenchmarkStageResult[];
 };
 
