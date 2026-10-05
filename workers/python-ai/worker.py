@@ -204,6 +204,11 @@ QWEN3VL4B_MMPROJ_FILE = os.path.join(
 )
 QWEN3VL4B_MODEL_VERSION = "Qwen3-VL 4B Instruct Q4_K_M + Vision Q8_0"
 QWEN3VL4B_CONTEXT_SIZE = 8192
+# Komplexe Bildbereiche können auf dem N305 deutlich länger als vier Minuten
+# benötigen. 7 Minuten pro Bereich geben dem 4B-Modell ausreichend Spielraum,
+# ohne einen tatsächlich festhängenden Aufruf unbegrenzt laufen zu lassen.
+QWEN3VL4B_REGION_TIMEOUT_SECONDS = 420.0
+QWEN3VL4B_SOCKET_TIMEOUT_SECONDS = 360.0
 
 COCO_CLASS_NAMES = (
     "person", "bicycle", "car", "motorcycle", "airplane", "bus", "train",
@@ -4656,15 +4661,21 @@ def qwen3vl4b_generate(
     content_chars = 0
     reasoning_chars = 0
     last_progress_at = time.monotonic()
-    hard_deadline = time.monotonic() + 240.0
+    hard_deadline = time.monotonic() + QWEN3VL4B_REGION_TIMEOUT_SECONDS
 
     try:
-        with urllib_request.urlopen(request, timeout=120.0) as response:
+        with urllib_request.urlopen(
+            request,
+            timeout=QWEN3VL4B_SOCKET_TIMEOUT_SECONDS,
+        ) as response:
             for raw_line in response:
                 now = time.monotonic()
                 if now >= hard_deadline:
                     raise TimeoutError(
-                        "Qwen3-VL-4B-Antwort hat das 240-Sekunden-Limit überschritten."
+                        (
+                            "Qwen3-VL-4B-Antwort hat das "
+                            f"{int(QWEN3VL4B_REGION_TIMEOUT_SECONDS)}-Sekunden-Limit überschritten."
+                        )
                     )
 
                 line = raw_line.decode("utf-8", errors="replace").strip()
@@ -4759,7 +4770,10 @@ def qwen3vl4b_generate(
         )
         raise RuntimeError(
             "Qwen3-VL 4B hat für diesen Bildbereich zu lange gebraucht. "
-            "Der Aufruf wurde nach spätestens 240 Sekunden abgebrochen."
+            (
+                "Der Aufruf wurde nach spätestens "
+                f"{int(QWEN3VL4B_REGION_TIMEOUT_SECONDS)} Sekunden abgebrochen."
+            )
         ) from exc
     except Exception as exc:
         dev_log(
