@@ -157,6 +157,129 @@ export type MediaPreviewInfo = {
   inputSha256: string;
 };
 
+export type MediaDetailFace = {
+  id: number;
+  detectorVersion: string;
+  score: number;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  embeddingReady: boolean;
+  embeddingModel: string | null;
+  personId: number | null;
+  personName: string | null;
+  assignmentSource: string | null;
+  assignmentConfidence: number | null;
+  candidateId: number | null;
+  candidateSimilarity: number | null;
+};
+
+export type MediaDetailPet = {
+  id: number;
+  petClass: "dog" | "cat";
+  score: number;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  fusionVersion: string;
+  agreementCount: number;
+  sources: string[];
+  embeddingReady: boolean;
+  embeddingModel: string | null;
+  petId: number | null;
+  petName: string | null;
+  assignmentSource: string | null;
+  assignmentConfidence: number | null;
+  candidateId: number | null;
+  candidateSimilarity: number | null;
+};
+
+export type MediaDetailObject = {
+  label: string;
+  score: number;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  version: string;
+  agreementCount: number | null;
+  sources: string[];
+  raw: boolean;
+};
+
+export type MediaDetailAnalysisJob = {
+  module: string;
+  status: string;
+  attempts: number;
+  errorMessage: string | null;
+  startedAt: string | null;
+  finishedAt: string | null;
+  updatedAt: string;
+};
+
+export type MediaDetails = {
+  mediaId: number;
+  sourceId: number;
+  relativePath: string;
+  absolutePath: string;
+  extension: string;
+  sizeBytes: number;
+  mtimeMs: number;
+  sha256: string;
+  availability: string;
+  deviceId: string | null;
+  inode: string | null;
+  firstSeenAt: string;
+  lastSeenAt: string;
+  lastChangedAt: string;
+  lastMovedAt: string | null;
+  recyclePath: string | null;
+  duplicateCount: number;
+  imageMetadata: {
+    width: number;
+    height: number;
+    format: string | null;
+    colorMode: string | null;
+    orientation: number | null;
+    capturedAt: string | null;
+    cameraMake: string | null;
+    cameraModel: string | null;
+    lensModel: string | null;
+    gpsLatitude: number | null;
+    gpsLongitude: number | null;
+    updatedAt: string;
+  } | null;
+  faces: MediaDetailFace[];
+  pets: MediaDetailPet[];
+  objects: MediaDetailObject[];
+  semanticEmbedding: {
+    model: string;
+    dimension: number;
+    maxNumPatches: number;
+    precision: string;
+    updatedAt: string;
+  } | null;
+  semantic: {
+    model: string;
+    profileVersion: string;
+    description: string;
+    subjects: string[];
+    actions: string[];
+    scenes: string[];
+    visibleText: string[];
+    tags: string[];
+    concepts: string[];
+    repaired: boolean;
+    regionCount: number;
+    regions: unknown[];
+    timings: Record<string, unknown>;
+    updatedAt: string;
+  } | null;
+  analysisJobs: MediaDetailAnalysisJob[];
+};
+
 export type PetDetectionForEmbedding = {
   id: number;
   petClass: "dog" | "cat";
@@ -547,6 +670,7 @@ export type CatalogMethod =
   | "getFaceCropInfo"
   | "getThumbnailInfo"
   | "getMediaPreviewInfo"
+  | "getMediaDetails"
   | "getMediaPath"
   | "scanSource"
   | "restoreMedia"
