@@ -521,7 +521,11 @@ function registerIpc(): void {
         throw new Error("Bitte zuerst ein Bild für den Vision-Test auswählen.");
       }
 
-      const allowedModels: QwenBenchmarkModel[] = ["minicpm", "qwen3vl2b"];
+      const allowedModels: QwenBenchmarkModel[] = [
+        "minicpm",
+        "qwen3vl2b",
+        "qwen3vl4b"
+      ];
       const selectedModel = allowedModels.includes(model) ? model : "minicpm";
 
       const allowed: QwenBenchmarkProfile[] = [
@@ -550,9 +554,11 @@ function registerIpc(): void {
       }
 
       const workerMethod =
-        selectedModel === "qwen3vl2b"
-          ? "benchmark_qwen3vl2b"
-          : "benchmark_minicpm";
+        selectedModel === "qwen3vl4b"
+          ? "benchmark_qwen3vl4b"
+          : selectedModel === "qwen3vl2b"
+            ? "benchmark_qwen3vl2b"
+            : "benchmark_minicpm";
       const results: QwenBenchmarkStageResult[] = [];
 
       for (const profile of selected) {
