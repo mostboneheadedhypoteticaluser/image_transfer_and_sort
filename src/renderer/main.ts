@@ -5,6 +5,7 @@ import type {
   QwenBenchmarkProfile,
   QwenBenchmarkStageResult,
   DuplicateGroup,
+  MediaDetails,
   MediaRecord,
   PersonOverview,
   PetOverview,
@@ -114,6 +115,7 @@ const imagePreviewDialog = document.querySelector<HTMLDialogElement>("#imagePrev
 const closeImagePreviewButton = document.querySelector<HTMLButtonElement>("#closeImagePreview")!;
 const imagePreviewImage = document.querySelector<HTMLImageElement>("#imagePreviewImage")!;
 const imagePreviewCaption = document.querySelector<HTMLDivElement>("#imagePreviewCaption")!;
+const imagePreviewDetails = document.querySelector<HTMLDivElement>("#imagePreviewDetails")!;
 const searchPanel = document.querySelector<HTMLElement>("#searchPanel")!;
 const searchPersons = document.querySelector<HTMLDivElement>("#searchPersons")!;
 const searchPets = document.querySelector<HTMLDivElement>("#searchPets")!;
@@ -757,6 +759,397 @@ function fullPreviewUrl(mediaId: number): string {
   return `image-sorter-preview://media/${mediaId}`;
 }
 
+function detailText(value: unknown, fallback = "—"): string {
+  if (value === null || value === undefined || value === "") return fallback;
+  return String(value);
+}
+
+function detailPercent(value: number | null): string {
+  return value === null || !Number.isFinite(value)
+    ? "—"
+    : Math.round(value * 100).toLocaleString("de-DE") + " %";
+}
+
+function detailTimestamp(value: string | null): string {
+  return value ? value.replace("T", " ") : "—";
+}
+
+function appendDetailSection(
+  title: string,
+  content: HTMLElement
+): void {
+  const section = document.createElement("section");
+  section.className = "image-detail-section";
+  const heading = document.createElement("h3");
+  heading.textContent = title;
+  const body = document.createElement("div");
+  body.className = "image-detail-section-body";
+  body.appendChild(content);
+  section.append(heading, body);
+  imagePreviewDetails.appendChild(section);
+}
+
+function detailGrid(rows: Array<[string, unknown]>): HTMLDListElement {
+  const dl = document.createElement("dl");
+  dl.className = "image-detail-grid";
+  for (const [label, value] of rows) {
+    const dt = document.createElement("dt");
+    dt.textContent = label;
+    const dd = document.createElement("dd");
+    dd.textContent = detailText(value);
+    dl.append(dt, dd);
+  }
+  return dl;
+}
+
+function detailChips(values: string[]): HTMLElement {
+  const wrapper = document.createElement("div");
+  wrapper.className = "image-detail-chips";
+  if (values.length === 0) {
+    const empty = document.createElement("span");
+    empty.className = "image-preview-detail-empty";
+    empty.textContent = "—";
+    wrapper.appendChild(empty);
+    return wrapper;
+  }
+  for (const value of values) {
+    const chip = document.createElement("span");
+    chip.className = "image-detail-chip";
+    chip.textContent = value;
+    wrapper.appendChild(chip);
+  }
+  return wrapper;
+}
+
+function renderImagePreviewDetails(details: MediaDetails): void {
+  imagePreviewDetails.replaceChildren();
+
+  const fileRows: Array<[string, unknown]> = [
+    ["Datei", details.relativePath],
+    ["Vollständiger Pfad", details.absolutePath],
+    ["Dateityp", details.extension],
+    ["Größe", formatBytes(details.sizeBytes)],
+    ["Status", details.availability],
+    ["SHA-256", details.sha256],
+    ["Datei geändert", new Date(details.mtimeMs).toLocaleString("de-DE")],
+    ["Erstmals gesehen", detailTimestamp(details.firstSeenAt)],
+    ["Zuletzt gesehen", detailTimestamp(details.lastSeenAt)],
+    ["Inhalt geändert", detailTimestamp(details.lastChangedAt)],
+    ["Verschoben", detailTimestamp(details.lastMovedAt)],
+    ["Dubletten", details.duplicateCount],
+    ["Geräte-ID", details.deviceId],
+    ["Inode", details.inode],
+    ["Papierkorbpfad", details.recyclePath]
+  ];
+  appendDetailSection("Datei", detailGrid(fileRows));
+
+  const technicalRows: Array<[string, unknown]> = [];
+  if (details.technicalProbe) {
+    const probeLabels: Record<string, string> = {
+      exists: "Datei erreichbar",
+      sizeBytes: "Prüfgröße",
+      mtimeNs: "mtime ns",
+      mimeType: "MIME-Typ",
+      extension: "Prüf-Endung",
+      expectedSha256: "Erwarteter SHA-256"
+    };
+    for (const [key, value] of Object.entries(details.technicalProbe)) {
+      if (key === "module" || key === "path") continue;
+      technicalRows.push([
+        probeLabels[key] ?? key,
+        key === "sizeBytes" && typeof value === "number" ? formatBytes(value) : value
+      ]);
+    }
+  }
+
+  if (details.imageMetadata) {
+    const meta = details.imageMetadata;
+    technicalRows.push(
+      ["Abmessungen", meta.width + " × " + meta.height + " px"],
+      ["Format", meta.format],
+      ["Farbmodus", meta.colorMode],
+      ["EXIF-Ausrichtung", meta.orientation],
+      ["Aufnahmezeit", detailTimestamp(meta.capturedAt)],
+      ["Kamerahersteller", meta.cameraMake],
+      ["Kameramodell", meta.cameraModel],
+      ["Objektiv", meta.lensModel],
+      [
+        "GPS",
+        meta.gpsLatitude !== null && meta.gpsLongitude !== null
+          ? meta.gpsLatitude.toFixed(6) + ", " + meta.gpsLongitude.toFixed(6)
+          : null
+      ],
+      ["Metadaten aktualisiert", detailTimestamp(meta.updatedAt)]
+    );
+  }
+  appendDetailSection(
+    "Technische Daten / EXIF",
+    technicalRows.length > 0
+      ? detailGrid(technicalRows)
+      : Object.assign(document.createElement("div"), {
+          className: "image-preview-detail-empty",
+          textContent: "Noch keine technischen Bildmetadaten vorhanden."
+        })
+  );
+
+  const faceList = document.createElement("div");
+  faceList.className = "image-detail-list";
+  if (details.faces.length === 0) {
+    faceList.textContent = "Keine Gesichter erkannt.";
+    faceList.classList.add("image-preview-detail-empty");
+  } else {
+    for (const face of details.faces) {
+      const item = document.createElement("div");
+      item.className = "image-detail-item image-detail-crop-row";
+      const crop = document.createElement("img");
+      crop.className = "image-detail-crop";
+      crop.src = faceCropUrl(face.id);
+      crop.alt = "";
+
+      const text = document.createElement("div");
+      const title = document.createElement("strong");
+      title.textContent = face.personName
+        ? "Person: " + face.personName
+        : face.candidateId !== null
+          ? "Personenkandidat #" + face.candidateId
+          : "Person noch nicht zugeordnet";
+
+      const meta = document.createElement("small");
+      const parts = [
+        "Erkennung " + detailPercent(face.score),
+        face.embeddingReady
+          ? "Gesichtsmerkmale: " + (face.embeddingModel ?? "bereit")
+          : "Gesichtsmerkmale noch nicht vorhanden",
+        face.assignmentSource ? "Zuordnung: " + face.assignmentSource : null,
+        face.assignmentConfidence !== null
+          ? "Zuordnung " + detailPercent(face.assignmentConfidence)
+          : null,
+        face.candidateSimilarity !== null
+          ? "Kandidat-Ähnlichkeit " + detailPercent(face.candidateSimilarity)
+          : null,
+        face.detectorVersion
+      ].filter(Boolean);
+      meta.textContent = parts.join(" · ");
+      text.append(title, meta);
+      item.append(crop, text);
+      faceList.appendChild(item);
+    }
+  }
+  appendDetailSection(
+    "Personen / Gesichter (" + details.faces.length.toLocaleString("de-DE") + ")",
+    faceList
+  );
+
+  const petList = document.createElement("div");
+  petList.className = "image-detail-list";
+  if (details.pets.length === 0) {
+    petList.textContent = "Keine Haustiere erkannt.";
+    petList.classList.add("image-preview-detail-empty");
+  } else {
+    for (const pet of details.pets) {
+      const item = document.createElement("div");
+      item.className = "image-detail-item image-detail-crop-row";
+      const crop = document.createElement("img");
+      crop.className = "image-detail-crop";
+      crop.src = petCropUrl(pet.id);
+      crop.alt = "";
+
+      const text = document.createElement("div");
+      const title = document.createElement("strong");
+      const species = pet.petClass === "cat" ? "Katze" : "Hund";
+      title.textContent = pet.petName
+        ? species + ": " + pet.petName
+        : pet.candidateId !== null
+          ? species + " · Kandidat #" + pet.candidateId
+          : species + " noch nicht zugeordnet";
+
+      const meta = document.createElement("small");
+      meta.textContent = [
+        "Erkennung " + detailPercent(pet.score),
+        "Modelle " + pet.agreementCount,
+        pet.sources.length > 0 ? pet.sources.join(" + ") : null,
+        pet.embeddingReady
+          ? "Merkmale: " + (pet.embeddingModel ?? "bereit")
+          : "Merkmale noch nicht vorhanden",
+        pet.assignmentSource ? "Zuordnung: " + pet.assignmentSource : null,
+        pet.assignmentConfidence !== null
+          ? "Zuordnung " + detailPercent(pet.assignmentConfidence)
+          : null,
+        pet.candidateSimilarity !== null
+          ? "Kandidat-Ähnlichkeit " + detailPercent(pet.candidateSimilarity)
+          : null
+      ].filter(Boolean).join(" · ");
+      text.append(title, meta);
+      item.append(crop, text);
+      petList.appendChild(item);
+    }
+  }
+  appendDetailSection(
+    "Haustiere (" + details.pets.length.toLocaleString("de-DE") + ")",
+    petList
+  );
+
+  const objectList = document.createElement("div");
+  objectList.className = "image-detail-list";
+  if (details.objects.length === 0) {
+    objectList.textContent = "Keine allgemeinen Motive gespeichert.";
+    objectList.classList.add("image-preview-detail-empty");
+  } else {
+    for (const object of details.objects) {
+      const item = document.createElement("div");
+      item.className = "image-detail-item";
+      const title = document.createElement("strong");
+      title.textContent =
+        (MOTIF_LABELS_DE[object.label] ?? object.label) +
+        (object.raw ? " · Rohdetektion" : " · fusioniert");
+      const meta = document.createElement("small");
+      meta.textContent = [
+        "Score " + detailPercent(object.score),
+        object.agreementCount !== null ? "Übereinstimmung " + object.agreementCount : null,
+        object.sources.length > 0 ? object.sources.join(" + ") : null,
+        object.version
+      ].filter(Boolean).join(" · ");
+      item.append(title, meta);
+      objectList.appendChild(item);
+    }
+  }
+  appendDetailSection(
+    "Motive / Objekte (" + details.objects.length.toLocaleString("de-DE") + ")",
+    objectList
+  );
+
+  const semanticBody = document.createElement("div");
+  if (details.semantic) {
+    const semantic = details.semantic;
+    const description = document.createElement("p");
+    description.className = "image-detail-semantic-description";
+    description.textContent = semantic.description || "Keine Beschreibung.";
+    semanticBody.appendChild(description);
+
+    for (const [label, values] of [
+      ["Motive", semantic.subjects],
+      ["Handlungen", semantic.actions],
+      ["Szene", semantic.scenes],
+      ["Sichtbarer Text", semantic.visibleText],
+      ["Suchbegriffe", semantic.tags],
+      ["Konzepte", semantic.concepts]
+    ] as Array<[string, string[]]>) {
+      const heading = document.createElement("strong");
+      heading.textContent = label;
+      heading.style.display = "block";
+      heading.style.margin = "8px 0 5px";
+      heading.style.fontSize = "11px";
+      semanticBody.append(heading, detailChips(values));
+    }
+
+    semanticBody.appendChild(detailGrid([
+      ["Modell", semantic.model],
+      ["Profil", semantic.profileVersion],
+      ["Bereiche", semantic.regionCount],
+      ["JSON repariert", semantic.repaired ? "Ja" : "Nein"],
+      ["Aktualisiert", detailTimestamp(semantic.updatedAt)]
+    ]));
+
+    if (semantic.regions.length > 0) {
+      const regions = document.createElement("details");
+      regions.style.marginTop = "9px";
+      const summary = document.createElement("summary");
+      summary.textContent = "Einzelergebnisse der " + semantic.regions.length + " Bildbereiche";
+      const pre = document.createElement("pre");
+      pre.className = "analysis-error-message";
+      pre.textContent = JSON.stringify(semantic.regions, null, 2);
+      regions.append(summary, pre);
+      semanticBody.appendChild(regions);
+    }
+
+    const timings = document.createElement("details");
+    timings.style.marginTop = "8px";
+    const timingSummary = document.createElement("summary");
+    timingSummary.textContent = "Qwen-Laufzeiten";
+    const timingPre = document.createElement("pre");
+    timingPre.className = "analysis-error-message";
+    timingPre.textContent = JSON.stringify(semantic.timings, null, 2);
+    timings.append(timingSummary, timingPre);
+    semanticBody.appendChild(timings);
+  } else {
+    semanticBody.className = "image-preview-detail-empty";
+    semanticBody.textContent = "Qwen-4B-Katalogsemantik noch nicht vorhanden.";
+  }
+  appendDetailSection("Qwen-4B-Semantik", semanticBody);
+
+  appendDetailSection(
+    "SigLIP2",
+    details.semanticEmbedding
+      ? detailGrid([
+          ["Modell", details.semanticEmbedding.model],
+          ["Dimensionen", details.semanticEmbedding.dimension],
+          ["Max. Patches", details.semanticEmbedding.maxNumPatches],
+          ["Präzision", details.semanticEmbedding.precision],
+          ["Aktualisiert", detailTimestamp(details.semanticEmbedding.updatedAt)]
+        ])
+      : Object.assign(document.createElement("div"), {
+          className: "image-preview-detail-empty",
+          textContent: "Noch kein SigLIP2-Vektor vorhanden."
+        })
+  );
+
+  const jobs = document.createElement("div");
+  if (details.analysisJobs.length === 0) {
+    jobs.className = "image-preview-detail-empty";
+    jobs.textContent = "Keine Analysejobs vorhanden.";
+  } else {
+    for (const job of details.analysisJobs) {
+      const row = document.createElement("div");
+      row.className = "image-detail-job";
+      const module = document.createElement("code");
+      module.textContent = job.module;
+      const status = document.createElement("span");
+      status.className = "image-detail-job-status " + job.status;
+      status.textContent = job.status;
+      const meta = document.createElement("small");
+      meta.textContent =
+        "Versuche: " + job.attempts.toLocaleString("de-DE") +
+        (job.finishedAt ? " · fertig " + detailTimestamp(job.finishedAt) : "") +
+        (job.errorMessage ? " · " + job.errorMessage : "");
+      meta.style.gridColumn = "1 / -1";
+      row.append(module, status, meta);
+      jobs.appendChild(row);
+    }
+  }
+  appendDetailSection("Analyse-Pipeline", jobs);
+}
+
+async function loadImagePreviewDetails(mediaId: number): Promise<void> {
+  imagePreviewDetails.replaceChildren();
+  const loading = document.createElement("div");
+  loading.className = "image-preview-detail-loading";
+  loading.textContent = "Daten werden geladen …";
+  imagePreviewDetails.appendChild(loading);
+
+  try {
+    const details = await window.imageSorter.catalog.getMediaDetails(mediaId);
+    if (!imagePreviewDialog.open) return;
+    if (!details) {
+      imagePreviewDetails.replaceChildren();
+      const empty = document.createElement("div");
+      empty.className = "image-preview-detail-empty";
+      empty.textContent = "Für dieses Medium wurden keine Detaildaten gefunden.";
+      imagePreviewDetails.appendChild(empty);
+      return;
+    }
+    renderImagePreviewDetails(details);
+  } catch (error) {
+    if (!imagePreviewDialog.open) return;
+    imagePreviewDetails.replaceChildren();
+    const message = document.createElement("div");
+    message.className = "image-preview-detail-error";
+    message.textContent =
+      "Detaildaten konnten nicht geladen werden: " +
+      (error instanceof Error ? error.message : String(error));
+    imagePreviewDetails.appendChild(message);
+  }
+}
+
 function openImagePreview(mediaId: number, caption: string): void {
   imagePreviewImage.src = fullPreviewUrl(mediaId);
   imagePreviewImage.alt = caption;
@@ -765,6 +1158,8 @@ function openImagePreview(mediaId: number, caption: string): void {
   if (!imagePreviewDialog.open) {
     imagePreviewDialog.showModal();
   }
+
+  void loadImagePreviewDetails(mediaId);
 }
 
 function makePreviewable(
@@ -3042,6 +3437,7 @@ imagePreviewDialog.addEventListener("click", (event) => {
 imagePreviewDialog.addEventListener("close", () => {
   imagePreviewImage.removeAttribute("src");
   imagePreviewCaption.textContent = "";
+  imagePreviewDetails.replaceChildren();
 });
 
 sourceSelect.addEventListener("change", () => {
