@@ -147,6 +147,7 @@ let lastPetFusionDone = -1;
 let lastPetEmbeddingDone = -1;
 let lastObjectVerificationDone = -1;
 let lastSemanticDone = -1;
+let lastPipelineIssueTotal = -1;
 let analysisRefreshTimer: number | null = null;
 let searchFacetsSourceId: number | null = null;
 let latestAnalysisStatus: AnalysisWorkerStatus | null = null;
@@ -727,8 +728,10 @@ function renderPipelineStatus(status: PipelineStatus): void {
     0
   );
 
-  analysisErrorCount.textContent = totalIssues.toLocaleString("de-DE");
-  analysisErrorsButton.hidden = totalIssues === 0;
+  if (totalIssues !== lastPipelineIssueTotal) {
+    lastPipelineIssueTotal = totalIssues;
+    void refreshAnalysisErrorCount();
+  }
 
   if (!visualDataChanged) return;
 
@@ -3099,13 +3102,31 @@ function renderAnalysisErrors(errors: AnalysisErrorRecord[]): void {
   analysisErrorList.appendChild(fragment);
 }
 
+async function refreshAnalysisErrorCount(): Promise<number> {
+  const sourceId = selectedSourceId() ?? undefined;
+  const count = await window.imageSorter.analysis.countErrors(sourceId);
+  analysisErrorCount.textContent = count.toLocaleString("de-DE");
+  analysisErrorsButton.hidden = count === 0;
+  return count;
+}
+
 async function loadAnalysisErrors(): Promise<void> {
   const sourceId = selectedSourceId() ?? undefined;
-  const errors = await window.imageSorter.analysis.listErrors(sourceId, 300);
-  renderAnalysisErrors(errors);
+  const [errors, total] = await Promise.all([
+    window.imageSorter.analysis.listErrors(sourceId, 300),
+    window.imageSorter.analysis.countErrors(sourceId)
+  ]);
 
-  analysisErrorCount.textContent = errors.length.toLocaleString("de-DE");
-  analysisErrorsButton.hidden = errors.length === 0;
+  renderAnalysisErrors(errors);
+  analysisErrorSummary.textContent =
+    errors.length < total
+      ? errors.length.toLocaleString("de-DE") +
+        " von " + total.toLocaleString("de-DE") + " Fehlern angezeigt"
+      : total.toLocaleString("de-DE") + " " +
+        (total === 1 ? "Fehler" : "Fehler");
+
+  analysisErrorCount.textContent = total.toLocaleString("de-DE");
+  analysisErrorsButton.hidden = total === 0;
 }
 
 async function refreshCatalog(): Promise<void> {
@@ -3141,6 +3162,7 @@ async function refreshCatalog(): Promise<void> {
   }
 
   const stats = await window.imageSorter.catalog.getStats(sourceId);
+  await refreshAnalysisErrorCount();
 
   totalCount.textContent = stats.total.toLocaleString("de-DE");
   availableCount.textContent = stats.available.toLocaleString("de-DE");
