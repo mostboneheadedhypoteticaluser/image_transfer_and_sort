@@ -1700,6 +1700,10 @@ td .badge + .badge {
   border-radius: 10px;
 }
 
+.qwen-benchmark-models {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
 .qwen-benchmark-profiles legend {
   padding: 0 6px;
   color: #68717d;
@@ -1875,7 +1879,8 @@ td .badge + .badge {
 }
 
 @media (max-width: 1000px) {
-  .qwen-benchmark-profiles {
+  .qwen-benchmark-profiles,
+  .qwen-benchmark-models {
     grid-template-columns: 1fr;
   }
 
