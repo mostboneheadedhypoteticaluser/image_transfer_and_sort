@@ -1,6 +1,8 @@
 import type {
   AnalysisErrorRecord,
   AnalysisWorkerStatus,
+  CatalogWatchEvent,
+  CatalogWatchSnapshot,
   QwenBenchmarkModel,
   QwenBenchmarkProfile,
   QwenBenchmarkStageResult,
@@ -50,6 +52,9 @@ const petsTabCount = document.querySelector<HTMLSpanElement>("#petsTabCount")!;
 const recycleTabCount = document.querySelector<HTMLSpanElement>("#recycleTabCount")!;
 const progressText = document.querySelector<HTMLSpanElement>("#progressText")!;
 const progressBar = document.querySelector<HTMLDivElement>("#progressBar")!;
+const watchState = document.querySelector<HTMLSpanElement>("#watchState")!;
+const watchDetail = document.querySelector<HTMLElement>("#watchDetail")!;
+const watchHistory = document.querySelector<HTMLDivElement>("#watchHistory")!;
 const workerState = document.querySelector<HTMLSpanElement>("#workerState")!;
 const totalCount = document.querySelector<HTMLSpanElement>("#totalCount")!;
 const availableCount = document.querySelector<HTMLSpanElement>("#availableCount")!;
@@ -157,6 +162,10 @@ let qwenBenchmarkProgressCurrent: {
 } | null = null;
 let qwenBenchmarkRunError: string | null = null;
 let automaticQwenEnabled = false;
+let catalogWatchSnapshot: CatalogWatchSnapshot = {
+  sources: [],
+  history: []
+};
 
 function renderAutomaticQwenState(enabled: boolean): void {
   automaticQwenEnabled = enabled;
@@ -1210,6 +1219,200 @@ function isEditingPetView(): boolean {
     active instanceof HTMLSelectElement ||
     active instanceof HTMLTextAreaElement
   );
+}
+
+function updateCatalogWatchSnapshot(event: CatalogWatchEvent): void {
+  catalogWatchSnapshot.history = [
+    event,
+    ...catalogWatchSnapshot.history.filter(
+      (item) =>
+        !(
+          item.sourceId === event.sourceId &&
+          item.occurredAt === event.occurredAt &&
+          item.kind === event.kind &&
+          item.message === event.message
+        )
+    )
+  ].slice(0, 50);
+
+  const existingIndex = catalogWatchSnapshot.sources.findIndex(
+    (source) => source.sourceId === event.sourceId
+  );
+  const existing = existingIndex >= 0
+    ? catalogWatchSnapshot.sources[existingIndex]
+    : {
+        sourceId: event.sourceId,
+        sourcePath: event.sourcePath,
+        state: "WATCHING" as const,
+        recursive: true,
+        lastEventAt: null,
+        lastScanAt: null
+      };
+
+  const next = {
+    ...existing,
+    sourcePath: event.sourcePath || existing.sourcePath,
+    lastEventAt: event.occurredAt,
+    state:
+      event.kind === "SCAN_STARTED"
+        ? "SCANNING" as const
+        : event.kind === "ERROR"
+          ? "ERROR" as const
+          : event.kind === "FALLBACK"
+            ? "FALLBACK" as const
+            : event.kind === "WATCHING"
+              ? "WATCHING" as const
+              : event.kind === "SCAN_FINISHED"
+                ? (existing.recursive ? "WATCHING" as const : "FALLBACK" as const)
+                : existing.state,
+    recursive:
+      event.kind === "FALLBACK"
+        ? false
+        : event.kind === "WATCHING"
+          ? true
+          : existing.recursive,
+    lastScanAt:
+      event.kind === "SCAN_FINISHED"
+        ? event.occurredAt
+        : existing.lastScanAt
+  };
+
+  if (existingIndex >= 0) {
+    catalogWatchSnapshot.sources.splice(existingIndex, 1, next);
+  } else {
+    catalogWatchSnapshot.sources.push(next);
+  }
+}
+
+function renderCatalogWatchState(): void {
+  const sourceId = selectedSourceId();
+
+  if (sourceId === null) {
+    watchState.className = "watch-state waiting";
+    watchState.textContent = "Keine Quelle gewählt";
+    watchDetail.textContent =
+      "Nach dem Hinzufügen einer Quelle startet die Live-Überwachung automatisch.";
+    watchHistory.replaceChildren();
+    const empty = document.createElement("div");
+    empty.className = "watch-history-empty";
+    empty.textContent = "Noch keine Live-Änderungen erkannt.";
+    watchHistory.appendChild(empty);
+    return;
+  }
+
+  const source = catalogWatchSnapshot.sources.find(
+    (item) => item.sourceId === sourceId
+  );
+
+  if (!source) {
+    watchState.className = "watch-state waiting";
+    watchState.textContent = "Live-Überwachung wird vorbereitet …";
+    watchDetail.textContent =
+      "Neue, geänderte, verschobene und gelöschte Medien werden automatisch erkannt.";
+  } else {
+    watchState.className =
+      "watch-state " +
+      (source.state === "WATCHING"
+        ? "watching"
+        : source.state === "SCANNING"
+          ? "scanning"
+          : source.state === "FALLBACK"
+            ? "fallback"
+            : "error");
+
+    watchState.textContent =
+      source.state === "WATCHING"
+        ? "● Live-Überwachung aktiv"
+        : source.state === "SCANNING"
+          ? "↻ Automatischer Abgleich läuft"
+          : source.state === "FALLBACK"
+            ? "Live-Watcher eingeschränkt"
+            : "Live-Überwachung gestört";
+
+    watchDetail.textContent =
+      source.state === "WATCHING"
+        ? "Rekursiv überwacht · Sicherheitsabgleich alle 15 Minuten" +
+          (source.lastScanAt
+            ? " · letzter Auto-Abgleich " +
+              new Date(source.lastScanAt).toLocaleTimeString("de-DE")
+            : "")
+        : source.state === "SCANNING"
+          ? "Dateisystemänderungen werden mit dem Katalog abgeglichen …"
+          : source.state === "FALLBACK"
+            ? "Wurzelordner wird beobachtet · vollständiger Sicherheitsabgleich alle 15 Minuten"
+            : "Der 15-Minuten-Sicherheitsabgleich versucht die Quelle weiterhin erneut.";
+  }
+
+  watchHistory.replaceChildren();
+  const rows: Array<{
+    occurredAt: string;
+    kind: string;
+    className: string;
+    path: string;
+  }> = [];
+
+  for (const event of catalogWatchSnapshot.history) {
+    if (event.sourceId !== sourceId) continue;
+
+    if (event.kind === "SCAN_FINISHED" && event.scanResult) {
+      for (const change of event.scanResult.changes) {
+        const mapping = {
+          ADDED: ["NEU", "added"],
+          MOVED: ["VERSCHOBEN", "moved"],
+          CHANGED: ["GEÄNDERT", "changed"],
+          MISSING: ["GELÖSCHT", "missing"],
+          RECYCLE: ["PAPIERKORB", "recycle"],
+          RECYCLE_AMBIGUOUS: ["PAPIERKORB?", "recycle"]
+        } as const;
+        const [label, className] = mapping[change.kind];
+        rows.push({
+          occurredAt: event.occurredAt,
+          kind: label,
+          className,
+          path:
+            change.kind === "MOVED" && change.previousPath
+              ? change.previousPath + " → " + change.path
+              : change.path
+        });
+      }
+    } else if (event.kind === "ERROR" || event.kind === "FALLBACK") {
+      rows.push({
+        occurredAt: event.occurredAt,
+        kind: event.kind === "ERROR" ? "FEHLER" : "HINWEIS",
+        className: event.kind === "ERROR" ? "missing" : "changed",
+        path: event.message
+      });
+    }
+
+    if (rows.length >= 50) break;
+  }
+
+  if (rows.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "watch-history-empty";
+    empty.textContent = "Noch keine Dateiänderungen erkannt.";
+    watchHistory.appendChild(empty);
+    return;
+  }
+
+  for (const row of rows.slice(0, 50)) {
+    const entry = document.createElement("div");
+    entry.className = "watch-history-entry " + row.className;
+
+    const time = document.createElement("time");
+    time.textContent = new Date(row.occurredAt).toLocaleTimeString("de-DE");
+
+    const kind = document.createElement("span");
+    kind.className = "watch-history-kind";
+    kind.textContent = row.kind;
+
+    const filePath = document.createElement("span");
+    filePath.className = "watch-history-path";
+    filePath.textContent = row.path;
+
+    entry.append(time, kind, filePath);
+    watchHistory.appendChild(entry);
+  }
 }
 
 function selectedSourceId(): number | null {
@@ -3001,6 +3204,7 @@ async function loadSources(preselectId?: number): Promise<void> {
   }
 
   if (preselectId !== undefined) sourceSelect.value = String(preselectId);
+  renderCatalogWatchState();
   await refreshCatalog();
 }
 
@@ -3046,7 +3250,8 @@ addSourceButton.addEventListener("click", () => {
     if (!selected) return;
     const source = await window.imageSorter.catalog.addSource(selected);
     await loadSources(source.id);
-    progressText.textContent = "Quelle hinzugefügt. Bereit zum Scannen.";
+    progressText.textContent =
+      "Quelle hinzugefügt. Live-Überwachung und erster automatischer Abgleich wurden gestartet.";
   });
 });
 
@@ -3441,6 +3646,7 @@ imagePreviewDialog.addEventListener("close", () => {
 });
 
 sourceSelect.addEventListener("change", () => {
+  renderCatalogWatchState();
   clearSearchControls();
   searchFacetsSourceId = null;
   searchTabCount.textContent = "0";
@@ -3475,6 +3681,38 @@ refreshButton.addEventListener("click", () => void runSafely(refreshCatalog));
 window.imageSorter.catalog.onProgress((progress) => {
   if (progress.sourceId !== selectedSourceId()) return;
   progressText.textContent = progress.message;
+});
+
+window.imageSorter.catalog.onWatchEvent((event) => {
+  updateCatalogWatchSnapshot(event);
+  renderCatalogWatchState();
+
+  if (event.sourceId !== selectedSourceId()) return;
+
+  if (event.kind === "CHANGE_DETECTED" || event.kind === "SCAN_STARTED") {
+    progressBar.classList.add("active");
+    progressText.textContent = event.message;
+  }
+
+  if (event.kind === "SCAN_FINISHED") {
+    progressBar.classList.remove("active");
+    progressText.textContent = event.message;
+
+    if (
+      !scanning &&
+      !restoring &&
+      !resetting &&
+      !isEditingPersonView() &&
+      !isEditingPetView()
+    ) {
+      void runSafely(refreshCatalog);
+    }
+  }
+
+  if (event.kind === "ERROR") {
+    progressBar.classList.remove("active");
+    progressText.textContent = event.message;
+  }
 });
 
 window.imageSorter.analysis.onStatus((status) => {
@@ -3559,7 +3797,9 @@ void window.imageSorter.analysis
   });
 
 void runSafely(async () => {
+  catalogWatchSnapshot = await window.imageSorter.catalog.getWatchSnapshot();
   await loadSources();
+  renderCatalogWatchState();
   workerState.textContent = "Katalog-Worker aktiv";
   workerState.classList.add("ready");
 });
