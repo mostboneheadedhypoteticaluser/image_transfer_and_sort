@@ -96,6 +96,7 @@ const copyQwenBenchmarkButton = document.querySelector<HTMLButtonElement>("#copy
 const qwenBenchmarkFilePath = document.querySelector<HTMLElement>("#qwenBenchmarkFilePath")!;
 const qwenBenchmarkLive = document.querySelector<HTMLDivElement>("#qwenBenchmarkLive")!;
 const qwenBenchmarkResults = document.querySelector<HTMLDivElement>("#qwenBenchmarkResults")!;
+const qwenBenchmarkSearchProbe = document.querySelector<HTMLInputElement>("#qwenBenchmarkSearchProbe")!;
 const qwenBenchmarkModelInputs = Array.from(
   document.querySelectorAll<HTMLInputElement>('input[name="qwenBenchmarkModel"]')
 );
@@ -170,6 +171,82 @@ function benchmarkModelLabel(model: QwenBenchmarkModel): string {
   if (model === "qwen3vl4b") return "Qwen3-VL 4B Instruct Q4_K_M";
   if (model === "qwen3vl2b") return "Qwen3-VL 2B Instruct Q4_K_M";
   return "MiniCPM-V 4.6 Q4_K_M";
+}
+
+const benchmarkSearchStopWords = new Set([
+  "am", "an", "auf", "bei", "beim", "das", "dem", "den", "der", "die", "ein",
+  "eine", "einem", "einen", "einer", "im", "in", "ist", "mit", "und", "vom",
+  "von", "zu", "zum", "zur"
+]);
+
+function normalizeBenchmarkSearchText(value: string): string {
+  return value
+    .toLocaleLowerCase("de-DE")
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/ß/g, "ss")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function benchmarkSearchProbeResult(stage: QwenBenchmarkStageResult): {
+  matched: number;
+  total: number;
+  details: string[];
+} | null {
+  const query = normalizeBenchmarkSearchText(qwenBenchmarkSearchProbe.value);
+  if (!query) return null;
+
+  const queryTokens = [...new Set(
+    query
+      .split(/\s+/)
+      .filter((token) => token.length >= 2 && !benchmarkSearchStopWords.has(token))
+  )];
+  if (queryTokens.length === 0) return null;
+
+  const fields: Array<[string, string[]]> = [
+    ["Beschreibung", stage.semantic.description ? [stage.semantic.description] : []],
+    ["Motive", stage.semantic.subjects],
+    ["Handlungen", stage.semantic.actions],
+    ["Szene", stage.semantic.scenes],
+    ["Suchbegriffe", stage.semantic.tags],
+    ["Konzepte", stage.semantic.concepts]
+  ];
+
+  const matchedTokens = new Set<string>();
+  const details: string[] = [];
+
+  for (const [label, values] of fields) {
+    const hits: string[] = [];
+    for (const value of values) {
+      const normalized = normalizeBenchmarkSearchText(value);
+      if (!normalized) continue;
+      const words = normalized.split(/\s+/);
+
+      const matches = queryTokens.filter((queryToken) =>
+        words.some((word) =>
+          word === queryToken ||
+          (queryToken.length >= 5 && word.startsWith(queryToken)) ||
+          (word.length >= 5 && queryToken.startsWith(word))
+        )
+      );
+
+      if (matches.length > 0) {
+        matches.forEach((token) => matchedTokens.add(token));
+        hits.push(value);
+      }
+    }
+
+    if (hits.length > 0) {
+      details.push(label + ": " + [...new Set(hits)].slice(0, 4).join(", "));
+    }
+  }
+
+  return {
+    matched: matchedTokens.size,
+    total: queryTokens.length,
+    details
+  };
 }
 
 function benchmarkDuration(ms: number): string {
@@ -360,6 +437,25 @@ function renderQwenBenchmarkResults(): void {
       ? "Die Modellantwort war formal unvollständig. Vollständig gelieferte Felder wurden automatisch übernommen."
       : "";
 
+    const probeResult = benchmarkSearchProbeResult(result);
+    const probeNote = document.createElement("div");
+    probeNote.className = "qwen-benchmark-probe-result";
+    if (probeResult) {
+      const ratio = probeResult.total > 0 ? probeResult.matched / probeResult.total : 0;
+      probeNote.classList.add(
+        ratio >= 0.99 ? "strong" : ratio >= 0.5 ? "partial" : "weak"
+      );
+      probeNote.textContent =
+        "Suchprobe: " +
+        probeResult.matched.toLocaleString("de-DE") +
+        "/" +
+        probeResult.total.toLocaleString("de-DE") +
+        " relevante Begriffe gefunden" +
+        (probeResult.details.length > 0
+          ? " · " + probeResult.details.join(" · ")
+          : "");
+    }
+
     const details = document.createElement("details");
     const detailsSummary = document.createElement("summary");
     detailsSummary.textContent = "Rohdaten anzeigen";
@@ -367,11 +463,10 @@ function renderQwenBenchmarkResults(): void {
     pre.textContent = JSON.stringify(result, null, 2);
     details.append(detailsSummary, pre);
 
-    if (result.semantic.repaired) {
-      card.append(header, metrics, summary, repairedNote, details);
-    } else {
-      card.append(header, metrics, summary, details);
-    }
+    card.append(header, metrics, summary);
+    if (probeResult) card.appendChild(probeNote);
+    if (result.semantic.repaired) card.appendChild(repairedNote);
+    card.appendChild(details);
     qwenBenchmarkResults.appendChild(card);
   }
 
@@ -421,9 +516,11 @@ function renderQwenBenchmarkProgress(status: AnalysisWorkerStatus): void {
 }
 
 function qwenBenchmarkCopyText(): string {
+  const probeQuery = qwenBenchmarkSearchProbe.value.trim();
   const lines = [
     benchmarkModelLabel(qwenBenchmarkModelInRun) + " · Einzelbild-Benchmark",
     "Datei: " + (qwenBenchmarkSelectedPath ?? "—"),
+    ...(probeQuery ? ["Suchprobe: " + probeQuery] : []),
     ""
   ];
 
@@ -443,6 +540,14 @@ function qwenBenchmarkCopyText(): string {
       "Sichtbarer Text: " + (stage.semantic.visibleText.join(" | ") || "—"),
       "Suchbegriffe: " + (stage.semantic.tags.join(", ") || "—"),
       "Abgeleitete Konzepte: " + (stage.semantic.concepts.join(", ") || "—"),
+      ...(probeQuery && benchmarkSearchProbeResult(stage)
+        ? [
+            "Suchprobe-Treffer: " +
+            benchmarkSearchProbeResult(stage)!.matched.toLocaleString("de-DE") +
+            "/" +
+            benchmarkSearchProbeResult(stage)!.total.toLocaleString("de-DE")
+          ]
+        : []),
       ""
     );
   }
@@ -2801,6 +2906,10 @@ runQwenBenchmarkButton.addEventListener("click", () => {
       copyQwenBenchmarkButton.disabled = qwenBenchmarkStages.length === 0;
     }
   });
+});
+
+qwenBenchmarkSearchProbe.addEventListener("input", () => {
+  renderQwenBenchmarkResults();
 });
 
 copyQwenBenchmarkButton.addEventListener("click", () => {
