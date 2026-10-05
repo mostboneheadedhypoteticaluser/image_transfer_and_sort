@@ -938,6 +938,150 @@ function normalizeSearchFilter(raw: SearchFilter | undefined): SearchFilter | un
   };
 }
 
+const SEMANTIC_SEARCH_STOP_WORDS = new Set([
+  "am", "an", "auf", "aus", "bei", "beim", "das", "dem", "den", "der", "die",
+  "ein", "eine", "einem", "einen", "einer", "im", "in", "ist", "mit", "oder",
+  "und", "vom", "von", "vor", "zu", "zum", "zur"
+]);
+
+function normalizeSemanticSearchText(value: unknown): string {
+  return String(value ?? "")
+    .toLocaleLowerCase("de-DE")
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/ß/g, "ss")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function semanticSearchTokens(query: string): string[] {
+  return [...new Set(
+    normalizeSemanticSearchText(query)
+      .split(/\s+/)
+      .filter(
+        (token) =>
+          token.length >= 2 &&
+          !SEMANTIC_SEARCH_STOP_WORDS.has(token)
+      )
+  )];
+}
+
+function semanticSearchTokenMatches(queryToken: string, candidate: string): boolean {
+  if (queryToken === candidate) return true;
+  if (queryToken.length >= 5 && candidate.startsWith(queryToken)) return true;
+  if (candidate.length >= 5 && queryToken.startsWith(candidate)) return true;
+  return false;
+}
+
+function parseSemanticStringList(value: unknown): string[] {
+  if (typeof value !== "string" || !value.trim()) return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed)
+      ? parsed.filter((item): item is string => typeof item === "string")
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function catalogSemanticMatch(
+  query: string,
+  annotation: {
+    description: string;
+    subjects: string[];
+    actions: string[];
+    scenes: string[];
+    visibleText: string[];
+    tags: string[];
+    concepts: string[];
+  }
+): { score: number; reasons: string[] } {
+  const queryTokens = semanticSearchTokens(query);
+  if (queryTokens.length === 0) return { score: 0, reasons: [] };
+
+  const fields: Array<{
+    label: string;
+    values: string[];
+    weight: number;
+  }> = [
+    { label: "Konzept", values: annotation.concepts, weight: 1.00 },
+    { label: "Motiv", values: annotation.subjects, weight: 0.90 },
+    { label: "Handlung", values: annotation.actions, weight: 0.90 },
+    { label: "Suchbegriff", values: annotation.tags, weight: 0.82 },
+    { label: "Szene", values: annotation.scenes, weight: 0.65 },
+    {
+      label: "Beschreibung",
+      values: annotation.description ? [annotation.description] : [],
+      weight: 0.60
+    },
+    { label: "Bildtext", values: annotation.visibleText, weight: 0.55 }
+  ];
+
+  let scoreSum = 0;
+  let conceptHit = false;
+  let subjectHit = false;
+  const reasons: Array<{ weight: number; text: string }> = [];
+
+  for (const queryToken of queryTokens) {
+    let bestWeight = 0;
+    let bestReason = "";
+
+    for (const field of fields) {
+      for (const value of field.values) {
+        const words = normalizeSemanticSearchText(value).split(/\s+/).filter(Boolean);
+        if (!words.some((word) => semanticSearchTokenMatches(queryToken, word))) {
+          continue;
+        }
+
+        if (field.weight > bestWeight) {
+          bestWeight = field.weight;
+          bestReason = field.label + ": " + value;
+        }
+      }
+    }
+
+    if (bestWeight > 0) {
+      scoreSum += bestWeight;
+      if (bestReason.startsWith("Konzept:")) conceptHit = true;
+      if (bestReason.startsWith("Motiv:")) subjectHit = true;
+      reasons.push({ weight: bestWeight, text: bestReason });
+    }
+  }
+
+  let score = scoreSum / queryTokens.length;
+  if (conceptHit) score += 0.05;
+  if (subjectHit) score += 0.03;
+
+  const normalizedQuery = normalizeSemanticSearchText(query);
+  if (normalizedQuery.length >= 5) {
+    const phraseFields = [
+      ...annotation.concepts,
+      ...annotation.actions,
+      ...annotation.tags,
+      annotation.description
+    ];
+    if (
+      phraseFields.some((value) =>
+        normalizeSemanticSearchText(value).includes(normalizedQuery)
+      )
+    ) {
+      score += 0.07;
+    }
+  }
+
+  const uniqueReasons = [...new Map(
+    reasons
+      .sort((left, right) => right.weight - left.weight)
+      .map((item) => [item.text.toLocaleLowerCase("de-DE"), item.text])
+  ).values()].slice(0, 5);
+
+  return {
+    score: Math.max(0, Math.min(1, score)),
+    reasons: uniqueReasons
+  };
+}
+
 function listMedia(
   sourceId: number,
   requestedLimit: number,
@@ -1013,26 +1157,15 @@ function listMedia(
   }
 
   const semanticActive = Boolean(search?.semanticQuery);
-
-  if (semanticActive) {
-    if (
-      !semantic ||
-      !Array.isArray(semantic.vector) ||
-      semantic.vector.length === 0 ||
-      semantic.dimension !== semantic.vector.length ||
-      !Number.isFinite(semantic.logitScale) ||
-      !Number.isFinite(semantic.logitBias)
-    ) {
-      throw new Error("Semantischer Suchvektor ist nicht verfügbar.");
-    }
-
-    searchClauses.push(
-      "se.input_sha256=m.sha256",
-      "se.model_version=?",
-      "se.dimension=?"
-    );
-    searchArgs.push(semantic.model, semantic.dimension);
-  }
+  const siglipActive = Boolean(
+    semanticActive &&
+    semantic &&
+    Array.isArray(semantic.vector) &&
+    semantic.vector.length > 0 &&
+    semantic.dimension === semantic.vector.length &&
+    Number.isFinite(semantic.logitScale) &&
+    Number.isFinite(semantic.logitBias)
+  );
 
   const searchSql =
     searchClauses.length > 0
@@ -1131,6 +1264,50 @@ function listMedia(
         ELSE NULL
       END AS semantic_vector,
       CASE
+        WHEN msa.media_id IS NOT NULL AND msa.input_sha256=m.sha256 THEN 1
+        ELSE 0
+      END AS catalog_semantic_ready,
+      CASE
+        WHEN msa.media_id IS NOT NULL AND msa.input_sha256=m.sha256
+        THEN msa.model_version
+        ELSE NULL
+      END AS catalog_semantic_model,
+      CASE
+        WHEN msa.media_id IS NOT NULL AND msa.input_sha256=m.sha256
+        THEN msa.description
+        ELSE NULL
+      END AS catalog_description,
+      CASE
+        WHEN msa.media_id IS NOT NULL AND msa.input_sha256=m.sha256
+        THEN msa.subjects_json
+        ELSE '[]'
+      END AS catalog_subjects_json,
+      CASE
+        WHEN msa.media_id IS NOT NULL AND msa.input_sha256=m.sha256
+        THEN msa.actions_json
+        ELSE '[]'
+      END AS catalog_actions_json,
+      CASE
+        WHEN msa.media_id IS NOT NULL AND msa.input_sha256=m.sha256
+        THEN msa.scenes_json
+        ELSE '[]'
+      END AS catalog_scenes_json,
+      CASE
+        WHEN msa.media_id IS NOT NULL AND msa.input_sha256=m.sha256
+        THEN msa.visible_text_json
+        ELSE '[]'
+      END AS catalog_visible_text_json,
+      CASE
+        WHEN msa.media_id IS NOT NULL AND msa.input_sha256=m.sha256
+        THEN msa.tags_json
+        ELSE '[]'
+      END AS catalog_tags_json,
+      CASE
+        WHEN msa.media_id IS NOT NULL AND msa.input_sha256=m.sha256
+        THEN msa.concepts_json
+        ELSE '[]'
+      END AS catalog_concepts_json,
+      CASE
         WHEN m.availability='AVAILABLE' THEN (
           SELECT COUNT(*) - 1
           FROM media_items d
@@ -1145,6 +1322,7 @@ function listMedia(
     LEFT JOIN media_thumbnails t ON t.media_id=m.id
     LEFT JOIN media_image_metadata md ON md.media_id=m.id
     LEFT JOIN semantic_embeddings se ON se.media_id=m.id
+    LEFT JOIN media_semantic_annotations msa ON msa.media_id=m.id
     WHERE m.source_id=?${searchSql}
     ORDER BY
       CASE
@@ -1164,31 +1342,70 @@ function listMedia(
   const mapped = rows.map((row) => {
     let semanticScore: number | null = null;
 
-    if (semanticActive && semantic) {
+    if (siglipActive && semantic) {
       const dimension = Number(row.semantic_dimension);
-      const imageVector = vectorFromBlob(row.semantic_vector, dimension);
 
-      if (dimension !== semantic.vector.length) {
-        return null;
+      if (dimension === semantic.vector.length && row.semantic_vector) {
+        const imageVector = vectorFromBlob(row.semantic_vector, dimension);
+        let dot = 0;
+        for (let index = 0; index < dimension; index += 1) {
+          dot += imageVector[index] * semantic.vector[index];
+        }
+
+        const logit = dot * semantic.logitScale + semantic.logitBias;
+        const score =
+          logit >= 0
+            ? 1 / (1 + Math.exp(-logit))
+            : Math.exp(logit) / (1 + Math.exp(logit));
+
+        if (Number.isFinite(score)) semanticScore = score;
       }
+    }
 
-      let dot = 0;
-      for (let index = 0; index < dimension; index += 1) {
-        dot += imageVector[index] * semantic.vector[index];
-      }
+    const catalogSemanticReady = Boolean(row.catalog_semantic_ready);
+    const catalogDescription = catalogSemanticReady && row.catalog_description
+      ? String(row.catalog_description)
+      : "";
+    const semanticConcepts = catalogSemanticReady
+      ? parseSemanticStringList(row.catalog_concepts_json)
+      : [];
 
-      const logit = dot * semantic.logitScale + semantic.logitBias;
-      semanticScore =
-        logit >= 0
-          ? 1 / (1 + Math.exp(-logit))
-          : Math.exp(logit) / (1 + Math.exp(logit));
+    const catalogMatch =
+      semanticActive && catalogSemanticReady && search
+        ? catalogSemanticMatch(search.semanticQuery, {
+            description: catalogDescription,
+            subjects: parseSemanticStringList(row.catalog_subjects_json),
+            actions: parseSemanticStringList(row.catalog_actions_json),
+            scenes: parseSemanticStringList(row.catalog_scenes_json),
+            visibleText: parseSemanticStringList(row.catalog_visible_text_json),
+            tags: parseSemanticStringList(row.catalog_tags_json),
+            concepts: semanticConcepts
+          })
+        : { score: 0, reasons: [] };
 
-      if (
-        !Number.isFinite(semanticScore) ||
-        semanticScore < (search?.semanticMinProbability ?? 0)
-      ) {
-        return null;
-      }
+    const catalogSemanticScore =
+      semanticActive && catalogSemanticReady
+        ? catalogMatch.score
+        : null;
+
+    const combinedSemanticScore = semanticActive
+      ? semanticScore !== null && catalogSemanticScore !== null
+        ? Math.min(
+            1,
+            Math.max(semanticScore, catalogSemanticScore) +
+              0.15 * Math.min(semanticScore, catalogSemanticScore)
+          )
+        : semanticScore ?? catalogSemanticScore
+      : null;
+
+    if (
+      semanticActive &&
+      (
+        combinedSemanticScore === null ||
+        combinedSemanticScore < (search?.semanticMinProbability ?? 0)
+      )
+    ) {
+      return null;
     }
 
     return {
@@ -1221,12 +1438,23 @@ function listMedia(
     semanticReady: Boolean(row.semantic_ready),
     semanticModel: row.semantic_model ? String(row.semantic_model) : null,
     semanticScore,
+    catalogSemanticReady,
+    catalogSemanticModel: row.catalog_semantic_model
+      ? String(row.catalog_semantic_model)
+      : null,
+    catalogSemanticScore,
+    combinedSemanticScore,
+    semanticMatchReasons: catalogMatch.reasons,
+    semanticDescription: catalogDescription || null,
+    semanticConcepts,
     lastSeenAt: String(row.last_seen_at)
     };
   }).filter((row): row is NonNullable<typeof row> => row !== null);
 
   if (semanticActive) {
     mapped.sort((left, right) =>
+      (right.combinedSemanticScore ?? -1) - (left.combinedSemanticScore ?? -1) ||
+      (right.catalogSemanticScore ?? -1) - (left.catalogSemanticScore ?? -1) ||
       (right.semanticScore ?? -1) - (left.semanticScore ?? -1) ||
       left.relativePath.localeCompare(right.relativePath, "de")
     );
