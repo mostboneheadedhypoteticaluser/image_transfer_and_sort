@@ -376,7 +376,6 @@ function registerIpc(): void {
     // SigLIP2 kann lange rechnen; ein Reset darf nicht parallel einen alten
     // Job nachträglich wieder in die frisch geleerte Datenbank schreiben.
     analysisCoordinator?.stop();
-    analysisCoordinator?.disableAutomaticQwen();
     thumbnailCoordinator?.stop();
     analysis?.stop();
     thumbnailService?.stop();
