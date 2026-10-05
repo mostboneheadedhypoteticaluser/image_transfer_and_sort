@@ -419,8 +419,8 @@
     <dialog id="qwenBenchmarkDialog" class="app-dialog qwen-benchmark-dialog">
       <div class="dialog-header">
         <div>
-          <h2>MiniCPM-V 4.6 · Einzelbild-Benchmark</h2>
-          <p>Semantischen Bildinhalt mit einem kleinen, schnellen Vision-Modell testen – vom Gesamtbild bis zu vielen Kacheln.</p>
+          <h2>Vision-Modell · Einzelbild-Benchmark</h2>
+          <p>MiniCPM-V 4.6 und Qwen3-VL 2B mit identischen Bild- und Kachelstufen vergleichen.</p>
         </div>
         <button id="closeQwenBenchmark" class="dialog-close" type="button" aria-label="Schließen">×</button>
       </div>
@@ -430,6 +430,18 @@
           <button id="pickQwenBenchmarkImage" class="secondary" type="button">Bild auswählen</button>
           <code id="qwenBenchmarkFilePath">Noch kein Bild ausgewählt.</code>
         </div>
+
+        <fieldset class="qwen-benchmark-profiles qwen-benchmark-models">
+          <legend>Vision-Modell</legend>
+          <label>
+            <input type="radio" name="qwenBenchmarkModel" value="minicpm" checked />
+            <span><strong>MiniCPM-V 4.6 Q4_K_M</strong><small>Schnelle Basis · ca. 0,8B Parameter.</small></span>
+          </label>
+          <label>
+            <input type="radio" name="qwenBenchmarkModel" value="qwen3vl2b" />
+            <span><strong>Qwen3-VL 2B Instruct Q4_K_M</strong><small>Nächste Qualitätsstufe · ca. 1,11 GB LLM + 445 MB Vision-Projektor.</small></span>
+          </label>
+        </fieldset>
 
         <fieldset class="qwen-benchmark-profiles">
           <legend>Teststufen · von klein nach groß</legend>
@@ -465,8 +477,9 @@
         </div>
 
         <p class="qwen-benchmark-note">
-          Verwendet wird MiniCPM-V 4.6 Q4_K_M. Der erste Test enthält gegebenenfalls die einmalige Modellladezeit,
-          die separat ausgewiesen wird. Die Kachelergebnisse werden ohne zusätzlichen KI-Aufruf zusammengeführt.
+          MiniCPM-V 4.6 Q4_K_M und Qwen3-VL 2B Instruct Q4_K_M verwenden dieselben Kachelstufen.
+          Der erste Test eines Modells enthält gegebenenfalls die einmalige Modellladezeit, die separat ausgewiesen wird.
+          Die Kachelergebnisse werden ohne zusätzlichen KI-Aufruf zusammengeführt.
           Der Test schreibt nichts in den Katalog und verändert die Personen- oder Haustiererkennung nicht.
         </p>
       </div>
