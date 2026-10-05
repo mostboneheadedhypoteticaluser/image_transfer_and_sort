@@ -8,6 +8,8 @@ import type {
   QwenBenchmarkStageResult,
   PipelineStatus,
   CatalogStats,
+  CatalogWatchEvent,
+  CatalogWatchSnapshot,
   ConfirmPersonResult,
   ConfirmPetResult,
   DuplicateGroup,
@@ -171,6 +173,8 @@ const api = {
     listSources: (): Promise<SourceRecord[]> => ipcRenderer.invoke("catalog:listSources"),
     addSource: (sourcePath: string): Promise<SourceRecord> => ipcRenderer.invoke("catalog:addSource", sourcePath),
     getStats: (sourceId: number): Promise<CatalogStats> => ipcRenderer.invoke("catalog:getStats", sourceId),
+    getWatchSnapshot: (): Promise<CatalogWatchSnapshot> =>
+      ipcRenderer.invoke("catalog:getWatchSnapshot"),
     listMedia: (sourceId: number, limit = 500): Promise<MediaRecord[]> =>
       ipcRenderer.invoke("catalog:listMedia", sourceId, limit),
     getSearchFacets: (sourceId: number): Promise<SearchFacets> =>
@@ -194,6 +198,14 @@ const api = {
       const handler = (_event: Electron.IpcRendererEvent, progress: ScanProgress) => listener(progress);
       ipcRenderer.on("catalog:progress", handler);
       return () => ipcRenderer.removeListener("catalog:progress", handler);
+    },
+    onWatchEvent: (listener: (event: CatalogWatchEvent) => void) => {
+      const handler = (
+        _event: Electron.IpcRendererEvent,
+        event: CatalogWatchEvent
+      ) => listener(event);
+      ipcRenderer.on("catalog:watchEvent", handler);
+      return () => ipcRenderer.removeListener("catalog:watchEvent", handler);
     }
   }
 };
