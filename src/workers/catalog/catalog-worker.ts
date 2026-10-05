@@ -6920,6 +6920,408 @@ async function restoreMedia(mediaId: number): Promise<RestoreResult> {
   };
 }
 
+function getMediaDetails(mediaId: number) {
+  const media = db.prepare(`
+    SELECT
+      m.id,
+      m.source_id,
+      m.relative_path,
+      m.absolute_path,
+      m.extension,
+      m.size_bytes,
+      m.mtime_ms,
+      m.sha256,
+      m.availability,
+      m.device_id,
+      m.inode,
+      m.first_seen_at,
+      m.last_seen_at,
+      m.last_changed_at,
+      m.last_moved_at,
+      m.recycle_path,
+      (
+        SELECT COUNT(*) - 1
+        FROM media_items d
+        WHERE d.source_id=m.source_id
+          AND d.sha256=m.sha256
+          AND d.size_bytes=m.size_bytes
+          AND d.availability='AVAILABLE'
+      ) AS duplicate_count
+    FROM media_items m
+    WHERE m.id=?
+  `).get(mediaId);
+
+  if (!media) return null;
+
+  const currentSha = String(media.sha256);
+
+  const metadata = db.prepare(`
+    SELECT
+      width,
+      height,
+      format,
+      color_mode,
+      orientation,
+      captured_at,
+      camera_make,
+      camera_model,
+      lens_model,
+      gps_latitude,
+      gps_longitude,
+      updated_at
+    FROM media_image_metadata
+    WHERE media_id=?
+      AND input_sha256=?
+  `).get(mediaId, currentSha);
+
+  const faceRows = db.prepare(`
+    SELECT
+      fd.id,
+      fd.detector_version,
+      fd.score,
+      fd.x,
+      fd.y,
+      fd.width,
+      fd.height,
+      fe.model_version AS embedding_model,
+      p.id AS person_id,
+      p.name AS person_name,
+      pfa.assignment_source,
+      pfa.confidence AS assignment_confidence,
+      (
+        SELECT pcf.candidate_id
+        FROM person_candidate_faces pcf
+        WHERE pcf.face_detection_id=fd.id
+        ORDER BY pcf.similarity DESC
+        LIMIT 1
+      ) AS candidate_id,
+      (
+        SELECT pcf.similarity
+        FROM person_candidate_faces pcf
+        WHERE pcf.face_detection_id=fd.id
+        ORDER BY pcf.similarity DESC
+        LIMIT 1
+      ) AS candidate_similarity
+    FROM face_detections fd
+    LEFT JOIN face_embeddings fe
+      ON fe.face_detection_id=fd.id
+      AND fe.input_sha256=?
+    LEFT JOIN person_face_assignments pfa
+      ON pfa.face_detection_id=fd.id
+    LEFT JOIN persons p
+      ON p.id=pfa.person_id
+    WHERE fd.media_id=?
+      AND fd.input_sha256=?
+    ORDER BY fd.detection_index, fd.id
+  `).all(currentSha, mediaId, currentSha);
+
+  const petRows = db.prepare(`
+    SELECT
+      pd.id,
+      pd.pet_class,
+      pd.score,
+      pd.x,
+      pd.y,
+      pd.width,
+      pd.height,
+      pd.fusion_version,
+      pd.agreement_count,
+      pd.sources_json,
+      pe.model_version AS embedding_model,
+      p.id AS pet_id,
+      p.name AS pet_name,
+      pa.assignment_source,
+      pa.confidence AS assignment_confidence,
+      (
+        SELECT pci.candidate_id
+        FROM pet_candidate_items pci
+        WHERE pci.pet_detection_id=pd.id
+        ORDER BY pci.similarity DESC
+        LIMIT 1
+      ) AS candidate_id,
+      (
+        SELECT pci.similarity
+        FROM pet_candidate_items pci
+        WHERE pci.pet_detection_id=pd.id
+        ORDER BY pci.similarity DESC
+        LIMIT 1
+      ) AS candidate_similarity
+    FROM pet_fused_detections pd
+    LEFT JOIN pet_embeddings pe
+      ON pe.pet_detection_id=pd.id
+      AND pe.input_sha256=?
+    LEFT JOIN pet_assignments pa
+      ON pa.pet_detection_id=pd.id
+    LEFT JOIN pets p
+      ON p.id=pa.pet_id
+    WHERE pd.media_id=?
+      AND pd.input_sha256=?
+    ORDER BY pd.detection_index, pd.id
+  `).all(currentSha, mediaId, currentSha);
+
+  const fusedObjects = db.prepare(`
+    SELECT
+      label,
+      score,
+      x,
+      y,
+      width,
+      height,
+      fusion_version AS version,
+      agreement_count,
+      sources_json
+    FROM object_fused_detections
+    WHERE media_id=?
+      AND input_sha256=?
+    ORDER BY detection_index, id
+  `).all(mediaId, currentSha);
+
+  const rawObjects = db.prepare(`
+    SELECT
+      label,
+      score,
+      x,
+      y,
+      width,
+      height,
+      detector_version AS version
+    FROM object_detections
+    WHERE media_id=?
+      AND input_sha256=?
+    ORDER BY detector_version, detection_index, id
+  `).all(mediaId, currentSha);
+
+  const embedding = db.prepare(`
+    SELECT
+      model_version,
+      dimension,
+      max_num_patches,
+      precision,
+      updated_at
+    FROM semantic_embeddings
+    WHERE media_id=?
+      AND input_sha256=?
+  `).get(mediaId, currentSha);
+
+  const semantic = db.prepare(`
+    SELECT
+      model_version,
+      profile_version,
+      description,
+      subjects_json,
+      actions_json,
+      scenes_json,
+      visible_text_json,
+      tags_json,
+      concepts_json,
+      repaired,
+      region_count,
+      regions_json,
+      timings_json,
+      updated_at
+    FROM media_semantic_annotations
+    WHERE media_id=?
+      AND input_sha256=?
+  `).get(mediaId, currentSha);
+
+  const jobs = db.prepare(`
+    SELECT
+      module,
+      status,
+      attempts,
+      error_message,
+      started_at,
+      finished_at,
+      updated_at
+    FROM analysis_jobs
+    WHERE media_id=?
+    ORDER BY id
+  `).all(mediaId);
+
+  const jsonArray = (value: unknown): unknown[] => {
+    if (typeof value !== "string" || !value.trim()) return [];
+    try {
+      const parsed = JSON.parse(value);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  };
+
+  const jsonObject = (value: unknown): Record<string, unknown> => {
+    if (typeof value !== "string" || !value.trim()) return {};
+    try {
+      const parsed = JSON.parse(value);
+      return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+        ? parsed as Record<string, unknown>
+        : {};
+    } catch {
+      return {};
+    }
+  };
+
+  const stringArray = (value: unknown): string[] =>
+    jsonArray(value).filter((entry): entry is string => typeof entry === "string");
+
+  return {
+    mediaId: Number(media.id),
+    sourceId: Number(media.source_id),
+    relativePath: String(media.relative_path),
+    absolutePath: String(media.absolute_path),
+    extension: String(media.extension),
+    sizeBytes: Number(media.size_bytes),
+    mtimeMs: Number(media.mtime_ms),
+    sha256: currentSha,
+    availability: String(media.availability),
+    deviceId: media.device_id ? String(media.device_id) : null,
+    inode: media.inode ? String(media.inode) : null,
+    firstSeenAt: String(media.first_seen_at),
+    lastSeenAt: String(media.last_seen_at),
+    lastChangedAt: String(media.last_changed_at),
+    lastMovedAt: media.last_moved_at ? String(media.last_moved_at) : null,
+    recyclePath: media.recycle_path ? String(media.recycle_path) : null,
+    duplicateCount: Math.max(0, Number(media.duplicate_count ?? 0)),
+    imageMetadata: metadata
+      ? {
+          width: Number(metadata.width),
+          height: Number(metadata.height),
+          format: metadata.format ? String(metadata.format) : null,
+          colorMode: metadata.color_mode ? String(metadata.color_mode) : null,
+          orientation: metadata.orientation === null || metadata.orientation === undefined
+            ? null
+            : Number(metadata.orientation),
+          capturedAt: metadata.captured_at ? String(metadata.captured_at) : null,
+          cameraMake: metadata.camera_make ? String(metadata.camera_make) : null,
+          cameraModel: metadata.camera_model ? String(metadata.camera_model) : null,
+          lensModel: metadata.lens_model ? String(metadata.lens_model) : null,
+          gpsLatitude: metadata.gps_latitude === null || metadata.gps_latitude === undefined
+            ? null
+            : Number(metadata.gps_latitude),
+          gpsLongitude: metadata.gps_longitude === null || metadata.gps_longitude === undefined
+            ? null
+            : Number(metadata.gps_longitude),
+          updatedAt: String(metadata.updated_at)
+        }
+      : null,
+    faces: faceRows.map((row) => ({
+      id: Number(row.id),
+      detectorVersion: String(row.detector_version),
+      score: Number(row.score),
+      x: Number(row.x),
+      y: Number(row.y),
+      width: Number(row.width),
+      height: Number(row.height),
+      embeddingReady: Boolean(row.embedding_model),
+      embeddingModel: row.embedding_model ? String(row.embedding_model) : null,
+      personId: row.person_id === null || row.person_id === undefined ? null : Number(row.person_id),
+      personName: row.person_name ? String(row.person_name) : null,
+      assignmentSource: row.assignment_source ? String(row.assignment_source) : null,
+      assignmentConfidence:
+        row.assignment_confidence === null || row.assignment_confidence === undefined
+          ? null
+          : Number(row.assignment_confidence),
+      candidateId: row.candidate_id === null || row.candidate_id === undefined
+        ? null
+        : Number(row.candidate_id),
+      candidateSimilarity:
+        row.candidate_similarity === null || row.candidate_similarity === undefined
+          ? null
+          : Number(row.candidate_similarity)
+    })),
+    pets: petRows.map((row) => ({
+      id: Number(row.id),
+      petClass: String(row.pet_class) === "cat" ? "cat" : "dog",
+      score: Number(row.score),
+      x: Number(row.x),
+      y: Number(row.y),
+      width: Number(row.width),
+      height: Number(row.height),
+      fusionVersion: String(row.fusion_version),
+      agreementCount: Number(row.agreement_count),
+      sources: stringArray(row.sources_json),
+      embeddingReady: Boolean(row.embedding_model),
+      embeddingModel: row.embedding_model ? String(row.embedding_model) : null,
+      petId: row.pet_id === null || row.pet_id === undefined ? null : Number(row.pet_id),
+      petName: row.pet_name ? String(row.pet_name) : null,
+      assignmentSource: row.assignment_source ? String(row.assignment_source) : null,
+      assignmentConfidence:
+        row.assignment_confidence === null || row.assignment_confidence === undefined
+          ? null
+          : Number(row.assignment_confidence),
+      candidateId: row.candidate_id === null || row.candidate_id === undefined
+        ? null
+        : Number(row.candidate_id),
+      candidateSimilarity:
+        row.candidate_similarity === null || row.candidate_similarity === undefined
+          ? null
+          : Number(row.candidate_similarity)
+    })),
+    objects: [
+      ...fusedObjects.map((row) => ({
+        label: String(row.label),
+        score: Number(row.score),
+        x: Number(row.x),
+        y: Number(row.y),
+        width: Number(row.width),
+        height: Number(row.height),
+        version: String(row.version),
+        agreementCount: Number(row.agreement_count),
+        sources: stringArray(row.sources_json),
+        raw: false
+      })),
+      ...rawObjects.map((row) => ({
+        label: String(row.label),
+        score: Number(row.score),
+        x: Number(row.x),
+        y: Number(row.y),
+        width: Number(row.width),
+        height: Number(row.height),
+        version: String(row.version),
+        agreementCount: null,
+        sources: [],
+        raw: true
+      }))
+    ],
+    semanticEmbedding: embedding
+      ? {
+          model: String(embedding.model_version),
+          dimension: Number(embedding.dimension),
+          maxNumPatches: Number(embedding.max_num_patches),
+          precision: String(embedding.precision),
+          updatedAt: String(embedding.updated_at)
+        }
+      : null,
+    semantic: semantic
+      ? {
+          model: String(semantic.model_version),
+          profileVersion: String(semantic.profile_version),
+          description: String(semantic.description ?? ""),
+          subjects: stringArray(semantic.subjects_json),
+          actions: stringArray(semantic.actions_json),
+          scenes: stringArray(semantic.scenes_json),
+          visibleText: stringArray(semantic.visible_text_json),
+          tags: stringArray(semantic.tags_json),
+          concepts: stringArray(semantic.concepts_json),
+          repaired: Boolean(semantic.repaired),
+          regionCount: Number(semantic.region_count ?? 0),
+          regions: jsonArray(semantic.regions_json),
+          timings: jsonObject(semantic.timings_json),
+          updatedAt: String(semantic.updated_at)
+        }
+      : null,
+    analysisJobs: jobs.map((row) => ({
+      module: String(row.module),
+      status: String(row.status),
+      attempts: Number(row.attempts ?? 0),
+      errorMessage: row.error_message ? String(row.error_message) : null,
+      startedAt: row.started_at ? String(row.started_at) : null,
+      finishedAt: row.finished_at ? String(row.finished_at) : null,
+      updatedAt: String(row.updated_at)
+    }))
+  };
+}
+
+
 function getMediaPreviewInfo(mediaId: number) {
   const row = db.prepare(`
     SELECT id, absolute_path, sha256
@@ -7272,6 +7674,8 @@ async function dispatch(method: CatalogMethod, payload: Record<string, unknown> 
       return getThumbnailInfo(asNumber(payload.mediaId, "mediaId"));
     case "getMediaPreviewInfo":
       return getMediaPreviewInfo(asNumber(payload.mediaId, "mediaId"));
+    case "getMediaDetails":
+      return getMediaDetails(asNumber(payload.mediaId, "mediaId"));
     case "getMediaPath":
       return getMediaPath(asNumber(payload.mediaId, "mediaId"));
     case "scanSource":
