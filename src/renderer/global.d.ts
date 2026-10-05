@@ -57,6 +57,7 @@ declare global {
           listener: (stage: QwenBenchmarkStageResult) => void
         ): () => void;
         listErrors(sourceId?: number, limit?: number): Promise<AnalysisErrorRecord[]>;
+        countErrors(sourceId?: number): Promise<number>;
         retryJob(jobId: number): Promise<RetryAnalysisResult>;
         retryAll(sourceId?: number): Promise<RetryAnalysisResult>;
         openFile(mediaId: number): Promise<{ opened: true }>;
