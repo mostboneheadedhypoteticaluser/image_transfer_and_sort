@@ -4192,7 +4192,7 @@ def qwen3vl2b_generate(
         )
         raise RuntimeError(
             "Qwen3-VL 2B hat für diesen Bildbereich zu lange gebraucht. "
-            "Der Aufruf wurde nach spätestens 240 Sekunden abgebrochen."
+            "Der Aufruf wurde nach spätestens 180 Sekunden abgebrochen."
         ) from exc
     except Exception as exc:
         dev_log(
