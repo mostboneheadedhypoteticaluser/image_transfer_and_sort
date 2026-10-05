@@ -141,6 +141,13 @@ let latestAnalysisStatus: AnalysisWorkerStatus | null = null;
 let qwenBenchmarkSelectedPath: string | null = null;
 let qwenBenchmarkRunning = false;
 let qwenBenchmarkStages: QwenBenchmarkStageResult[] = [];
+let qwenBenchmarkProfilesInRun: QwenBenchmarkProfile[] = [];
+let qwenBenchmarkProgressCurrent: {
+  current: number | null;
+  total: number | null;
+  message: string;
+} | null = null;
+let qwenBenchmarkRunError: string | null = null;
 let automaticQwenEnabled = false;
 
 function renderAutomaticQwenState(enabled: boolean): void {
@@ -190,31 +197,110 @@ function benchmarkObjectSummary(stage: QwenBenchmarkStageResult): string {
   return parts.length > 0 ? parts.join(" · ") : "Kein semantischer Inhalt erkannt.";
 }
 
-function renderQwenBenchmarkStage(stage: QwenBenchmarkStageResult): void {
-  const existingIndex = qwenBenchmarkStages.findIndex(
-    (item) => item.profile === stage.profile
-  );
-  if (existingIndex >= 0) {
-    qwenBenchmarkStages[existingIndex] = stage;
-  } else {
-    qwenBenchmarkStages.push(stage);
+function benchmarkProfileInfo(
+  profile: QwenBenchmarkProfile
+): { label: string; calls: number } {
+  switch (profile) {
+    case "whole":
+      return { label: "1 · Nur Gesamtbild", calls: 1 };
+    case "tiles4":
+      return { label: "2 · Gesamtbild + 4 Kacheln", calls: 5 };
+    case "tiles9":
+      return { label: "3 · Gesamtbild + 9 Kacheln", calls: 10 };
+    case "tiles16":
+      return { label: "4 · Gesamtbild + 16 Kacheln", calls: 17 };
   }
+}
 
-  qwenBenchmarkStages.sort((left, right) => {
-    const order: QwenBenchmarkProfile[] = [
-      "whole",
-      "tiles4",
-      "tiles9",
-      "tiles16"
-    ];
-    return order.indexOf(left.profile) - order.indexOf(right.profile);
-  });
+function benchmarkProfileOrder(profile: QwenBenchmarkProfile): number {
+  return ["whole", "tiles4", "tiles9", "tiles16"].indexOf(profile);
+}
 
+function renderQwenBenchmarkResults(): void {
   qwenBenchmarkResults.replaceChildren();
 
-  for (const result of qwenBenchmarkStages) {
+  const requested = qwenBenchmarkProfilesInRun.length > 0
+    ? [...qwenBenchmarkProfilesInRun]
+    : qwenBenchmarkStages.map((stage) => stage.profile);
+
+  requested.sort(
+    (left, right) => benchmarkProfileOrder(left) - benchmarkProfileOrder(right)
+  );
+
+  if (requested.length === 0) {
+    const empty = document.createElement("p");
+    empty.className = "qwen-benchmark-empty";
+    empty.textContent = "Noch keine Testergebnisse.";
+    qwenBenchmarkResults.appendChild(empty);
+    copyQwenBenchmarkButton.disabled = true;
+    return;
+  }
+
+  const firstIncomplete = requested.find(
+    (profile) => !qwenBenchmarkStages.some((stage) => stage.profile === profile)
+  );
+
+  for (const profile of requested) {
+    const result = qwenBenchmarkStages.find((stage) => stage.profile === profile);
     const card = document.createElement("article");
     card.className = "qwen-benchmark-result";
+    card.dataset.profile = profile;
+
+    if (!result) {
+      const info = benchmarkProfileInfo(profile);
+      const isActive = qwenBenchmarkRunning && firstIncomplete === profile;
+      const hasError = qwenBenchmarkRunError !== null && firstIncomplete === profile;
+
+      card.classList.add(
+        hasError ? "error" : isActive ? "running" : "waiting"
+      );
+
+      const header = document.createElement("div");
+      header.className = "qwen-benchmark-result-header";
+      const title = document.createElement("h3");
+      title.textContent = info.label;
+      const state = document.createElement("strong");
+      state.textContent = hasError ? "Fehler" : isActive ? "Läuft" : "Wartet";
+      header.append(title, state);
+
+      const progress = document.createElement("p");
+      if (hasError) {
+        progress.textContent = qwenBenchmarkRunError ?? "Unbekannter Fehler.";
+      } else if (
+        isActive &&
+        qwenBenchmarkProgressCurrent?.current !== null &&
+        qwenBenchmarkProgressCurrent?.total !== null
+      ) {
+        progress.textContent =
+          "Bildbereich " +
+          qwenBenchmarkProgressCurrent.current.toLocaleString("de-DE") +
+          "/" +
+          qwenBenchmarkProgressCurrent.total.toLocaleString("de-DE") +
+          " · " +
+          qwenBenchmarkProgressCurrent.message;
+      } else if (isActive) {
+        progress.textContent =
+          "Stufe wird vorbereitet. " +
+          info.calls.toLocaleString("de-DE") +
+          (info.calls === 1 ? " Modellaufruf." : " Modellaufrufe.");
+      } else {
+        progress.textContent =
+          "Startet nach der vorherigen Stufe · " +
+          info.calls.toLocaleString("de-DE") +
+          (info.calls === 1 ? " Modellaufruf." : " Modellaufrufe.");
+      }
+
+      const note = document.createElement("small");
+      note.className = "qwen-benchmark-stage-note";
+      note.textContent =
+        "Das Endergebnis dieser Stufe erscheint, sobald alle zugehörigen Bildbereiche ausgewertet sind.";
+
+      card.append(header, progress, note);
+      qwenBenchmarkResults.appendChild(card);
+      continue;
+    }
+
+    card.classList.add("done");
 
     const header = document.createElement("div");
     header.className = "qwen-benchmark-result-header";
@@ -264,12 +350,37 @@ function renderQwenBenchmarkStage(stage: QwenBenchmarkStageResult): void {
   copyQwenBenchmarkButton.disabled = qwenBenchmarkStages.length === 0;
 }
 
+function renderQwenBenchmarkStage(stage: QwenBenchmarkStageResult): void {
+  const existingIndex = qwenBenchmarkStages.findIndex(
+    (item) => item.profile === stage.profile
+  );
+  if (existingIndex >= 0) {
+    qwenBenchmarkStages[existingIndex] = stage;
+  } else {
+    qwenBenchmarkStages.push(stage);
+  }
+
+  qwenBenchmarkStages.sort(
+    (left, right) =>
+      benchmarkProfileOrder(left.profile) - benchmarkProfileOrder(right.profile)
+  );
+
+  qwenBenchmarkProgressCurrent = null;
+  renderQwenBenchmarkResults();
+}
+
 function renderQwenBenchmarkProgress(status: AnalysisWorkerStatus): void {
   if (!qwenBenchmarkRunning) return;
 
   const progress = status.progress;
   if (progress?.kind === "minicpm" && progress.message) {
     qwenBenchmarkLive.textContent = progress.message;
+    qwenBenchmarkProgressCurrent = {
+      current: progress.current,
+      total: progress.total,
+      message: progress.message
+    };
+    renderQwenBenchmarkResults();
   } else if (status.message) {
     qwenBenchmarkLive.textContent = status.message;
   }
@@ -2604,8 +2715,10 @@ runQwenBenchmarkButton.addEventListener("click", () => {
 
     qwenBenchmarkRunning = true;
     qwenBenchmarkStages = [];
-    qwenBenchmarkResults.innerHTML =
-      '<p class="qwen-benchmark-empty">Test läuft …</p>';
+    qwenBenchmarkProfilesInRun = [...profiles];
+    qwenBenchmarkProgressCurrent = null;
+    qwenBenchmarkRunError = null;
+    renderQwenBenchmarkResults();
     runQwenBenchmarkButton.disabled = true;
     pickQwenBenchmarkImageButton.disabled = true;
     copyQwenBenchmarkButton.disabled = true;
@@ -2629,8 +2742,14 @@ runQwenBenchmarkButton.addEventListener("click", () => {
         "Test abgeschlossen · " +
         result.results.length.toLocaleString("de-DE") +
         (result.results.length === 1 ? " Stufe." : " Stufen.");
+    } catch (error) {
+      qwenBenchmarkRunError =
+        error instanceof Error ? error.message : String(error);
+      qwenBenchmarkLive.textContent =
+        "MiniCPM-Test abgebrochen: " + qwenBenchmarkRunError;
     } finally {
       qwenBenchmarkRunning = false;
+      renderQwenBenchmarkResults();
       runQwenBenchmarkButton.disabled = false;
       pickQwenBenchmarkImageButton.disabled = false;
       closeQwenBenchmarkButton.disabled = false;
