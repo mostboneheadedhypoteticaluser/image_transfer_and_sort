@@ -205,6 +205,9 @@ function benchmarkObjectSummary(stage: QwenBenchmarkStageResult): string {
   if (stage.semantic.tags.length > 0) {
     parts.push("Tags: " + stage.semantic.tags.join(", "));
   }
+  if (stage.semantic.concepts.length > 0) {
+    parts.push("Konzepte: " + stage.semantic.concepts.join(", "));
+  }
   return parts.length > 0 ? parts.join(" · ") : "Kein semantischer Inhalt erkannt.";
 }
 
@@ -332,6 +335,7 @@ function renderQwenBenchmarkResults(): void {
       ["Bildbereiche", result.regionCount.toLocaleString("de-DE")],
       ["Motive", result.semantic.subjects.length.toLocaleString("de-DE")],
       ["Suchbegriffe", result.semantic.tags.length.toLocaleString("de-DE")],
+      ["Konzepte", result.semantic.concepts.length.toLocaleString("de-DE")],
       ["Textfunde", result.semantic.visibleText.length.toLocaleString("de-DE")],
       ["JSON", result.semantic.repaired ? "repariert" : "direkt"]
     ];
@@ -438,6 +442,7 @@ function qwenBenchmarkCopyText(): string {
       "Szene: " + (stage.semantic.scenes.join(", ") || "—"),
       "Sichtbarer Text: " + (stage.semantic.visibleText.join(" | ") || "—"),
       "Suchbegriffe: " + (stage.semantic.tags.join(", ") || "—"),
+      "Abgeleitete Konzepte: " + (stage.semantic.concepts.join(", ") || "—"),
       ""
     );
   }
