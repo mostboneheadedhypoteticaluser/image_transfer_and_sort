@@ -417,7 +417,12 @@ export class AnalysisService {
         windowsHide: true,
         env: {
           ...process.env,
-          IMAGE_SORTER_DEV_LOG: this.devLogPath
+          IMAGE_SORTER_DEV_LOG: this.devLogPath,
+          // Windows-Python darf die IPC-Pipes nicht über die lokale ANSI-
+          // Codepage behandeln. MiniCPM kann beliebige Unicode-Zeichen
+          // zurückgeben; Electron liest die Pipes ebenfalls als UTF-8.
+          PYTHONIOENCODING: "utf-8",
+          PYTHONUTF8: "1"
         }
       });
 
