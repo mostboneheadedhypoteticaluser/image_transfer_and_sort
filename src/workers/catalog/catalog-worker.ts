@@ -235,6 +235,30 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_semantic_embedding_model
     ON semantic_embeddings(model_version);
 
+  CREATE TABLE IF NOT EXISTS media_semantic_annotations (
+    media_id INTEGER PRIMARY KEY REFERENCES media_items(id) ON DELETE CASCADE,
+    model_version TEXT NOT NULL,
+    input_sha256 TEXT NOT NULL,
+    profile_version TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    subjects_json TEXT NOT NULL DEFAULT '[]',
+    actions_json TEXT NOT NULL DEFAULT '[]',
+    scenes_json TEXT NOT NULL DEFAULT '[]',
+    visible_text_json TEXT NOT NULL DEFAULT '[]',
+    tags_json TEXT NOT NULL DEFAULT '[]',
+    concepts_json TEXT NOT NULL DEFAULT '[]',
+    repaired INTEGER NOT NULL DEFAULT 0 CHECK(repaired IN (0,1)),
+    region_count INTEGER NOT NULL DEFAULT 0,
+    regions_json TEXT NOT NULL DEFAULT '[]',
+    timings_json TEXT NOT NULL DEFAULT '{}',
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_media_semantic_annotation_hash
+    ON media_semantic_annotations(input_sha256);
+  CREATE INDEX IF NOT EXISTS idx_media_semantic_annotation_model
+    ON media_semantic_annotations(model_version);
+
   CREATE TABLE IF NOT EXISTS pet_detections (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     media_id INTEGER NOT NULL REFERENCES media_items(id) ON DELETE CASCADE,
@@ -2096,6 +2120,7 @@ function enqueueAnalysisJobs(sourceId: number, module = "file-probe-v1") {
     "pet-fuse-ensemble-v1",
     "pet-embed-dogreid-v1",
     "object-detect-qwen3vl-gguf-v2",
+    "catalog-semantic-qwen3vl4b-v3",
     "semantic-embed-siglip2-v1"
   ]);
   const imageFilter =
@@ -2437,7 +2462,7 @@ function claimAnalysisJob(module = "file-probe-v1") {
           )
         )
         AND (
-          j.module<>'object-detect-qwen3vl-gguf-v2'
+          j.module<>'catalog-semantic-qwen3vl4b-v3'
           OR (
             EXISTS (
               SELECT 1
@@ -2452,6 +2477,14 @@ function claimAnalysisJob(module = "file-probe-v1") {
               FROM analysis_jobs dependency
               WHERE dependency.media_id=j.media_id
                 AND dependency.module='pet-detect-yolox-v1'
+                AND dependency.status='DONE'
+                AND dependency.input_sha256=j.input_sha256
+            )
+            AND EXISTS (
+              SELECT 1
+              FROM analysis_jobs dependency
+              WHERE dependency.media_id=j.media_id
+                AND dependency.module='semantic-embed-siglip2-v1'
                 AND dependency.status='DONE'
                 AND dependency.input_sha256=j.input_sha256
             )
@@ -3794,6 +3827,168 @@ function completePetFusionJob(jobId: number, result: unknown) {
     petCount: written
   };
 }
+
+function completeCatalogSemanticJob(jobId: number, result: unknown) {
+  if (!result || typeof result !== "object") {
+    throw new Error("Qwen-4B-Kataloganalyse ist ungültig.");
+  }
+
+  const value = result as Record<string, unknown>;
+  const semantic =
+    value.semantic && typeof value.semantic === "object"
+      ? value.semantic as Record<string, unknown>
+      : null;
+
+  if (!semantic) {
+    throw new Error("Qwen-4B-Kataloganalyse enthält keine Semantikdaten.");
+  }
+
+  const cleanText = (raw: unknown, max = 1000): string =>
+    typeof raw === "string"
+      ? raw.trim().replace(/\s+/g, " ").slice(0, max)
+      : "";
+
+  const cleanList = (raw: unknown, limit = 80): string[] => {
+    if (!Array.isArray(raw)) return [];
+    const values: string[] = [];
+    const seen = new Set<string>();
+
+    for (const entry of raw) {
+      const text = cleanText(entry, 160);
+      const key = text.toLocaleLowerCase("de-DE");
+      if (!text || seen.has(key)) continue;
+      seen.add(key);
+      values.push(text);
+      if (values.length >= limit) break;
+    }
+    return values;
+  };
+
+  const modelVersion = cleanText(value.model, 240) || "Qwen3-VL 4B Instruct Q4_K_M + Vision Q8_0";
+  const profileVersion = cleanText(value.profileVersion, 160) || "qwen3vl4b-catalog-whole-plus-4-v1";
+  const description = cleanText(semantic.description, 1200);
+  const subjects = cleanList(semantic.subjects, 60);
+  const actions = cleanList(semantic.actions, 50);
+  const scenes = cleanList(semantic.scenes, 40);
+  const visibleText = cleanList(semantic.visibleText, 80);
+  const tags = cleanList(semantic.tags, 100);
+  const concepts = cleanList(semantic.concepts, 60);
+  const repaired = Boolean(semantic.repaired);
+  const regions = Array.isArray(value.regions) ? value.regions.slice(0, 5) : [];
+  const timings =
+    value.timings && typeof value.timings === "object"
+      ? value.timings
+      : {};
+  const regionCount = Math.max(
+    0,
+    Math.min(5, Math.trunc(Number(value.regionCount) || regions.length))
+  );
+
+  const job = jobForModule(jobId, "catalog-semantic-qwen3vl4b-v3");
+  const mediaId = Number(job.media_id);
+  const inputSha256 = String(job.input_sha256 ?? "");
+
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    db.prepare(`
+      INSERT INTO media_semantic_annotations(
+        media_id,
+        model_version,
+        input_sha256,
+        profile_version,
+        description,
+        subjects_json,
+        actions_json,
+        scenes_json,
+        visible_text_json,
+        tags_json,
+        concepts_json,
+        repaired,
+        region_count,
+        regions_json,
+        timings_json,
+        updated_at
+      )
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)
+      ON CONFLICT(media_id) DO UPDATE SET
+        model_version=excluded.model_version,
+        input_sha256=excluded.input_sha256,
+        profile_version=excluded.profile_version,
+        description=excluded.description,
+        subjects_json=excluded.subjects_json,
+        actions_json=excluded.actions_json,
+        scenes_json=excluded.scenes_json,
+        visible_text_json=excluded.visible_text_json,
+        tags_json=excluded.tags_json,
+        concepts_json=excluded.concepts_json,
+        repaired=excluded.repaired,
+        region_count=excluded.region_count,
+        regions_json=excluded.regions_json,
+        timings_json=excluded.timings_json,
+        updated_at=CURRENT_TIMESTAMP
+    `).run(
+      mediaId,
+      modelVersion,
+      inputSha256,
+      profileVersion,
+      description,
+      JSON.stringify(subjects),
+      JSON.stringify(actions),
+      JSON.stringify(scenes),
+      JSON.stringify(visibleText),
+      JSON.stringify(tags),
+      JSON.stringify(concepts),
+      repaired ? 1 : 0,
+      regionCount,
+      JSON.stringify(regions),
+      JSON.stringify(timings)
+    );
+
+    db.prepare(`
+      UPDATE analysis_jobs
+      SET
+        status='DONE',
+        result_json=?,
+        error_message=NULL,
+        finished_at=CURRENT_TIMESTAMP,
+        updated_at=CURRENT_TIMESTAMP
+      WHERE id=?
+        AND status='RUNNING'
+    `).run(
+      JSON.stringify({
+        model: modelVersion,
+        profileVersion,
+        regionCount,
+        description,
+        subjects,
+        actions,
+        scenes,
+        visibleText,
+        tags,
+        concepts,
+        repaired
+      }),
+      jobId
+    );
+
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+
+  return {
+    completed: true,
+    model: modelVersion,
+    profileVersion,
+    regionCount,
+    subjects: subjects.length,
+    tags: tags.length,
+    concepts: concepts.length,
+    repaired
+  };
+}
+
 
 function completeVerifiedObjectDetectionJob(jobId: number, result: unknown) {
   if (!result || typeof result !== "object") {
@@ -6596,6 +6791,7 @@ function resetCatalog(): { reset: true } {
 
       DELETE FROM object_fused_detections;
       DELETE FROM object_detections;
+      DELETE FROM media_semantic_annotations;
       DELETE FROM semantic_embeddings;
       DELETE FROM face_embeddings;
       DELETE FROM face_detections;
@@ -6727,6 +6923,11 @@ async function dispatch(method: CatalogMethod, payload: Record<string, unknown> 
       );
     case "completeVerifiedObjectDetectionJob":
       return completeVerifiedObjectDetectionJob(
+        asNumber(payload.jobId, "jobId"),
+        payload.result
+      );
+    case "completeCatalogSemanticJob":
+      return completeCatalogSemanticJob(
         asNumber(payload.jobId, "jobId"),
         payload.result
       );
