@@ -420,6 +420,13 @@ export type MediaRecord = {
   semanticReady: boolean;
   semanticModel: string | null;
   semanticScore: number | null;
+  catalogSemanticReady: boolean;
+  catalogSemanticModel: string | null;
+  catalogSemanticScore: number | null;
+  combinedSemanticScore: number | null;
+  semanticMatchReasons: string[];
+  semanticDescription: string | null;
+  semanticConcepts: string[];
   lastSeenAt: string;
 };
 
