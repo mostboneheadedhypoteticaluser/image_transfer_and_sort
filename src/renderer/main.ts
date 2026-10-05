@@ -160,11 +160,11 @@ function renderAutomaticQwenState(enabled: boolean): void {
   automaticQwenEnabled = enabled;
   qwenAutomaticButton.disabled = enabled;
   qwenAutomaticButton.textContent = enabled
-    ? "Qwen-Serienanalyse aktiv"
-    : "Qwen-Serienanalyse starten";
+    ? "Qwen 4B Kataloganalyse aktiv"
+    : "Qwen 4B Kataloganalyse starten";
   qwenAutomaticButton.title = enabled
-    ? "Die normale Qwen-Warteschlange ist für diese App-Sitzung freigegeben."
-    : "Qwen wird beim App-Start absichtlich nicht automatisch geladen. Erst dieser Klick startet die Serienanalyse.";
+    ? "Qwen3-VL 4B läuft automatisch als letzte Katalogstufe mit Gesamtbild plus vier Teilbildern."
+    : "Qwen3-VL 4B kann manuell wieder für die automatische Kataloganalyse aktiviert werden.";
 }
 
 function benchmarkModelLabel(model: QwenBenchmarkModel): string {
@@ -2748,13 +2748,13 @@ qwenAutomaticButton.addEventListener("click", () => {
   void runSafely(async () => {
     qwenAutomaticButton.disabled = true;
     progressText.textContent =
-      "Qwen-Serienanalyse wird freigegeben. Das große Modell wird erst beim nächsten Qwen-Job geladen …";
+      "Qwen3-VL-4B-Kataloganalyse wird freigegeben. Das Modell wird erst beim nächsten 4B-Job geladen …";
 
     try {
       const result = await window.imageSorter.analysis.startAutomaticQwen();
       renderAutomaticQwenState(result.enabled);
       progressText.textContent =
-        "Qwen-Serienanalyse ist aktiv. Einzelbildtests pausieren sie weiterhin automatisch.";
+        "Qwen3-VL-4B-Kataloganalyse ist aktiv. Einzelbildtests pausieren sie weiterhin automatisch.";
     } catch (error) {
       renderAutomaticQwenState(false);
       throw error;
@@ -2779,7 +2779,7 @@ async function closeQwenBenchmarkAndResume(): Promise<void> {
     await window.imageSorter.analysis.finishQwenBenchmark();
     qwenBenchmarkDialog.close();
     progressText.textContent =
-      "MiniCPM-Einzeltest beendet. Normale Analyse läuft wieder weiter.";
+      "Vision-Einzeltest beendet. Automatische Kataloganalyse läuft wieder weiter.";
   } finally {
     closeQwenBenchmarkButton.disabled = false;
     pickQwenBenchmarkImageButton.disabled = false;
