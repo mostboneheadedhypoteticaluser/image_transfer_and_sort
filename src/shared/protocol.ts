@@ -54,6 +54,7 @@ export type QwenBenchmarkSemantic = {
   scenes: string[];
   visibleText: string[];
   tags: string[];
+  concepts: string[];
   repaired?: boolean;
 };
 
