@@ -3341,7 +3341,7 @@ def minicpm_generate(
         label=progress_label,
         imageWidth=int(width),
         imageHeight=int(height),
-        maxNewTokens=192,
+        maxNewTokens=256,
         reasoning="off",
         port=port,
     )
@@ -3364,7 +3364,7 @@ def minicpm_generate(
         # Tokens verhindern, dass ein einzelner Bildbereich minutenlang
         # weitergeneriert, obwohl die relevanten Informationen längst da sind.
         "temperature": 0.1,
-        "max_tokens": 192,
+        "max_tokens": 256,
         "stream": True,
     }
 
@@ -3566,6 +3566,7 @@ def semantic_response_value(output: str, model_label: str) -> tuple[dict, bool]:
         "scenes": [],
         "visibleText": [],
         "tags": [],
+        "concepts": [],
     }
 
     description_match = re.search(
@@ -3580,9 +3581,9 @@ def semantic_response_value(output: str, model_label: str) -> tuple[dict, bool]:
         except Exception:
             repaired["description"] = raw.replace("\\n", " ").replace('\\"', '"')
 
-    for key in ("subjects", "actions", "scenes", "visibleText", "tags"):
+    for key in ("subjects", "actions", "scenes", "visibleText", "tags", "concepts"):
         match = re.search(
-            rf'"{re.escape(key)}"\s*:\s*\[(.*?)(?:\]|(?="(?:description|subjects|actions|scenes|visibleText|tags)"\s*:)|$)',
+            rf'"{re.escape(key)}"\s*:\s*\[(.*?)(?:\]|(?="(?:description|subjects|actions|scenes|visibleText|tags|concepts)"\s*:)|$)',
             text,
             flags=re.DOTALL,
         )
@@ -3602,7 +3603,7 @@ def semantic_response_value(output: str, model_label: str) -> tuple[dict, bool]:
 
     useful = bool(repaired["description"]) or any(
         repaired[key]
-        for key in ("subjects", "actions", "scenes", "visibleText", "tags")
+        for key in ("subjects", "actions", "scenes", "visibleText", "tags", "concepts")
     )
     if not useful:
         raise RuntimeError(
@@ -3620,6 +3621,7 @@ def semantic_response_value(output: str, model_label: str) -> tuple[dict, bool]:
         scenes=len(repaired["scenes"]),
         visibleText=len(repaired["visibleText"]),
         tags=len(repaired["tags"]),
+        concepts=len(repaired["concepts"]),
     )
     return repaired, True
 
@@ -3642,6 +3644,13 @@ Erfinde keine neuen zusammengesetzten Wörter, Gerätebezeichnungen oder Funktio
 Wenn ein Gegenstand nicht eindeutig bestimmbar ist, benenne ihn neutral und
 beschreibe nur seine sichtbare Form oder Funktion.
 
+Die Felder description, subjects, actions, scenes und visibleText enthalten nur
+direkt sichtbare Fakten. Im Feld concepts darfst du zusätzlich kurze,
+gebräuchliche Suchkonzepte ableiten, wenn mehrere sichtbare Hinweise sie
+plausibel stützen. Beispiele: Seil + Sicherung + Hund -> "Abseilen" oder
+"Seilrettung". Keine Namen, Organisationen oder konkreten Ereignisse erfinden.
+Wenn ein Konzept zu unsicher ist, weglassen.
+
 Antworte NUR als JSON-Objekt in genau dieser Form:
 {
   "description": "ein kurzer deutscher Satz",
@@ -3649,7 +3658,8 @@ Antworte NUR als JSON-Objekt in genau dieser Form:
   "actions": ["sichtbare Handlung"],
   "scenes": ["Umgebung oder Ortstyp"],
   "visibleText": ["deutlich lesbarer Text"],
-  "tags": ["5 bis 15 konkrete deutsche Suchbegriffe"]
+  "tags": ["5 bis 15 konkrete deutsche Suchbegriffe"],
+  "concepts": ["3 bis 8 plausible Suchkonzepte"]
 }
 
 Leere Kategorien als [] zurückgeben. Begriffe nicht unnötig doppeln.
@@ -3671,6 +3681,7 @@ Leere Kategorien als [] zurückgeben. Begriffe nicht unnötig doppeln.
         "scenes": minicpm_clean_list(value.get("scenes"), 12),
         "visibleText": minicpm_clean_list(value.get("visibleText"), 24),
         "tags": minicpm_clean_list(value.get("tags"), 30),
+        "concepts": minicpm_clean_list(value.get("concepts"), 16),
         "repaired": repaired,
     }
 
@@ -3715,6 +3726,7 @@ def minicpm_merge_semantics(region_results: list[dict]) -> dict:
             "scenes": [],
             "visibleText": [],
             "tags": [],
+            "concepts": [],
             "repaired": False,
         }
 
@@ -3726,6 +3738,7 @@ def minicpm_merge_semantics(region_results: list[dict]) -> dict:
         "scenes": [],
         "visibleText": [],
         "tags": [],
+        "concepts": [],
         "repaired": any(
             bool(region["semantic"].get("repaired", False))
             for region in region_results
@@ -3738,8 +3751,9 @@ def minicpm_merge_semantics(region_results: list[dict]) -> dict:
         "scenes": 20,
         "visibleText": 40,
         "tags": 60,
+        "concepts": 30,
     }
-    for key in ("subjects", "actions", "scenes", "visibleText", "tags"):
+    for key in ("subjects", "actions", "scenes", "visibleText", "tags", "concepts"):
         values = []
         for region in region_results:
             values.extend(region["semantic"].get(key, []))
@@ -4044,7 +4058,7 @@ def qwen3vl2b_generate(
         label=progress_label,
         imageWidth=int(width),
         imageHeight=int(height),
-        maxNewTokens=384,
+        maxNewTokens=512,
         reasoning="off",
         port=port,
     )
@@ -4064,7 +4078,7 @@ def qwen3vl2b_generate(
             }
         ],
         "temperature": 0.1,
-        "max_tokens": 384,
+        "max_tokens": 512,
         "stream": True,
         "chat_template_kwargs": {"enable_thinking": False},
     }
@@ -4235,6 +4249,13 @@ Erfinde keine neuen zusammengesetzten Wörter, Gerätebezeichnungen oder Funktio
 Wenn ein Gegenstand nicht eindeutig bestimmbar ist, benenne ihn neutral und
 beschreibe nur seine sichtbare Form oder Funktion.
 
+Die Felder description, subjects, actions, scenes und visibleText enthalten nur
+direkt sichtbare Fakten. Im Feld concepts darfst du zusätzlich kurze,
+gebräuchliche Suchkonzepte ableiten, wenn mehrere sichtbare Hinweise sie
+plausibel stützen. Beispiele: Seil + Sicherung + Hund -> "Abseilen" oder
+"Seilrettung". Keine Namen, Organisationen oder konkreten Ereignisse erfinden.
+Wenn ein Konzept zu unsicher ist, weglassen.
+
 Antworte NUR als JSON-Objekt in genau dieser Form:
 {
   "description": "ein kurzer deutscher Satz",
@@ -4242,7 +4263,8 @@ Antworte NUR als JSON-Objekt in genau dieser Form:
   "actions": ["sichtbare Handlung"],
   "scenes": ["Umgebung oder Ortstyp"],
   "visibleText": ["deutlich lesbarer Text"],
-  "tags": ["5 bis 15 konkrete deutsche Suchbegriffe"]
+  "tags": ["5 bis 15 konkrete deutsche Suchbegriffe"],
+  "concepts": ["3 bis 8 plausible Suchkonzepte"]
 }
 
 Leere Kategorien als [] zurückgeben. Begriffe nicht unnötig doppeln.
@@ -4264,6 +4286,7 @@ Leere Kategorien als [] zurückgeben. Begriffe nicht unnötig doppeln.
         "scenes": minicpm_clean_list(value.get("scenes"), 12),
         "visibleText": minicpm_clean_list(value.get("visibleText"), 24),
         "tags": minicpm_clean_list(value.get("tags"), 30),
+        "concepts": minicpm_clean_list(value.get("concepts"), 16),
         "repaired": repaired,
     }
 
@@ -4560,7 +4583,7 @@ def qwen3vl4b_generate(
         label=progress_label,
         imageWidth=int(width),
         imageHeight=int(height),
-        maxNewTokens=384,
+        maxNewTokens=512,
         reasoning="off",
         port=port,
     )
@@ -4580,7 +4603,7 @@ def qwen3vl4b_generate(
             }
         ],
         "temperature": 0.1,
-        "max_tokens": 384,
+        "max_tokens": 512,
         "stream": True,
         "chat_template_kwargs": {"enable_thinking": False},
     }
@@ -4751,6 +4774,13 @@ Erfinde keine neuen zusammengesetzten Wörter, Gerätebezeichnungen oder Funktio
 Wenn ein Gegenstand nicht eindeutig bestimmbar ist, benenne ihn neutral und
 beschreibe nur seine sichtbare Form oder Funktion.
 
+Die Felder description, subjects, actions, scenes und visibleText enthalten nur
+direkt sichtbare Fakten. Im Feld concepts darfst du zusätzlich kurze,
+gebräuchliche Suchkonzepte ableiten, wenn mehrere sichtbare Hinweise sie
+plausibel stützen. Beispiele: Seil + Sicherung + Hund -> "Abseilen" oder
+"Seilrettung". Keine Namen, Organisationen oder konkreten Ereignisse erfinden.
+Wenn ein Konzept zu unsicher ist, weglassen.
+
 Antworte NUR als JSON-Objekt in genau dieser Form:
 {
   "description": "ein kurzer deutscher Satz",
@@ -4758,7 +4788,8 @@ Antworte NUR als JSON-Objekt in genau dieser Form:
   "actions": ["sichtbare Handlung"],
   "scenes": ["Umgebung oder Ortstyp"],
   "visibleText": ["deutlich lesbarer Text"],
-  "tags": ["5 bis 15 konkrete deutsche Suchbegriffe"]
+  "tags": ["5 bis 15 konkrete deutsche Suchbegriffe"],
+  "concepts": ["3 bis 8 plausible Suchkonzepte"]
 }
 
 Leere Kategorien als [] zurückgeben. Begriffe nicht unnötig doppeln.
@@ -4780,6 +4811,7 @@ Leere Kategorien als [] zurückgeben. Begriffe nicht unnötig doppeln.
         "scenes": minicpm_clean_list(value.get("scenes"), 12),
         "visibleText": minicpm_clean_list(value.get("visibleText"), 24),
         "tags": minicpm_clean_list(value.get("tags"), 30),
+        "concepts": minicpm_clean_list(value.get("concepts"), 16),
         "repaired": repaired,
     }
 
