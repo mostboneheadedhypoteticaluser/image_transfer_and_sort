@@ -665,6 +665,24 @@ db.prepare(`
     AND error_message LIKE '%BaseModelOutputWithPooling%object has no attribute%detach%'
 `).run();
 
+// Bekannter Programmfehler aus dem ersten 420-Sekunden-Timeout-Patch:
+// Python interpretierte im Timeout-Handler einen String als Funktionsaufruf.
+// Nur genau diese dadurch fehlgeschlagenen Qwen-4B-Jobs automatisch neu planen.
+db.prepare(`
+  UPDATE analysis_jobs
+  SET
+    status='PENDING',
+    attempts=0,
+    result_json=NULL,
+    error_message=NULL,
+    started_at=NULL,
+    finished_at=NULL,
+    updated_at=CURRENT_TIMESTAMP
+  WHERE module='catalog-semantic-qwen3vl4b-v3'
+    AND status='FAILED'
+    AND lower(COALESCE(error_message,'')) LIKE '%object is not callable%'
+`).run();
+
 // Die frühere Qwen-8B-Serienstufe ist vollständig durch die neue
 // Qwen3-VL-4B-Katalogsemantik ersetzt. Alte Jobzustände werden entfernt;
 // vorhandene Bild-/Suchdaten bleiben davon unberührt.
