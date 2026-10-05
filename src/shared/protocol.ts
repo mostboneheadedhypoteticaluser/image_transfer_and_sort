@@ -606,6 +606,7 @@ export type CatalogChange = {
 };
 
 export type ScanResult = {
+  mode: "FULL" | "INCREMENTAL";
   discovered: number;
   added: number;
   moved: number;
@@ -723,6 +724,7 @@ export type CatalogMethod =
   | "getMediaDetails"
   | "getMediaPath"
   | "scanSource"
+  | "reconcileSourceChanges"
   | "restoreMedia"
   | "resetCatalog";
 
