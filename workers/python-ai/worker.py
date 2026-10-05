@@ -205,7 +205,7 @@ QWEN3VL4B_MMPROJ_FILE = os.path.join(
 QWEN3VL4B_MODEL_VERSION = "Qwen3-VL 4B Instruct Q4_K_M + Vision Q8_0"
 QWEN3VL4B_CONTEXT_SIZE = 8192
 # Komplexe Bildbereiche können auf dem N305 deutlich länger als vier Minuten
-# benötigen. 7 Minuten pro Bereich geben dem 4B-Modell ausreichend Spielraum,
+# benötigen. 10 Minuten pro Bereich geben dem 4B-Modell ausreichend Spielraum,
 # ohne einen tatsächlich festhängenden Aufruf unbegrenzt laufen zu lassen.
 QWEN3VL4B_REGION_TIMEOUT_SECONDS = 600.0
 QWEN3VL4B_SOCKET_TIMEOUT_SECONDS = 540.0
