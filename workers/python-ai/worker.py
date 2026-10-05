@@ -172,6 +172,22 @@ MINICPM_MMPROJ_FILE = os.path.join(
 MINICPM_MODEL_VERSION = "MiniCPM-V 4.6 Q4_K_M + Vision Q8_0"
 MINICPM_CONTEXT_SIZE = 8192
 
+QWEN3VL2B_MODEL_DIR = os.path.join(
+    WORKER_DIR,
+    "models",
+    "qwen3-vl-2b-instruct-gguf",
+)
+QWEN3VL2B_MODEL_FILE = os.path.join(
+    QWEN3VL2B_MODEL_DIR,
+    "Qwen3VL-2B-Instruct-Q4_K_M.gguf",
+)
+QWEN3VL2B_MMPROJ_FILE = os.path.join(
+    QWEN3VL2B_MODEL_DIR,
+    "mmproj-Qwen3VL-2B-Instruct-Q8_0.gguf",
+)
+QWEN3VL2B_MODEL_VERSION = "Qwen3-VL 2B Instruct Q4_K_M + Vision Q8_0"
+QWEN3VL2B_CONTEXT_SIZE = 8192
+
 COCO_CLASS_NAMES = (
     "person", "bicycle", "car", "motorcycle", "airplane", "bus", "train",
     "truck", "boat", "traffic light", "fire hydrant", "stop sign",
@@ -201,6 +217,7 @@ _llama_server_cached = None
 _llama_server_searched = False
 QWEN_SERVER_LOG = os.path.join(WORKER_DIR, "llama-qwen3vl.log")
 MINICPM_SERVER_LOG = os.path.join(WORKER_DIR, "llama-minicpm-v46.log")
+QWEN3VL2B_SERVER_LOG = os.path.join(WORKER_DIR, "llama-qwen3vl-2b.log")
 
 
 @dataclass
@@ -331,6 +348,15 @@ def minicpm_gguf_ready() -> bool:
     )
 
 
+def qwen3vl2b_gguf_ready() -> bool:
+    return (
+        os.path.isfile(QWEN3VL2B_MODEL_FILE)
+        and os.path.getsize(QWEN3VL2B_MODEL_FILE) > 1_000_000_000
+        and os.path.isfile(QWEN3VL2B_MMPROJ_FILE)
+        and os.path.getsize(QWEN3VL2B_MMPROJ_FILE) > 400_000_000
+    )
+
+
 def snapshot() -> dict:
     return {
         **asdict(config),
@@ -352,6 +378,8 @@ def snapshot() -> dict:
             "qwen3vlRuntime": find_llama_server() is not None,
             "minicpmModel": minicpm_gguf_ready(),
             "minicpmRuntime": find_llama_server() is not None,
+            "qwen3vl2bModel": qwen3vl2b_gguf_ready(),
+            "qwen3vl2bRuntime": find_llama_server() is not None,
             "torch": importlib.util.find_spec("torch") is not None,
             "transformers": importlib.util.find_spec("transformers") is not None,
             "onnxRuntime": importlib.util.find_spec("onnxruntime") is not None,
@@ -393,6 +421,12 @@ def snapshot() -> dict:
                 Image is not None
                 and ImageOps is not None
                 and minicpm_gguf_ready()
+                and find_llama_server() is not None
+            ),
+            "qwen3vl2bBenchmark": (
+                Image is not None
+                and ImageOps is not None
+                and qwen3vl2b_gguf_ready()
                 and find_llama_server() is not None
             ),
         },
@@ -2288,9 +2322,12 @@ def xyxy_iou(left: list[float], right: list[float]) -> float:
     return intersection / union if union > 0.0 else 0.0
 
 
-def qwen_server_log_tail(max_bytes: int = 6000) -> str:
+def qwen_server_log_tail(
+    log_path: str = QWEN_SERVER_LOG,
+    max_bytes: int = 6000,
+) -> str:
     try:
-        with open(QWEN_SERVER_LOG, "rb") as handle:
+        with open(log_path, "rb") as handle:
             handle.seek(0, os.SEEK_END)
             size = handle.tell()
             handle.seek(max(0, size - max_bytes), os.SEEK_SET)
@@ -3229,7 +3266,7 @@ def minicpm_runtime() -> int:
     deadline = time.monotonic() + 120.0
     while time.monotonic() < deadline:
         if _qwen_server_process.poll() is not None:
-            detail = qwen_server_log_tail()
+            detail = qwen_server_log_tail(MINICPM_SERVER_LOG)
             unload_qwen3vl()
             raise RuntimeError(
                 "llama.cpp konnte MiniCPM-V 4.6 nicht starten. "
@@ -3246,7 +3283,7 @@ def minicpm_runtime() -> int:
             return port
         time.sleep(0.5)
 
-    detail = qwen_server_log_tail()
+    detail = qwen_server_log_tail(MINICPM_SERVER_LOG)
     unload_qwen3vl()
     raise RuntimeError(
         "llama.cpp hat MiniCPM-V 4.6 nicht innerhalb von 120 Sekunden geladen."
@@ -3738,6 +3775,524 @@ def benchmark_minicpm(
 
         dev_log(
             "MINICPM_BENCHMARK_DONE",
+            profile=profile_name,
+            target=file_path,
+            regionCount=len(regions),
+            tags=len(semantic["tags"]),
+            timings=result["timings"],
+        )
+        return result
+    finally:
+        image.close()
+        gc.collect()
+
+
+
+def qwen3vl2b_runtime() -> int:
+    global _qwen_server_process, _qwen_server_port, _qwen_server_log_handle, _vision_server_model
+
+    if Image is None or ImageOps is None:
+        raise RuntimeError(
+            "Pillow fehlt. Einmal 'npm.cmd run setup:ai' ausführen."
+        )
+
+    if not qwen3vl2b_gguf_ready():
+        raise RuntimeError(
+            "Qwen3-VL-2B-Instruct Q4_K_M oder der Q8-Vision-Projektor fehlt. "
+            "Einmal 'npm.cmd run setup:ai' ausführen."
+        )
+
+    executable = find_llama_server()
+    if executable is None:
+        raise RuntimeError(
+            "llama-server wurde nicht gefunden. Unter Windows bitte "
+            "'winget install llama.cpp' ausführen und die App neu starten."
+        )
+
+    if (
+        _vision_server_model == "qwen3vl2b"
+        and _qwen_server_process is not None
+        and _qwen_server_process.poll() is None
+        and _qwen_server_port is not None
+        and qwen_server_healthy(int(_qwen_server_port))
+    ):
+        dev_log(
+            "QWEN3VL2B_SERVER_REUSE",
+            serverPid=_qwen_server_process.pid,
+            port=int(_qwen_server_port),
+        )
+        return int(_qwen_server_port)
+
+    unload_qwen3vl()
+    unload_siglip2()
+
+    port = free_local_port()
+    os.makedirs(os.path.dirname(QWEN3VL2B_SERVER_LOG), exist_ok=True)
+    _qwen_server_log_handle = open(
+        QWEN3VL2B_SERVER_LOG,
+        "w",
+        encoding="utf-8",
+        buffering=1,
+    )
+
+    args = [
+        executable,
+        "-m",
+        QWEN3VL2B_MODEL_FILE,
+        "--mmproj",
+        QWEN3VL2B_MMPROJ_FILE,
+        "--host",
+        "127.0.0.1",
+        "--port",
+        str(port),
+        "-c",
+        str(QWEN3VL2B_CONTEXT_SIZE),
+        # Vergleich auf dem N305 bewusst CPU-only und reproduzierbar.
+        "-ngl",
+        "0",
+        "--no-mmproj-offload",
+        "--reasoning",
+        "off",
+    ]
+
+    creationflags = 0
+    if os.name == "nt":
+        creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+    started = time.perf_counter()
+    dev_log(
+        "QWEN3VL2B_SERVER_START_BEGIN",
+        executable=executable,
+        port=port,
+        context=QWEN3VL2B_CONTEXT_SIZE,
+        model=QWEN3VL2B_MODEL_FILE,
+        mmproj=QWEN3VL2B_MMPROJ_FILE,
+    )
+
+    _qwen_server_process = subprocess.Popen(
+        args,
+        stdin=subprocess.DEVNULL,
+        stdout=_qwen_server_log_handle,
+        stderr=subprocess.STDOUT,
+        creationflags=creationflags,
+    )
+    _qwen_server_port = port
+    _vision_server_model = "qwen3vl2b"
+    report_process_event(
+        "qwen-server",
+        "started",
+        pid=_qwen_server_process.pid,
+        port=port,
+    )
+
+    deadline = time.monotonic() + 180.0
+    while time.monotonic() < deadline:
+        if _qwen_server_process.poll() is not None:
+            detail = qwen_server_log_tail(QWEN3VL2B_SERVER_LOG)
+            unload_qwen3vl()
+            raise RuntimeError(
+                "llama.cpp konnte Qwen3-VL 2B nicht starten. "
+                "Gegebenenfalls llama.cpp aktualisieren."
+                + (f" Log: {detail}" if detail else "")
+            )
+        if qwen_server_healthy(port, timeout=1.0):
+            dev_log(
+                "QWEN3VL2B_SERVER_READY",
+                serverPid=_qwen_server_process.pid,
+                port=port,
+                elapsedMs=round((time.perf_counter() - started) * 1000, 1),
+            )
+            return port
+        time.sleep(0.5)
+
+    detail = qwen_server_log_tail(QWEN3VL2B_SERVER_LOG)
+    unload_qwen3vl()
+    raise RuntimeError(
+        "llama.cpp hat Qwen3-VL 2B nicht innerhalb von 180 Sekunden geladen."
+        + (f" Log: {detail}" if detail else "")
+    )
+
+
+def qwen3vl2b_generate(
+    image,
+    prompt: str,
+    progress_request_id: str | None = None,
+    progress_label: str = "Qwen3-VL 2B",
+) -> str:
+    port = qwen3vl2b_runtime()
+    started = time.perf_counter()
+    width, height = image.size
+
+    dev_log(
+        "QWEN3VL2B_GENERATE_BEGIN",
+        label=progress_label,
+        imageWidth=int(width),
+        imageHeight=int(height),
+        maxNewTokens=192,
+        reasoning="off",
+        port=port,
+    )
+
+    payload = {
+        "model": "Qwen3-VL-2B-Instruct",
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": image_data_uri(image)},
+                    },
+                    {"type": "text", "text": prompt},
+                ],
+            }
+        ],
+        "temperature": 0.1,
+        "max_tokens": 192,
+        "stream": True,
+        "chat_template_kwargs": {"enable_thinking": False},
+    }
+
+    body = json.dumps(payload).encode("utf-8")
+    request = urllib_request.Request(
+        f"http://127.0.0.1:{port}/v1/chat/completions",
+        data=body,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+
+    report_progress(
+        progress_request_id,
+        f"Qwen3-VL 2B: {progress_label} · Antwort wird gestartet …",
+        phase="qwen3vl2b-generation",
+    )
+
+    content_parts: list[str] = []
+    fallback_lines: list[str] = []
+    chunk_count = 0
+    content_chars = 0
+    reasoning_chars = 0
+    last_progress_at = time.monotonic()
+    hard_deadline = time.monotonic() + 180.0
+
+    try:
+        with urllib_request.urlopen(request, timeout=90.0) as response:
+            for raw_line in response:
+                now = time.monotonic()
+                if now >= hard_deadline:
+                    raise TimeoutError(
+                        "Qwen3-VL-2B-Antwort hat das 180-Sekunden-Limit überschritten."
+                    )
+
+                line = raw_line.decode("utf-8", errors="replace").strip()
+                if not line:
+                    continue
+
+                if not line.startswith("data:"):
+                    fallback_lines.append(line)
+                    continue
+
+                data = line[5:].strip()
+                if data == "[DONE]":
+                    break
+                if not data:
+                    continue
+
+                try:
+                    event = json.loads(data)
+                except Exception:
+                    continue
+
+                choices = event.get("choices") or []
+                if not choices:
+                    continue
+
+                delta = choices[0].get("delta") or {}
+                content = delta.get("content")
+                reasoning = delta.get("reasoning_content")
+
+                if isinstance(content, str) and content:
+                    content_parts.append(content)
+                    content_chars += len(content)
+                if isinstance(reasoning, str) and reasoning:
+                    reasoning_chars += len(reasoning)
+
+                chunk_count += 1
+                if now - last_progress_at >= 2.0:
+                    report_progress(
+                        progress_request_id,
+                        (
+                            f"Qwen3-VL 2B: {progress_label} · Antwort läuft · "
+                            f"{content_chars} Zeichen · "
+                            f"{format_live_duration(now - started)}"
+                        ),
+                        phase="qwen3vl2b-generation",
+                    )
+                    last_progress_at = now
+
+        result = "".join(content_parts).strip()
+
+        if not result and fallback_lines:
+            raw = "\n".join(fallback_lines).strip()
+            value = json.loads(raw)
+            choices = value.get("choices") or []
+            message = choices[0].get("message") if choices else None
+            if isinstance(message, dict):
+                content = message.get("content")
+                if isinstance(content, str):
+                    result = content.strip()
+
+        if not result:
+            detail = (
+                f" ({reasoning_chars} Reasoning-Zeichen trotz reasoning=off)"
+                if reasoning_chars > 0
+                else ""
+            )
+            raise RuntimeError(
+                "llama.cpp/Qwen3-VL 2B hat keine nutzbare Antwort geliefert."
+                + detail
+            )
+
+    except urllib_error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        dev_log(
+            "QWEN3VL2B_GENERATE_HTTP_ERROR",
+            label=progress_label,
+            status=exc.code,
+            detail=detail[:1200],
+        )
+        raise RuntimeError(
+            f"llama.cpp/Qwen3-VL 2B HTTP {exc.code}: {detail[:1200]}"
+        ) from exc
+    except TimeoutError as exc:
+        dev_log(
+            "QWEN3VL2B_GENERATE_TIMEOUT",
+            label=progress_label,
+            elapsedMs=round((time.perf_counter() - started) * 1000, 1),
+            chunks=chunk_count,
+            contentChars=content_chars,
+            reasoningChars=reasoning_chars,
+            error=str(exc),
+        )
+        raise RuntimeError(
+            "Qwen3-VL 2B hat für diesen Bildbereich zu lange gebraucht. "
+            "Der Aufruf wurde nach spätestens 180 Sekunden abgebrochen."
+        ) from exc
+    except Exception as exc:
+        dev_log(
+            "QWEN3VL2B_GENERATE_ERROR",
+            label=progress_label,
+            elapsedMs=round((time.perf_counter() - started) * 1000, 1),
+            chunks=chunk_count,
+            contentChars=content_chars,
+            reasoningChars=reasoning_chars,
+            error=str(exc),
+        )
+        raise RuntimeError(
+            f"llama.cpp/Qwen3-VL 2B Anfrage fehlgeschlagen: {exc}"
+        ) from exc
+
+    dev_log(
+        "QWEN3VL2B_GENERATE_OK",
+        label=progress_label,
+        elapsedMs=round((time.perf_counter() - started) * 1000, 1),
+        chunks=chunk_count,
+        contentChars=len(result),
+        reasoningChars=reasoning_chars,
+    )
+    return result
+
+
+def qwen3vl2b_semantic_region(
+    image,
+    progress_request_id: str | None,
+    progress_label: str,
+) -> dict:
+    prompt = """
+Analysiere ausschließlich den sichtbaren Inhalt dieses Bildausschnitts.
+Gib eine knappe, sachliche semantische Beschreibung für eine Bildsuche zurück.
+Keine Spekulationen über Namen, Beziehungen, Ereignisse oder Orte, die nicht
+eindeutig sichtbar sind. Nenne konkrete Gegenstände, Tiere, Personen, Handlungen,
+den Umgebungstyp und deutlich lesbaren Text.
+
+Antworte NUR als JSON-Objekt in genau dieser Form:
+{
+  "description": "ein kurzer deutscher Satz",
+  "subjects": ["konkretes Hauptmotiv"],
+  "actions": ["sichtbare Handlung"],
+  "scenes": ["Umgebung oder Ortstyp"],
+  "visibleText": ["deutlich lesbarer Text"],
+  "tags": ["5 bis 15 konkrete deutsche Suchbegriffe"]
+}
+
+Leere Kategorien als [] zurückgeben. Begriffe nicht unnötig doppeln.
+""".strip()
+
+    output = qwen3vl2b_generate(
+        image,
+        prompt,
+        progress_request_id=progress_request_id,
+        progress_label=progress_label,
+    )
+
+    try:
+        value = last_json_value(output, dict)
+    except Exception as exc:
+        raise RuntimeError(
+            "Qwen3-VL 2B hat keine auswertbare JSON-Antwort geliefert. "
+            f"Antwortanfang: {output[:300]!r}"
+        ) from exc
+
+    return {
+        "description": " ".join(str(value.get("description", "")).strip().split())[:500],
+        "subjects": minicpm_clean_list(value.get("subjects"), 24),
+        "actions": minicpm_clean_list(value.get("actions"), 16),
+        "scenes": minicpm_clean_list(value.get("scenes"), 12),
+        "visibleText": minicpm_clean_list(value.get("visibleText"), 24),
+        "tags": minicpm_clean_list(value.get("tags"), 30),
+    }
+
+
+def benchmark_qwen3vl2b(
+    file_path: str,
+    profile_name: str,
+    progress_request_id: str | None = None,
+) -> dict:
+    if Image is None or ImageOps is None:
+        raise RuntimeError(
+            "Pillow fehlt. Einmal 'npm.cmd run setup:ai' ausführen."
+        )
+
+    profile = MINICPM_BENCHMARK_PROFILES.get(profile_name)
+    if profile is None:
+        raise RuntimeError(f"Unbekannte Qwen3-VL-2B-Benchmark-Stufe: {profile_name}")
+
+    total_started = time.perf_counter()
+    file_name = os.path.basename(file_path)
+    label = str(profile["label"])
+
+    prepare_started = time.perf_counter()
+    prepare_for_qwen()
+    prepare_ms = (time.perf_counter() - prepare_started) * 1000.0
+
+    load_started = time.perf_counter()
+    try:
+        with Image.open(file_path) as source:
+            source.load()
+            image = ImageOps.exif_transpose(source).convert("RGB")
+    except Exception as exc:
+        raise RuntimeError(
+            f"Bild konnte für den Qwen3-VL-2B-Test nicht gelesen werden: {exc}"
+        ) from exc
+    image_load_ms = (time.perf_counter() - load_started) * 1000.0
+
+    try:
+        report_progress(
+            progress_request_id,
+            f"Qwen3-VL-2B-Test {label}: Modell wird geladen · {file_name}",
+            phase="qwen3vl2b-model",
+        )
+        model_started = time.perf_counter()
+        qwen3vl2b_runtime()
+        model_ready_ms = (time.perf_counter() - model_started) * 1000.0
+
+        regions = minicpm_grid_regions(image, int(profile["tiles"]))
+        region_results: list[dict] = []
+        discovery_started = time.perf_counter()
+
+        for index, (left, top, right, bottom, kind) in enumerate(regions, start=1):
+            display_kind = "Gesamtbild" if kind == "whole-image" else "Kachel"
+            report_progress(
+                progress_request_id,
+                (
+                    f"Qwen3-VL-2B-Test {label}: {display_kind} "
+                    f"{index}/{len(regions)} · {file_name}"
+                ),
+                phase="qwen3vl2b-regions",
+                current=index,
+                total=len(regions),
+            )
+
+            owns_region = kind != "whole-image"
+            region = image.crop((left, top, right, bottom)) if owns_region else image
+
+            owns_scaled = False
+            if max(region.size) > 1280:
+                scaled = region.copy()
+                scaled.thumbnail((1280, 1280), Image.Resampling.LANCZOS)
+                analysis_image = scaled
+                owns_scaled = True
+            else:
+                analysis_image = region
+
+            region_started = time.perf_counter()
+            try:
+                semantic = qwen3vl2b_semantic_region(
+                    analysis_image,
+                    progress_request_id,
+                    f"{display_kind} {index}/{len(regions)}",
+                )
+            finally:
+                if owns_scaled:
+                    analysis_image.close()
+                if owns_region:
+                    region.close()
+                gc.collect()
+
+            region_results.append({
+                "name": "whole-image" if kind == "whole-image" else f"tile-{index - 1}",
+                "kind": kind,
+                "x": int(left),
+                "y": int(top),
+                "width": int(right - left),
+                "height": int(bottom - top),
+                "durationMs": round((time.perf_counter() - region_started) * 1000.0, 1),
+                "semantic": semantic,
+            })
+
+        discovery_ms = (time.perf_counter() - discovery_started) * 1000.0
+        semantic = minicpm_merge_semantics(region_results)
+        total_ms = (time.perf_counter() - total_started) * 1000.0
+
+        report_progress(
+            progress_request_id,
+            (
+                f"Qwen3-VL-2B-Test {label}: fertig · {len(regions)} Bildbereiche · "
+                f"{len(semantic['tags'])} Suchbegriffe · "
+                f"{format_live_duration(total_ms / 1000.0)}"
+            ),
+            phase="qwen3vl2b-done",
+            current=len(regions),
+            total=len(regions),
+        )
+
+        result = {
+            "path": file_path,
+            "profile": profile_name,
+            "label": label,
+            "description": str(profile["description"]),
+            "model": QWEN3VL2B_MODEL_VERSION,
+            "imageWidth": int(image.width),
+            "imageHeight": int(image.height),
+            "regionCount": len(regions),
+            "candidateCount": len(semantic["subjects"]),
+            "verifiedCount": len(semantic["tags"]),
+            "rejectedCount": 0,
+            "timings": {
+                "prepareMs": round(prepare_ms, 1),
+                "imageLoadMs": round(image_load_ms, 1),
+                "modelReadyMs": round(model_ready_ms, 1),
+                "discoveryMs": round(discovery_ms, 1),
+                "verificationMs": 0.0,
+                "totalMs": round(total_ms, 1),
+            },
+            "semantic": semantic,
+            "regions": region_results,
+            "objects": [],
+        }
+
+        dev_log(
+            "QWEN3VL2B_BENCHMARK_DONE",
             profile=profile_name,
             target=file_path,
             regionCount=len(regions),
@@ -4567,6 +5122,19 @@ def handle(message: dict) -> bool:
         respond(
             request_id,
             result=benchmark_minicpm(
+                file_path,
+                profile,
+                progress_request_id=request_id,
+            ),
+        )
+        return True
+
+    if method == "benchmark_qwen3vl2b":
+        file_path = require_file(payload)
+        profile = str(payload.get("profile", "")).strip()
+        respond(
+            request_id,
+            result=benchmark_qwen3vl2b(
                 file_path,
                 profile,
                 progress_request_id=request_id,
