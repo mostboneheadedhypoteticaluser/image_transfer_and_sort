@@ -678,6 +678,7 @@ export type CatalogMethod =
   | "enqueueAnalysisJobs"
   | "getAnalysisQueueStats"
   | "listAnalysisErrors"
+  | "countAnalysisErrors"
   | "retryAnalysisJob"
   | "retryFailedAnalysisJobs"
   | "claimAnalysisJob"
