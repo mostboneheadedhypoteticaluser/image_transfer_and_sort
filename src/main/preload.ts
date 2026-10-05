@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer } from "electron";
 import type {
   AnalysisErrorRecord,
   AnalysisWorkerStatus,
+  QwenBenchmarkModel,
   QwenBenchmarkProfile,
   QwenBenchmarkRunResult,
   QwenBenchmarkStageResult,
@@ -51,9 +52,10 @@ const api = {
       ipcRenderer.invoke("analysis:pickQwenBenchmarkImage"),
     runQwenBenchmark: (
       filePath: string,
+      model: QwenBenchmarkModel,
       profiles: QwenBenchmarkProfile[]
     ): Promise<QwenBenchmarkRunResult> =>
-      ipcRenderer.invoke("analysis:runQwenBenchmark", filePath, profiles),
+      ipcRenderer.invoke("analysis:runQwenBenchmark", filePath, model, profiles),
     onQwenBenchmarkStage: (
       listener: (stage: QwenBenchmarkStageResult) => void
     ) => {
