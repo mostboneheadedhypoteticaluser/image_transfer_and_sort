@@ -7,6 +7,8 @@ import type {
   QwenBenchmarkStageResult,
   PipelineStatus,
   CatalogStats,
+  CatalogWatchEvent,
+  CatalogWatchSnapshot,
   ConfirmPersonResult,
   ConfirmPetResult,
   DuplicateGroup,
@@ -119,6 +121,7 @@ declare global {
         listSources(): Promise<SourceRecord[]>;
         addSource(sourcePath: string): Promise<SourceRecord>;
         getStats(sourceId: number): Promise<CatalogStats>;
+        getWatchSnapshot(): Promise<CatalogWatchSnapshot>;
         listMedia(sourceId: number, limit?: number): Promise<MediaRecord[]>;
         getSearchFacets(sourceId: number): Promise<SearchFacets>;
         searchMedia(
@@ -133,6 +136,7 @@ declare global {
         restoreMedia(mediaId: number): Promise<RestoreResult>;
         resetCatalog(): Promise<ResetCatalogResult>;
         onProgress(listener: (progress: ScanProgress) => void): () => void;
+        onWatchEvent(listener: (event: CatalogWatchEvent) => void): () => void;
       };
     };
   }
