@@ -264,20 +264,22 @@ function renderQwenBenchmarkResults(): void {
       header.append(title, state);
 
       const progress = document.createElement("p");
+      const progressState = qwenBenchmarkProgressCurrent;
       if (hasError) {
         progress.textContent = qwenBenchmarkRunError ?? "Unbekannter Fehler.";
       } else if (
         isActive &&
-        qwenBenchmarkProgressCurrent?.current !== null &&
-        qwenBenchmarkProgressCurrent?.total !== null
+        progressState !== null &&
+        progressState.current !== null &&
+        progressState.total !== null
       ) {
         progress.textContent =
           "Bildbereich " +
-          qwenBenchmarkProgressCurrent.current.toLocaleString("de-DE") +
+          progressState.current.toLocaleString("de-DE") +
           "/" +
-          qwenBenchmarkProgressCurrent.total.toLocaleString("de-DE") +
+          progressState.total.toLocaleString("de-DE") +
           " · " +
-          qwenBenchmarkProgressCurrent.message;
+          progressState.message;
       } else if (isActive) {
         progress.textContent =
           "Stufe wird vorbereitet. " +
