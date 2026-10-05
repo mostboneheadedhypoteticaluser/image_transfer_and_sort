@@ -3173,6 +3173,11 @@ def minicpm_runtime() -> int:
         str(MINICPM_CONTEXT_SIZE),
         "-ngl",
         "99",
+        # MiniCPM-V 4.6 Instruct darf bei aktuellen llama.cpp-Builds nicht
+        # mit der automatischen Reasoning-Erkennung laufen. Sonst kann die
+        # Antwort in einem langen Thinking-Pfad hängen.
+        "--reasoning",
+        "off",
     ]
 
     creationflags = 0
@@ -3248,6 +3253,8 @@ def minicpm_generate(
         label=progress_label,
         imageWidth=int(width),
         imageHeight=int(height),
+        maxNewTokens=192,
+        reasoning="off",
         port=port,
     )
 
@@ -3265,9 +3272,12 @@ def minicpm_generate(
                 ],
             }
         ],
+        # Für die strukturierte JSON-Ausgabe reichen kurze Antworten. 192
+        # Tokens verhindern, dass ein einzelner Bildbereich minutenlang
+        # weitergeneriert, obwohl die relevanten Informationen längst da sind.
         "temperature": 0.1,
-        "max_tokens": 384,
-        "stream": False,
+        "max_tokens": 192,
+        "stream": True,
     }
 
     body = json.dumps(payload).encode("utf-8")
@@ -3280,28 +3290,139 @@ def minicpm_generate(
 
     report_progress(
         progress_request_id,
-        f"MiniCPM: {progress_label} · Modell antwortet …",
+        f"MiniCPM: {progress_label} · Antwort wird gestartet …",
         phase="minicpm-generation",
     )
 
+    content_parts: list[str] = []
+    fallback_lines: list[str] = []
+    chunk_count = 0
+    content_chars = 0
+    reasoning_chars = 0
+    last_progress_at = time.monotonic()
+    hard_deadline = time.monotonic() + 120.0
+
     try:
-        with urllib_request.urlopen(request, timeout=600.0) as response:
-            raw = response.read().decode("utf-8", errors="replace")
-        value = json.loads(raw)
-        choices = value.get("choices") or []
-        message = choices[0].get("message") if choices else None
-        if not isinstance(message, dict):
-            raise ValueError("choices[0].message fehlt")
-        content = message.get("content")
-        if not isinstance(content, str) or not content.strip():
-            raise ValueError("leere Modellantwort")
-        result = content.strip()
+        # 75 Sekunden ohne EIN Datenstück gelten als Hänger. Solange Daten
+        # kommen, greift zusätzlich ein harter Deckel von 120 Sekunden pro
+        # Bildbereich. Damit kann ein Test nicht wieder 15+ Minuten bei
+        # "Modell antwortet" stehen bleiben.
+        with urllib_request.urlopen(request, timeout=75.0) as response:
+            for raw_line in response:
+                now = time.monotonic()
+                if now >= hard_deadline:
+                    raise TimeoutError(
+                        "MiniCPM-Antwort hat das 120-Sekunden-Limit überschritten."
+                    )
+
+                line = raw_line.decode("utf-8", errors="replace").strip()
+                if not line:
+                    continue
+
+                if not line.startswith("data:"):
+                    fallback_lines.append(line)
+                    continue
+
+                data = line[5:].strip()
+                if data == "[DONE]":
+                    break
+                if not data:
+                    continue
+
+                try:
+                    event = json.loads(data)
+                except Exception:
+                    continue
+
+                choices = event.get("choices") or []
+                if not choices:
+                    continue
+
+                delta = choices[0].get("delta") or {}
+                content = delta.get("content")
+                reasoning = delta.get("reasoning_content")
+
+                if isinstance(content, str) and content:
+                    content_parts.append(content)
+                    content_chars += len(content)
+                if isinstance(reasoning, str) and reasoning:
+                    # Sollte mit --reasoning off nicht vorkommen. Wir zählen
+                    # es nur für die Diagnose und übernehmen es nicht ins JSON.
+                    reasoning_chars += len(reasoning)
+
+                chunk_count += 1
+
+                if now - last_progress_at >= 2.0:
+                    report_progress(
+                        progress_request_id,
+                        (
+                            f"MiniCPM: {progress_label} · Antwort läuft · "
+                            f"{content_chars} Zeichen · "
+                            f"{format_live_duration(now - started)}"
+                        ),
+                        phase="minicpm-generation",
+                    )
+                    last_progress_at = now
+
+        result = "".join(content_parts).strip()
+
+        # Fallback für llama.cpp-Builds, die trotz stream=True eine einzelne
+        # normale JSON-Antwort statt SSE zurückgeben.
+        if not result and fallback_lines:
+            raw = "\n".join(fallback_lines).strip()
+            value = json.loads(raw)
+            choices = value.get("choices") or []
+            message = choices[0].get("message") if choices else None
+            if isinstance(message, dict):
+                content = message.get("content")
+                if isinstance(content, str):
+                    result = content.strip()
+
+        if not result:
+            detail = (
+                f" ({reasoning_chars} Reasoning-Zeichen trotz reasoning=off)"
+                if reasoning_chars > 0
+                else ""
+            )
+            raise RuntimeError(
+                "llama.cpp/MiniCPM hat keine nutzbare Antwort geliefert." + detail
+            )
+
     except urllib_error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")
+        dev_log(
+            "MINICPM_GENERATE_HTTP_ERROR",
+            label=progress_label,
+            status=exc.code,
+            detail=detail[:1200],
+        )
         raise RuntimeError(
             f"llama.cpp/MiniCPM HTTP {exc.code}: {detail[:1200]}"
         ) from exc
+    except TimeoutError as exc:
+        dev_log(
+            "MINICPM_GENERATE_TIMEOUT",
+            label=progress_label,
+            elapsedMs=round((time.perf_counter() - started) * 1000, 1),
+            chunks=chunk_count,
+            contentChars=content_chars,
+            reasoningChars=reasoning_chars,
+            error=str(exc),
+        )
+        raise RuntimeError(
+            "MiniCPM hat für diesen Bildbereich zu lange gebraucht. "
+            "Der Aufruf wurde nach spätestens 120 Sekunden abgebrochen."
+        ) from exc
     except Exception as exc:
+        dev_log(
+            "MINICPM_GENERATE_ERROR",
+            label=progress_label,
+            elapsedMs=round((time.perf_counter() - started) * 1000, 1),
+            chunks=chunk_count,
+            contentChars=content_chars,
+            reasoningChars=reasoning_chars,
+            error=str(exc),
+        )
         raise RuntimeError(
             f"llama.cpp/MiniCPM Anfrage fehlgeschlagen: {exc}"
         ) from exc
@@ -3310,10 +3431,11 @@ def minicpm_generate(
         "MINICPM_GENERATE_OK",
         label=progress_label,
         elapsedMs=round((time.perf_counter() - started) * 1000, 1),
+        chunks=chunk_count,
         contentChars=len(result),
+        reasoningChars=reasoning_chars,
     )
     return result
-
 
 def minicpm_clean_list(value, limit: int = 24) -> list[str]:
     if isinstance(value, str):
