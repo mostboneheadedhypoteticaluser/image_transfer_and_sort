@@ -444,16 +444,23 @@ export class CatalogWatchService {
       sourcePath: source.sourcePath,
       kind: "SCAN_STARTED",
       occurredAt: new Date().toISOString(),
-      message: "Automatischer Katalogabgleich läuft · " + trigger,
+      message:
+        (full ? "Vollständiger" : "Gezielter") +
+        " Katalogabgleich läuft · " +
+        trigger,
       changedPath: null,
       automatic,
       scanResult: null
     });
 
     try {
-      const result = await this.catalog.request<ScanResult>("scanSource", {
-        sourceId
-      });
+      const result =
+        full || !source.recursive || source.mode !== "WATCHING"
+          ? await this.catalog.request<ScanResult>("scanSource", { sourceId })
+          : await this.catalog.request<ScanResult>("reconcileSourceChanges", {
+              sourceId,
+              paths: paths ?? []
+            });
 
       const finishedAt = new Date().toISOString();
       source.lastScanAt = finishedAt;
@@ -478,7 +485,11 @@ export class CatalogWatchService {
         sourcePath: currentSource.sourcePath,
         kind: "SCAN_FINISHED",
         occurredAt: finishedAt,
-        message: "Katalog automatisch aktualisiert: " + summary,
+        message:
+          (result.mode === "INCREMENTAL"
+            ? "Schnellabgleich abgeschlossen: "
+            : "Vollabgleich abgeschlossen: ") +
+          summary,
         changedPath: null,
         automatic,
         scanResult: result
@@ -489,7 +500,10 @@ export class CatalogWatchService {
 
       if (message.includes("Es läuft bereits ein Scan")) {
         const retry = setTimeout(() => {
-          if (!this.stopped) this.requestScan(sourceId, trigger, automatic);
+          if (!this.stopped) {
+            if (full) this.requestScan(sourceId, trigger, automatic);
+            else this.requestChangedPaths(sourceId, paths ?? [], trigger, automatic);
+          }
         }, WATCH_RETRY_MS);
         retry.unref();
         return;
