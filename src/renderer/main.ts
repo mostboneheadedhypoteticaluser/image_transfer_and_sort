@@ -1063,7 +1063,10 @@ async function runCombinedSearch(sourceId: number): Promise<void> {
     (criteria > 0
       ? " · " + criteria.toLocaleString("de-DE") + " UND-" +
         (criteria === 1 ? "Kriterium" : "Kriterien")
-      : " · keine Einschränkung");
+      : " · keine Einschränkung") +
+    (filter.semanticQuery.trim()
+      ? " · Qwen-4B-Semantik + SigLIP2-Ranking"
+      : "");
 }
 
 function clearSearchControls(): void {
@@ -1164,6 +1167,18 @@ function renderRows(rows: MediaRecord[], emptyText = "Noch keine Medien katalogi
       pathCell.appendChild(captured);
     }
 
+    const semanticReasons = row.semanticMatchReasons ?? [];
+    if (semanticReasons.length > 0) {
+      const reasons = document.createElement("small");
+      reasons.className = "semantic-match-reasons";
+      reasons.textContent = "Treffer: " + semanticReasons.join(" · ");
+      reasons.title =
+        (row.semanticDescription ? row.semanticDescription + "\n\n" : "") +
+        "Qwen-Konzepte: " +
+        ((row.semanticConcepts ?? []).join(", ") || "—");
+      pathCell.appendChild(reasons);
+    }
+
     const typeCell = document.createElement("td");
     typeCell.textContent = row.extension.replace(".", "").toUpperCase();
 
@@ -1254,23 +1269,58 @@ function renderRows(rows: MediaRecord[], emptyText = "Noch keine Medien katalogi
         "Motive: " + visible.join(" · ") +
         (motifLabels.length > visible.length ? " …" : "");
       motifBadge.title =
-        "Qwen3-VL-8B: Vollbild/Kachel erkannt und pro Ausschnitt doppelt bestätigt: " +
-        motifLabels.join(", ");
+        "Vorhandene allgemeine Motiverkennung: " + motifLabels.join(", ");
       stateCell.appendChild(motifBadge);
     }
 
-    if (row.availability === "AVAILABLE" && row.semanticReady) {
+    if (row.availability === "AVAILABLE" && row.catalogSemanticReady) {
+      const catalogBadge = document.createElement("span");
+      catalogBadge.className = "badge semantic catalog-semantic";
+
+      if (row.combinedSemanticScore !== null) {
+        catalogBadge.textContent =
+          "Relevanz " +
+          Math.round(row.combinedSemanticScore * 100).toLocaleString("de-DE") +
+          " %";
+        const qwenScore =
+          row.catalogSemanticScore !== null
+            ? Math.round(row.catalogSemanticScore * 100).toLocaleString("de-DE") + " %"
+            : "—";
+        const siglipScore =
+          row.semanticScore !== null
+            ? Math.round(row.semanticScore * 100).toLocaleString("de-DE") + " %"
+            : "nicht verwendet";
+        catalogBadge.title =
+          "Hybrides Ranking · Qwen-4B-Text/Konzepte: " + qwenScore +
+          " · SigLIP2: " + siglipScore +
+          (row.semanticMatchReasons?.length
+            ? " · Treffergründe: " + row.semanticMatchReasons.join(" | ")
+            : "");
+      } else {
+        catalogBadge.textContent = "Qwen 4B Inhalt bereit";
+        catalogBadge.title =
+          row.catalogSemanticModel ??
+          "Qwen3-VL-4B-Katalogbeschreibung und Suchkonzepte vorhanden";
+      }
+
+      stateCell.appendChild(catalogBadge);
+    }
+
+    if (
+      row.availability === "AVAILABLE" &&
+      row.semanticReady &&
+      !row.catalogSemanticReady
+    ) {
       const semanticBadge = document.createElement("span");
       semanticBadge.className = "badge semantic";
 
       if (row.semanticScore !== null) {
         semanticBadge.textContent =
-          "Semantik " + Math.round(row.semanticScore * 100).toLocaleString("de-DE") + " %";
+          "SigLIP2 " + Math.round(row.semanticScore * 100).toLocaleString("de-DE") + " %";
         semanticBadge.title =
-          "SigLIP2-Suchscore für den eingegebenen semantischen Inhalt · " +
-          (row.semanticModel ?? "SigLIP2");
+          "SigLIP2-Suchscore; Qwen-4B-Kataloganalyse für dieses Bild ist noch nicht fertig.";
       } else {
-        semanticBadge.textContent = "Semantik bereit";
+        semanticBadge.textContent = "SigLIP2 bereit";
         semanticBadge.title = row.semanticModel ?? "SigLIP2-Semantikanalyse abgeschlossen";
       }
 
