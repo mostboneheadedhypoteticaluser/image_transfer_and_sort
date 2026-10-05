@@ -200,7 +200,7 @@
             <article class="pipeline-stage">
               <div>
                 <small>Stufe 12 · rechenintensiv · zuletzt</small>
-                <strong>Motive · Qwen3-VL-8B Q8_0 Vollbild/Kacheln</strong>
+                <strong>Kataloginhalt · Qwen3-VL 4B · Gesamtbild + 4 Teilbilder</strong>
               </div>
               <div class="pipeline-stage-status">
                 <span id="objectVerificationStageState" class="stage-state waiting">Wartet</span>
@@ -232,12 +232,12 @@
                 Dev-Protokoll kopieren
               </button>
               <button id="qwenAutomaticButton" class="ghost" type="button">
-                Qwen-Serienanalyse starten
+                Qwen 4B Kataloganalyse aktiv
               </button>
               <button id="qwenBenchmarkButton" class="ghost" type="button">
-                MiniCPM-Einzelbild testen
+                Vision-Einzelbild testen
               </button>
-              <span class="analysis-note">Gesichts- und Haustiererkennung bleiben unverändert und haben Vorrang. Personen- und Haustierbestätigung ist bereits nach den Identitätsstufen möglich. Erst danach folgen die rechenintensiven allgemeinen Analysen: SigLIP2 und als letzte Rechenstufe Qwen3-VL-8B-Thinking Q8_0. Qwen untersucht Gesamtbild und überlappende Kacheln; jeder Kandidat wird danach zweimal am markierten Ausschnitt neu geprüft.</span>
+              <span class="analysis-note">Neue Bilder durchlaufen zuerst die schnellen technischen, Gesichts-, Haustier- und SigLIP2-Stufen. Erst danach läuft automatisch als letzte Rechenstufe Qwen3-VL 4B Instruct Q4_K_M. Pro Bild werden genau das Gesamtbild und vier überlappende 2×2-Teilbilder analysiert. Gespeichert werden Beschreibung, Motive, Handlungen, Szene, sichtbarer Text, Suchbegriffe und abgeleitete Suchkonzepte.</span>
             </div>
           </div>
         </section>
@@ -313,7 +313,7 @@
 
                 <section class="search-group search-group-wide">
                   <h4>Motive</h4>
-                  <p>Nur Objekte, die Qwen3-VL-8B im Gesamtbild/Kacheln gefunden oder als Hinweis erhalten und anschließend am Ausschnitt doppelt bestätigt hat.</p>
+                  <p>Objektfilter stammen weiterhin aus den schnellen Detektoren bzw. vorhandenen verifizierten Motivergebnissen. Die neue Qwen3-VL-4B-Stufe ergänzt den Katalog separat um Beschreibung, Tags und Suchkonzepte.</p>
                   <div id="searchObjects" class="search-facets motif-facets"></div>
                 </section>
 
