@@ -11,6 +11,7 @@ import type {
   ConfirmPetResult,
   DuplicateGroup,
   MediaRecord,
+  MediaDetails,
   MergePersonsResult,
   MergePetsResult,
   PersonCorrectionResult,
@@ -127,6 +128,7 @@ declare global {
         ): Promise<MediaRecord[]>;
         listDuplicateGroups(sourceId: number, limit?: number): Promise<DuplicateGroup[]>;
         listRecycleMedia(sourceId: number, limit?: number): Promise<MediaRecord[]>;
+        getMediaDetails(mediaId: number): Promise<MediaDetails | null>;
         scanSource(sourceId: number): Promise<ScanResult>;
         restoreMedia(mediaId: number): Promise<RestoreResult>;
         resetCatalog(): Promise<ResetCatalogResult>;
