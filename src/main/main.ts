@@ -337,6 +337,8 @@ function registerIpc(): void {
           if (
             status.state === "READY" &&
             status.activeJobs === 0 &&
+            pipelineStatus.objectVerification.pending === 0 &&
+            pipelineStatus.objectVerification.running === 0 &&
             !qwenBenchmarkMode &&
             !qwenBenchmarkPreparing
           ) {
