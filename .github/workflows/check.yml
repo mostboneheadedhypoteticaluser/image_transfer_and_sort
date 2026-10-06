@@ -7,6 +7,7 @@ on:
       - "2026-10-01-verschieben-papierkorb"
       - "2026-10-01-videos-datenbank-reset"
       - "2026-10-02-motiverkennung-ensemble-suche"
+      - "2026-10-06-personen-haustier-zaehler"
   pull_request:
 
 jobs:
