@@ -57,8 +57,8 @@ let catalogWatchService: CatalogWatchService | null = null;
 let thumbnailCacheRoot = "";
 let personRefreshTimer: NodeJS.Timeout | null = null;
 let personRefreshRunning = false;
-let groupedFaceEmbeddingCount: number | null = null;
-let groupedPetEmbeddingCount: number | null = null;
+const groupedFaceEmbeddingCounts = new Map<number, number>();
+const groupedPetEmbeddingCounts = new Map<number, number>();
 let isQuitting = false;
 let qwenBenchmarkMode = false;
 let qwenBenchmarkPreparing: Promise<void> | null = null;
@@ -135,15 +135,15 @@ function sendToRenderer(channel: string, payload: unknown): void {
   win.webContents.send(channel, payload);
 }
 
-async function getIdentityEmbeddingTotals(): Promise<{
+async function getIdentityEmbeddingCounts(): Promise<Array<{
+  sourceId: number;
   faces: number;
   dogs: number;
-}> {
-  if (!catalog) return { faces: 0, dogs: 0 };
+}>> {
+  if (!catalog) return [];
 
   const sources = await catalog.request<SourceRecord[]>("listSources");
-  let faces = 0;
-  let dogs = 0;
+  const result: Array<{ sourceId: number; faces: number; dogs: number }> = [];
 
   for (const source of sources) {
     if (!source.enabled) continue;
@@ -151,11 +151,27 @@ async function getIdentityEmbeddingTotals(): Promise<{
     const stats = await catalog.request<CatalogStats>("getStats", {
       sourceId: source.id
     });
-    faces += stats.embeddedFaces;
-    dogs += stats.embeddedDogs;
+    result.push({
+      sourceId: source.id,
+      faces: stats.embeddedFaces,
+      dogs: stats.embeddedDogs
+    });
   }
 
-  return { faces, dogs };
+  return result;
+}
+
+async function waitForIdentityRefreshIdle(timeoutMs = 15000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (personRefreshRunning && Date.now() < deadline) {
+    await new Promise<void>((resolve) => setTimeout(resolve, 50));
+  }
+
+  if (personRefreshRunning) {
+    throw new Error(
+      "Personen-/Haustiergruppierung konnte vor dem Datenbank-Reset nicht sauber angehalten werden."
+    );
+  }
 }
 
 function schedulePersonRefresh(): void {
@@ -185,37 +201,61 @@ function schedulePersonRefresh(): void {
     personRefreshRunning = true;
 
     void (async () => {
-      const totals = await getIdentityEmbeddingTotals();
-      const faceChanged =
-        groupedFaceEmbeddingCount === null ||
-        totals.faces !== groupedFaceEmbeddingCount;
-      const petChanged =
-        groupedPetEmbeddingCount === null ||
-        totals.dogs !== groupedPetEmbeddingCount;
+      const counts = await getIdentityEmbeddingCounts();
+      const faceChangedSources = counts.filter(
+        (entry) => groupedFaceEmbeddingCounts.get(entry.sourceId) !== entry.faces
+      );
+      const petChangedSources = counts.filter(
+        (entry) => groupedPetEmbeddingCounts.get(entry.sourceId) !== entry.dogs
+      );
 
-      if (!faceChanged && !petChanged) return;
+      if (faceChangedSources.length === 0 && petChangedSources.length === 0) {
+        return;
+      }
 
       analysis?.logDiagnostic("IDENTITY_REFRESH_BEGIN", {
-        faceEmbeddings: totals.faces,
-        dogEmbeddings: totals.dogs,
-        previousFaceEmbeddings: groupedFaceEmbeddingCount,
-        previousDogEmbeddings: groupedPetEmbeddingCount
+        faceSources: faceChangedSources.map((entry) => ({
+          sourceId: entry.sourceId,
+          embeddings: entry.faces,
+          previous: groupedFaceEmbeddingCounts.get(entry.sourceId) ?? null
+        })),
+        dogSources: petChangedSources.map((entry) => ({
+          sourceId: entry.sourceId,
+          embeddings: entry.dogs,
+          previous: groupedPetEmbeddingCounts.get(entry.sourceId) ?? null
+        }))
       });
 
       await analysisCoordinator?.pauseForMaintenance();
 
       try {
-        if (faceChanged && personService) {
-          // true = bewusst auch bei noch offener Embedding-Queue clustern.
-          await personService.refreshAllSources(true);
-          groupedFaceEmbeddingCount = totals.faces;
-          sendToRenderer("people:updated", {});
+        if (personService) {
+          for (const entry of faceChangedSources) {
+            // Nur die tatsächlich geänderte Quelle neu gruppieren.
+            await personService.getOverview(entry.sourceId, true, true);
+            groupedFaceEmbeddingCounts.set(entry.sourceId, entry.faces);
+          }
+          if (faceChangedSources.length > 0) {
+            sendToRenderer("people:updated", {});
+          }
         }
 
-        if (petChanged && petService) {
-          await petService.refreshAllSources(true);
-          groupedPetEmbeddingCount = totals.dogs;
-          sendToRenderer("pets:updated", {});
+        if (petService) {
+          for (const entry of petChangedSources) {
+            await petService.getOverview(entry.sourceId, true, true);
+            groupedPetEmbeddingCounts.set(entry.sourceId, entry.dogs);
+          }
+          if (petChangedSources.length > 0) {
+            sendToRenderer("pets:updated", {});
+          }
+        }
+
+        const activeSourceIds = new Set(counts.map((entry) => entry.sourceId));
+        for (const sourceId of [...groupedFaceEmbeddingCounts.keys()]) {
+          if (!activeSourceIds.has(sourceId)) groupedFaceEmbeddingCounts.delete(sourceId);
+        }
+        for (const sourceId of [...groupedPetEmbeddingCounts.keys()]) {
+          if (!activeSourceIds.has(sourceId)) groupedPetEmbeddingCounts.delete(sourceId);
         }
       } finally {
         analysisCoordinator?.resumeAfterMaintenance();
@@ -452,22 +492,31 @@ function registerIpc(): void {
     semanticTextCache.clear();
     catalogWatchService?.stop();
 
-    // Laufende Analyse-/Thumbnail-Jobs zuerst sauber anhalten. Insbesondere
-    // SigLIP2 kann lange rechnen; ein Reset darf nicht parallel einen alten
-    // Job nachträglich wieder in die frisch geleerte Datenbank schreiben.
+    // Laufende Analyse-/Thumbnail-/Gruppierungsjobs zuerst wirklich zum
+    // Stillstand bringen. Ein fester Sleep ist dafür nicht ausreichend:
+    // sonst könnte ein alter Job nach dem DELETE wieder Ergebnisse eintragen.
     analysisCoordinator?.stop();
     thumbnailCoordinator?.stop();
-    analysis?.stop();
-    thumbnailService?.stop();
 
     if (personRefreshTimer) {
       clearTimeout(personRefreshTimer);
       personRefreshTimer = null;
     }
-    groupedFaceEmbeddingCount = null;
-    groupedPetEmbeddingCount = null;
 
-    await new Promise<void>((resolve) => setTimeout(resolve, 800));
+    // Harter Stopp beendet auch einen eventuell laufenden Qwen/llama.cpp-
+    // Prozessbaum und verwirft alle offenen Python-Requests sofort.
+    analysis?.stopImmediately();
+    thumbnailService?.stop();
+
+    await Promise.all([
+      analysisCoordinator?.waitUntilIdle() ?? Promise.resolve(),
+      thumbnailCoordinator?.waitUntilIdle() ?? Promise.resolve(),
+      waitForIdentityRefreshIdle(),
+      catalogWatchService?.waitUntilIdle() ?? Promise.resolve()
+    ]);
+
+    groupedFaceEmbeddingCounts.clear();
+    groupedPetEmbeddingCounts.clear();
 
     const result = await catalog!.request<ResetCatalogResult>("resetCatalog");
 
@@ -892,9 +941,15 @@ function registerIpc(): void {
       _event,
       candidateId: number,
       name: string,
-      rejectedPetId?: number
+      rejectedPetId?: number,
+      fallbackPetDetectionId?: number
     ): Promise<ConfirmPetResult> =>
-      petService!.confirmCandidate(candidateId, name, rejectedPetId)
+      petService!.confirmCandidate(
+        candidateId,
+        name,
+        rejectedPetId,
+        fallbackPetDetectionId
+      )
   );
 
   ipcMain.handle(
