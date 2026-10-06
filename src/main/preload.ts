@@ -99,13 +99,15 @@ const api = {
     confirmCandidate: (
       candidateId: number,
       name: string,
-      fallbackFaceDetectionId?: number
+      fallbackFaceDetectionId?: number,
+      expectedFaceCount?: number
     ): Promise<ConfirmPersonResult> =>
       ipcRenderer.invoke(
         "people:confirmCandidate",
         candidateId,
         name,
-        fallbackFaceDetectionId
+        fallbackFaceDetectionId,
+        expectedFaceCount
       ),
     removeCandidateFace: (
       candidateId: number,
@@ -140,14 +142,16 @@ const api = {
       candidateId: number,
       name: string,
       rejectedPetId?: number,
-      fallbackPetDetectionId?: number
+      fallbackPetDetectionId?: number,
+      expectedDetectionCount?: number
     ): Promise<ConfirmPetResult> =>
       ipcRenderer.invoke(
         "pets:confirmCandidate",
         candidateId,
         name,
         rejectedPetId,
-        fallbackPetDetectionId
+        fallbackPetDetectionId,
+        expectedDetectionCount
       ),
     removeCandidatePet: (
       candidateId: number,
