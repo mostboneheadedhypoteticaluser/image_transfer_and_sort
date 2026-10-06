@@ -515,10 +515,16 @@ export type CatalogStats = {
   duplicateFiles: number;
   personCandidates: number;
   personCandidateFaces: number;
+  detectedFaces: number;
+  embeddedFaces: number;
+  unassignedFaceEmbeddings: number;
   persons: number;
   assignedPersonFaces: number;
   petCandidates: number;
   petCandidateDetections: number;
+  fusedDogs: number;
+  embeddedDogs: number;
+  unassignedDogEmbeddings: number;
   pets: number;
   assignedPetDetections: number;
   lastScan: string | null;
