@@ -7008,7 +7008,10 @@ function replacePersonCandidates(
             !usedFaces.has(member.faceDetectionId)
         );
 
-      if (members.length === 0) continue;
+      // Ein einzelnes Gesicht ist kein Bestätigungsvorschlag. Solche
+      // Singletons bleiben als unzugeordnetes Embedding erhalten und können
+      // später mit weiteren Treffern eine echte Gruppe bilden.
+      if (members.length < 2) continue;
 
       const requestedRepresentative = Number(cluster.representativeFaceId);
       const representativeFaceId = members.some(
@@ -7079,10 +7082,9 @@ function listPersonCandidates(sourceId: number, requestedLimit: number) {
     JOIN person_candidate_faces pcf ON pcf.candidate_id=pc.id
     WHERE pc.source_id=?
     GROUP BY pc.id
-    -- Wichtig bei großen Katalogen: Gruppen mit frisch erkannten Gesichtern
-    -- zuerst zeigen. Vorher dominierten große alte Gruppen dauerhaft die
-    -- auf 100 begrenzte Ansicht.
-    ORDER BY newest_face_id DESC, face_count DESC, pc.average_similarity DESC
+    -- Bestätigung ist nach Gruppengröße priorisiert; bei Gleichstand kommt
+    -- die Gruppe mit dem jüngsten Gesicht zuerst.
+    ORDER BY face_count DESC, pc.average_similarity DESC, newest_face_id DESC
     LIMIT ?
   `).all(sourceId, limit);
 
@@ -7506,19 +7508,47 @@ function mergePersons(targetPersonId: number, sourcePersonId: number) {
   };
 }
 
-function confirmPersonCandidate(candidateId: number, rawName: unknown) {
+function confirmPersonCandidate(
+  candidateId: number,
+  rawName: unknown,
+  fallbackFaceDetectionId?: number
+) {
   const name = typeof rawName === "string" ? rawName.trim() : "";
   if (!name) throw new Error("Bitte einen Namen für die Person eingeben.");
   if (name.length > 120) throw new Error("Der Personenname ist zu lang.");
 
-  const candidate = db.prepare(`
+  let resolvedCandidateId = candidateId;
+  let candidate = db.prepare(`
     SELECT id, source_id
     FROM person_candidates
     WHERE id=?
-  `).get(candidateId);
+  `).get(resolvedCandidateId);
+
+  // Kandidaten-IDs ändern sich bei einem Hintergrund-Re-Clustering. Wenn der
+  // Nutzer währenddessen im Namensfeld bleibt, kann die sichtbare ID veraltet
+  // sein. Das Referenzgesicht ist stabil und findet den aktuellen Kandidaten.
+  if (
+    !candidate &&
+    Number.isInteger(fallbackFaceDetectionId) &&
+    Number(fallbackFaceDetectionId) > 0
+  ) {
+    candidate = db.prepare(`
+      SELECT pc.id, pc.source_id
+      FROM person_candidate_faces pcf
+      JOIN person_candidates pc ON pc.id=pcf.candidate_id
+      WHERE pcf.face_detection_id=?
+      LIMIT 1
+    `).get(Number(fallbackFaceDetectionId));
+
+    if (candidate) {
+      resolvedCandidateId = Number(candidate.id);
+    }
+  }
 
   if (!candidate) {
-    throw new Error("Der Personenvorschlag wurde nicht mehr gefunden.");
+    throw new Error(
+      "Die Gruppe wurde während der Analyse neu aufgebaut. Bitte die Personenansicht aktualisieren und erneut bestätigen."
+    );
   }
 
   const members = db.prepare(`
@@ -7529,7 +7559,7 @@ function confirmPersonCandidate(candidateId: number, rawName: unknown) {
     WHERE pcf.candidate_id=?
       AND pfa.face_detection_id IS NULL
     ORDER BY pcf.face_detection_id
-  `).all(candidateId);
+  `).all(resolvedCandidateId);
 
   if (members.length === 0) {
     throw new Error("Der Personenvorschlag enthält keine unbestätigten Gesichter mehr.");
@@ -7589,7 +7619,7 @@ function confirmPersonCandidate(candidateId: number, rawName: unknown) {
       faceCount += 1;
     }
 
-    db.prepare("DELETE FROM person_candidates WHERE id=?").run(candidateId);
+    db.prepare("DELETE FROM person_candidates WHERE id=?").run(resolvedCandidateId);
     db.prepare("DELETE FROM person_cluster_runs WHERE source_id=?")
       .run(Number(candidate.source_id));
 
@@ -8552,7 +8582,10 @@ async function dispatch(method: CatalogMethod, payload: Record<string, unknown> 
     case "confirmPersonCandidate":
       return confirmPersonCandidate(
         asNumber(payload.candidateId, "candidateId"),
-        payload.name
+        payload.name,
+        payload.fallbackFaceDetectionId === undefined
+          ? undefined
+          : asNumber(payload.fallbackFaceDetectionId, "fallbackFaceDetectionId")
       );
     case "removeFaceFromPersonCandidate":
       return removeFaceFromPersonCandidate(
