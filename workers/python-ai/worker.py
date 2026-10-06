@@ -2112,11 +2112,15 @@ def cluster_face_embeddings(
             anchor_similarity = float(
                 np.dot(vector, cluster["anchorVector"])
             )
+            edge_similarity = float(
+                np.dot(vector, cluster["edgeVector"])
+            )
 
             if (
                 centroid_similarity >= cluster_threshold
                 and representative_similarity >= verification_threshold
                 and anchor_similarity >= verification_threshold
+                and edge_similarity >= verification_threshold
                 and centroid_similarity > best_similarity
             ):
                 best_index = index
@@ -2127,6 +2131,7 @@ def cluster_face_embeddings(
                 "centroid": vector.copy(),
                 "representativeVector": vector.copy(),
                 "anchorVector": vector.copy(),
+                "edgeVector": vector.copy(),
                 "canonicalMembers": [item],
             })
             continue
@@ -2148,7 +2153,12 @@ def cluster_face_embeddings(
             cluster["canonicalMembers"],
             key=lambda member: float(np.dot(member["vector"], centroid)),
         )
+        edge = min(
+            cluster["canonicalMembers"],
+            key=lambda member: float(np.dot(member["vector"], centroid)),
+        )
         cluster["representativeVector"] = representative["vector"]
+        cluster["edgeVector"] = edge["vector"]
 
     result_clusters: list[dict] = []
     ungrouped_count = 0
