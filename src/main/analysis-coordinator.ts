@@ -172,6 +172,7 @@ export class AnalysisCoordinator {
   private pumping = false;
   private stopped = true;
   private benchmarkPaused = false;
+  private maintenancePaused = false;
   private currentFastMediaId: number | null = null;
 
   // Die 4B-Kataloganalyse läuft wieder automatisch. Sie bleibt bewusst die
@@ -205,9 +206,27 @@ export class AnalysisCoordinator {
 
   stop(): void {
     this.stopped = true;
+    this.maintenancePaused = false;
     this.currentFastMediaId = null;
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
+  }
+
+  async pauseForMaintenance(): Promise<void> {
+    this.maintenancePaused = true;
+
+    const deadline = Date.now() + 15000;
+    while (this.pumping && Date.now() < deadline) {
+      await new Promise<void>((resolve) => setTimeout(resolve, 50));
+    }
+  }
+
+  resumeAfterMaintenance(): void {
+    this.maintenancePaused = false;
+
+    if (!this.stopped && !this.benchmarkPaused) {
+      void this.pump();
+    }
   }
 
   async pauseForBenchmark(): Promise<void> {
@@ -414,7 +433,7 @@ export class AnalysisCoordinator {
   }
 
   private async pump(): Promise<void> {
-    if (this.stopped || this.pumping) return;
+    if (this.stopped || this.pumping || this.maintenancePaused) return;
     if (this.analysis.getStatus().state !== "READY") return;
 
     this.pumping = true;
