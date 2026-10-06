@@ -2351,7 +2351,8 @@ function renderPersonOverview(overview: PersonOverview): void {
           const result = await window.imageSorter.people.confirmCandidate(
             candidate.id,
             name,
-            fallbackFaceDetectionId
+            fallbackFaceDetectionId,
+            candidate.faceCount
           );
           button.textContent = "Bestätigt ✓";
           progressText.textContent =
@@ -2851,7 +2852,8 @@ function renderPetOverview(overview: PetOverview): void {
             candidate.id,
             name,
             rejectedPetId,
-            fallbackPetDetectionId
+            fallbackPetDetectionId,
+            candidate.detectionCount
           );
 
           button.textContent = "Bestätigt ✓";
