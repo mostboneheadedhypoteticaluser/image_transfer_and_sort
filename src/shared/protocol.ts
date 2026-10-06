@@ -514,9 +514,13 @@ export type CatalogStats = {
   duplicateGroups: number;
   duplicateFiles: number;
   personCandidates: number;
+  personCandidateFaces: number;
   persons: number;
+  assignedPersonFaces: number;
   petCandidates: number;
+  petCandidateDetections: number;
   pets: number;
+  assignedPetDetections: number;
   lastScan: string | null;
 };
 
