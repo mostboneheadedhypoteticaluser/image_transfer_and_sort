@@ -94,6 +94,10 @@ export class CatalogWatchService {
     this.pendingScans.clear();
   }
 
+  clearHistory(): void {
+    this.history.length = 0;
+  }
+
   async waitUntilIdle(timeoutMs = 300000): Promise<void> {
     const deadline = Date.now() + timeoutMs;
     while (this.processingScans && Date.now() < deadline) {
