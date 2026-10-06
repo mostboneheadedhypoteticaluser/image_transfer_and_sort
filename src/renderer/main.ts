@@ -2066,7 +2066,7 @@ function renderIdentityTabStats(stats: IdentityTabStats): void {
     stats.unassignedFaceEmbeddings.toLocaleString("de-DE") +
     " Ges.";
   peopleTabCount.title =
-    "Ausgewählte Quelle · " +
+    "Alle aktiven Quellen · " +
     stats.personCandidates.toLocaleString("de-DE") +
     " unbestätigte Personengruppen mit " +
     stats.personCandidateFaces.toLocaleString("de-DE") +
@@ -2088,7 +2088,7 @@ function renderIdentityTabStats(stats: IdentityTabStats): void {
     stats.unassignedDogEmbeddings.toLocaleString("de-DE") +
     " Hunde";
   petsTabCount.title =
-    "Ausgewählte Quelle · " +
+    "Alle aktiven Quellen · " +
     stats.petCandidates.toLocaleString("de-DE") +
     " unbestätigte Hundegruppen mit " +
     stats.petCandidateDetections.toLocaleString("de-DE") +
@@ -2106,14 +2106,48 @@ function renderIdentityTabStats(stats: IdentityTabStats): void {
 }
 
 async function refreshIdentityTabStats(): Promise<void> {
-  const sourceId = selectedSourceId();
-  if (sourceId === null) return;
+  const enabledSources = sources.filter((source) => source.enabled);
+  const aggregate: IdentityTabStats = {
+    personCandidates: 0,
+    personCandidateFaces: 0,
+    detectedFaces: 0,
+    embeddedFaces: 0,
+    unassignedFaceEmbeddings: 0,
+    persons: 0,
+    assignedPersonFaces: 0,
+    petCandidates: 0,
+    petCandidateDetections: 0,
+    fusedDogs: 0,
+    embeddedDogs: 0,
+    unassignedDogEmbeddings: 0,
+    pets: 0,
+    assignedPetDetections: 0
+  };
 
-  // Zähler und Bestätigungsansicht müssen zwingend dieselbe Quelle meinen.
-  // Eine globale Summe bei gleichzeitig quellenbezogener Kartenansicht war
-  // irreführend (z. B. 1.100 Gruppen oben, aber nur ~60 Gruppen darunter).
-  const stats = await window.imageSorter.catalog.getStats(sourceId);
-  renderIdentityTabStats(stats);
+  const statsList = await Promise.all(
+    enabledSources.map((source) =>
+      window.imageSorter.catalog.getStats(source.id)
+    )
+  );
+
+  for (const stats of statsList) {
+    aggregate.personCandidates += stats.personCandidates;
+    aggregate.personCandidateFaces += stats.personCandidateFaces;
+    aggregate.detectedFaces += stats.detectedFaces;
+    aggregate.embeddedFaces += stats.embeddedFaces;
+    aggregate.unassignedFaceEmbeddings += stats.unassignedFaceEmbeddings;
+    aggregate.persons += stats.persons;
+    aggregate.assignedPersonFaces += stats.assignedPersonFaces;
+    aggregate.petCandidates += stats.petCandidates;
+    aggregate.petCandidateDetections += stats.petCandidateDetections;
+    aggregate.fusedDogs += stats.fusedDogs;
+    aggregate.embeddedDogs += stats.embeddedDogs;
+    aggregate.unassignedDogEmbeddings += stats.unassignedDogEmbeddings;
+    aggregate.pets += stats.pets;
+    aggregate.assignedPetDetections += stats.assignedPetDetections;
+  }
+
+  renderIdentityTabStats(aggregate);
 }
 
 function scheduleIdentityTabStatsRefresh(): void {
@@ -2571,30 +2605,37 @@ function renderPetOverview(overview: PetOverview): void {
   petCandidates.replaceChildren();
   confirmedPets.replaceChildren();
 
-  const candidateDogs = overview.candidates.reduce(
-    (sum, candidate) => sum + candidate.detectionCount,
-    0
-  );
   const assignedDogs = overview.pets.reduce(
     (sum, pet) => sum + pet.detectionCount,
     0
   );
 
+  const petWindowTruncated =
+    overview.candidates.length < overview.candidateTotal;
+  const petWindowText = petWindowTruncated
+    ? "Gezeigt werden die " +
+      overview.candidates.length.toLocaleString("de-DE") +
+      " neuesten von " +
+      overview.candidateTotal.toLocaleString("de-DE") +
+      " Hundegruppen. "
+    : overview.candidateTotal.toLocaleString("de-DE") +
+      (overview.candidateTotal === 1 ? " Hundegruppe. " : " Hundegruppen. ");
+
   if (overview.clusteringPending) {
     petStatus.textContent =
-      overview.candidates.length.toLocaleString("de-DE") + " Gruppen mit " +
-      candidateDogs.toLocaleString("de-DE") +
-      " unbestätigten Hundefundstellen · " +
+      petWindowText +
+      overview.candidateDetectionTotal.toLocaleString("de-DE") +
+      " gruppierte Hundefundstellen insgesamt · " +
       assignedDogs.toLocaleString("de-DE") +
       " Fundstellen bereits einem Hund zugeordnet. " +
       "Neue Dog-ReID-Ergebnisse werden während der laufenden Analyse regelmäßig neu gruppiert.";
-  } else if (overview.candidates.length > 0) {
+  } else if (overview.candidateTotal > 0) {
     petStatus.textContent =
-      overview.candidates.length.toLocaleString("de-DE") + " " +
-      (overview.candidates.length === 1 ? "Hundegruppe" : "Hundegruppen") +
-      " mit " + candidateDogs.toLocaleString("de-DE") +
-      " Fundstellen zur Bestätigung gefunden. " +
-      assignedDogs.toLocaleString("de-DE") + " Fundstellen sind bereits zugeordnet.";
+      petWindowText +
+      overview.candidateDetectionTotal.toLocaleString("de-DE") +
+      " gruppierte Hundefundstellen insgesamt · " +
+      assignedDogs.toLocaleString("de-DE") +
+      " Fundstellen sind bereits zugeordnet.";
   } else {
     petStatus.textContent =
       "Aktuell gibt es keine unbestätigten Hundegruppen. " +
@@ -3307,7 +3348,9 @@ async function refreshCatalog(): Promise<void> {
     renderPetOverview({
       candidates: [],
       pets: [],
-      clusteringPending: false
+      clusteringPending: false,
+      candidateTotal: 0,
+      candidateDetectionTotal: 0
     });
     return;
   }
