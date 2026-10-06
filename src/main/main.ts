@@ -201,9 +201,12 @@ function schedulePersonRefresh(): void {
         analysisCoordinator?.resumeAfterMaintenance();
       }
     })()
-      .catch(() => {
+      .catch((error) => {
         // Bei einem temporären Clusterfehler bleiben die Done-Zähler bewusst
         // unverändert; dadurch wird der nächste Sammellauf erneut versucht.
+        analysis?.logDiagnostic("IDENTITY_REFRESH_ERROR", {
+          error: error instanceof Error ? error.message : String(error)
+        });
       })
       .finally(() => {
         personRefreshRunning = false;
