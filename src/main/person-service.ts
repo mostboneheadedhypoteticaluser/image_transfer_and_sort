@@ -13,13 +13,15 @@ import type {
 import { AnalysisService } from "./analysis-service";
 import { CatalogService } from "./catalog-service";
 
-const ALGORITHM_VERSION = "person-centroid-v1";
+const ALGORITHM_VERSION = "person-anchor-centroid-v2";
 
 type ClusterWorkerResult = {
   algorithm: string;
   clusterThreshold: number;
   verificationThreshold: number;
+  minClusterSize: number;
   clusterCount: number;
+  ungroupedCount: number;
   clusters: PersonClusterInput[];
 };
 
@@ -37,7 +39,8 @@ export class PersonService {
   async getOverview(
     sourceId: number,
     forceRefresh = false,
-    allowWhilePending = false
+    allowWhilePending = false,
+    rebuildIfNeeded = true
   ): Promise<PersonOverview> {
     const queue = await this.catalog.request<AnalysisQueueStats>(
       "getAnalysisQueueStats",
@@ -61,14 +64,15 @@ export class PersonService {
         }
       );
 
-      if (forceRefresh || set.needsRebuild) {
+      if (forceRefresh || (rebuildIfNeeded && set.needsRebuild)) {
         const clustered = await this.analysis.request<ClusterWorkerResult>(
           "cluster_face_embeddings",
           {
             faces: set.faces,
             cannotLinks: set.cannotLinks,
-            clusterThreshold: 0.50,
-            verificationThreshold: 0.363
+            clusterThreshold: 0.62,
+            verificationThreshold: 0.55,
+            minClusterSize: 2
           },
           120000
         );
@@ -90,16 +94,21 @@ export class PersonService {
           inputEmbeddings: set.faces.length,
           workerClusters: clustered.clusterCount,
           writtenClusters: replaced.writtenClusters,
-          writtenItems: replaced.writtenFaces
+          writtenItems: replaced.writtenFaces,
+          ungroupedItems: clustered.ungroupedCount
         });
 
-        if (replaced.writtenFaces !== set.faces.length) {
+        const expectedGroupedFaces = clustered.clusters.reduce(
+          (sum, cluster) => sum + cluster.members.length,
+          0
+        );
+        if (replaced.writtenFaces !== expectedGroupedFaces) {
           throw new Error(
-            "Personengruppierung hat " +
-            set.faces.length +
-            " gültige Gesichtsmerkmale erhalten, aber nur " +
+            "Personengruppierung wollte " +
+            expectedGroupedFaces +
+            " Gesichter in echten Gruppen speichern, aber " +
             replaced.writtenFaces +
-            " Gesichter in Kandidaten gespeichert."
+            " wurden geschrieben."
           );
         }
       }
@@ -108,8 +117,8 @@ export class PersonService {
     const [candidates, persons, stats] = await Promise.all([
       this.catalog.request<PersonCandidate[]>("listPersonCandidates", {
         sourceId,
-        // Neue Gruppen müssen bei großen Katalogen sichtbar bleiben. Die DB
-        // liefert sie neueste-zuerst; 500 hält DOM/Payload trotzdem begrenzt.
+        // 500 größte Gruppen reichen für die Bestätigungsansicht; Einzelgesichter
+        // werden grundsätzlich nicht als Gruppe gespeichert.
         limit: 500
       }),
       this.catalog.request<PersonRecord[]>("listPersons", { sourceId }),
@@ -135,7 +144,12 @@ export class PersonService {
 
     const overviews: PersonOverview[] = [];
     for (const source of enabledSources) {
-      overviews.push(await this.getOverview(source.id, forceRefresh, false));
+      // Normales Öffnen der Bestätigungsansicht ist read-only und darf nicht
+      // spontan ein minutenlanges Re-Clustering auslösen. Ein explizites
+      // Aktualisieren darf dagegen neu gruppieren.
+      overviews.push(
+        await this.getOverview(source.id, forceRefresh, false, forceRefresh)
+      );
     }
 
     const personMap = new Map<number, PersonRecord>();
@@ -171,9 +185,9 @@ export class PersonService {
       .flatMap((overview) => overview.candidates)
       .sort(
         (a, b) =>
-          b.newestFaceId - a.newestFaceId ||
           b.faceCount - a.faceCount ||
-          b.averageSimilarity - a.averageSimilarity
+          b.averageSimilarity - a.averageSimilarity ||
+          b.newestFaceId - a.newestFaceId
       )
       .slice(0, 500);
 
