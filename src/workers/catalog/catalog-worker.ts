@@ -877,25 +877,51 @@ function getStats(sourceId: number) {
     SELECT
       (SELECT COUNT(*) FROM person_candidates WHERE source_id=?) AS candidate_count,
       (
+        SELECT COUNT(*)
+        FROM person_candidate_faces pcf
+        JOIN person_candidates pc ON pc.id=pcf.candidate_id
+        WHERE pc.source_id=?
+      ) AS candidate_face_count,
+      (
         SELECT COUNT(DISTINCT pfa.person_id)
         FROM person_face_assignments pfa
         JOIN face_detections fd ON fd.id=pfa.face_detection_id
         JOIN media_items m ON m.id=fd.media_id
         WHERE m.source_id=?
-      ) AS person_count
-  `).get(sourceId, sourceId);
+      ) AS person_count,
+      (
+        SELECT COUNT(*)
+        FROM person_face_assignments pfa
+        JOIN face_detections fd ON fd.id=pfa.face_detection_id
+        JOIN media_items m ON m.id=fd.media_id
+        WHERE m.source_id=?
+      ) AS assigned_face_count
+  `).get(sourceId, sourceId, sourceId, sourceId);
 
   const petIdentityStats = db.prepare(`
     SELECT
       (SELECT COUNT(*) FROM pet_candidates WHERE source_id=?) AS candidate_count,
+      (
+        SELECT COUNT(*)
+        FROM pet_candidate_items pci
+        JOIN pet_candidates pc ON pc.id=pci.candidate_id
+        WHERE pc.source_id=?
+      ) AS candidate_detection_count,
       (
         SELECT COUNT(DISTINCT pa.pet_id)
         FROM pet_assignments pa
         JOIN pet_fused_detections pd ON pd.id=pa.pet_detection_id
         JOIN media_items m ON m.id=pd.media_id
         WHERE m.source_id=?
-      ) AS pet_count
-  `).get(sourceId, sourceId);
+      ) AS pet_count,
+      (
+        SELECT COUNT(*)
+        FROM pet_assignments pa
+        JOIN pet_fused_detections pd ON pd.id=pa.pet_detection_id
+        JOIN media_items m ON m.id=pd.media_id
+        WHERE m.source_id=?
+      ) AS assigned_detection_count
+  `).get(sourceId, sourceId, sourceId, sourceId);
 
   const lastScan = db.prepare(`
     SELECT finished_at
@@ -913,9 +939,13 @@ function getStats(sourceId: number) {
     duplicateGroups: Number(duplicateStats?.duplicate_groups ?? 0),
     duplicateFiles: Number(duplicateStats?.duplicate_files ?? 0),
     personCandidates: Number(personStats?.candidate_count ?? 0),
+    personCandidateFaces: Number(personStats?.candidate_face_count ?? 0),
     persons: Number(personStats?.person_count ?? 0),
+    assignedPersonFaces: Number(personStats?.assigned_face_count ?? 0),
     petCandidates: Number(petIdentityStats?.candidate_count ?? 0),
+    petCandidateDetections: Number(petIdentityStats?.candidate_detection_count ?? 0),
     pets: Number(petIdentityStats?.pet_count ?? 0),
+    assignedPetDetections: Number(petIdentityStats?.assigned_detection_count ?? 0),
     lastScan: lastScan?.finished_at ? String(lastScan.finished_at) : null
   };
 }
