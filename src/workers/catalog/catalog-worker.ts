@@ -8820,7 +8820,7 @@ async function dispatch(method: CatalogMethod, payload: Record<string, unknown> 
         asNumber(payload.sourceId, "sourceId"),
         typeof payload.algorithmVersion === "string"
           ? payload.algorithmVersion
-          : "dogreid-complete-link-v2"
+          : "dogreid-complete-link-v3"
       );
     case "replacePetCandidates":
       return replacePetCandidates(
@@ -8828,7 +8828,7 @@ async function dispatch(method: CatalogMethod, payload: Record<string, unknown> 
         typeof payload.revision === "string" ? payload.revision : "",
         typeof payload.algorithmVersion === "string"
           ? payload.algorithmVersion
-          : "dogreid-complete-link-v2",
+          : "dogreid-complete-link-v3",
         payload.clusters
       );
     case "autoAssignKnownPetCandidates":
@@ -8898,7 +8898,7 @@ async function dispatch(method: CatalogMethod, payload: Record<string, unknown> 
         asNumber(payload.sourceId, "sourceId"),
         typeof payload.algorithmVersion === "string"
           ? payload.algorithmVersion
-          : "person-complete-link-v4"
+          : "person-complete-link-v5"
       );
     case "replacePersonCandidates":
       return replacePersonCandidates(
@@ -8906,7 +8906,7 @@ async function dispatch(method: CatalogMethod, payload: Record<string, unknown> 
         typeof payload.revision === "string" ? payload.revision : "",
         typeof payload.algorithmVersion === "string"
           ? payload.algorithmVersion
-          : "person-complete-link-v4",
+          : "person-complete-link-v5",
         payload.clusters
       );
     case "listPersonCandidates":
