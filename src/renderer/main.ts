@@ -3577,6 +3577,19 @@ resetButton.addEventListener("click", () => {
     progressText.textContent = "Katalog wird vollständig zurückgesetzt …";
 
     try {
+      if (identityStatsRefreshTimer !== null) {
+        window.clearTimeout(identityStatsRefreshTimer);
+        identityStatsRefreshTimer = null;
+      }
+      if (sourcePipelineRefreshTimer !== null) {
+        window.clearTimeout(sourcePipelineRefreshTimer);
+        sourcePipelineRefreshTimer = null;
+      }
+      if (analysisRefreshTimer !== null) {
+        window.clearTimeout(analysisRefreshTimer);
+        analysisRefreshTimer = null;
+      }
+
       await window.imageSorter.catalog.resetCatalog();
       currentView = "media";
       mediaTab.classList.add("active");
@@ -3596,8 +3609,9 @@ resetButton.addEventListener("click", () => {
       searchSummary.textContent = "Noch keine Suche ausgeführt.";
       await loadSources();
       progressText.textContent =
-        "Datenbank vollständig zurückgesetzt. Du kannst jetzt sauber neu beginnen; " +
-        "auch alte KI- und Semantikdaten sind entfernt.";
+        "Datenbank vollständig und geprüft zurückgesetzt. " +
+        "Alle alten Katalog-, Personen-, Hunde-, KI- und Semantikdaten sind entfernt. " +
+        "Füge jetzt die gewünschte Medienquelle neu hinzu, um einen sauberen Durchlauf zu starten.";
     } finally {
       resetting = false;
       resetButton.disabled = false;
