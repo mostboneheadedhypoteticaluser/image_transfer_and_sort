@@ -6136,7 +6136,8 @@ function confirmPetCandidate(
   candidateId: number,
   rawName: unknown,
   rejectedPetId?: number,
-  fallbackPetDetectionId?: number
+  fallbackPetDetectionId?: number,
+  expectedDetectionCount?: number
 ) {
   const name = typeof rawName === "string" ? rawName.trim() : "";
   if (!name) throw new Error("Bitte einen Namen für das Haustier eingeben.");
@@ -6199,6 +6200,20 @@ function confirmPetCandidate(
 
   if (members.length === 0) {
     throw new Error("Der Haustiervorschlag enthält keine unbestätigten Fundstellen mehr.");
+  }
+
+  if (
+    Number.isInteger(expectedDetectionCount) &&
+    Number(expectedDetectionCount) >= 2 &&
+    members.length !== Number(expectedDetectionCount)
+  ) {
+    throw new Error(
+      "Die Hundegruppe hat sich während der Analyse geändert (" +
+      Number(expectedDetectionCount) +
+      " → " +
+      members.length +
+      " Fundstellen). Bitte die Ansicht aktualisieren und die Gruppe erneut prüfen."
+    );
   }
 
   const petClass = String(candidate.pet_class);
@@ -7601,7 +7616,8 @@ function mergePersons(targetPersonId: number, sourcePersonId: number) {
 function confirmPersonCandidate(
   candidateId: number,
   rawName: unknown,
-  fallbackFaceDetectionId?: number
+  fallbackFaceDetectionId?: number,
+  expectedFaceCount?: number
 ) {
   const name = typeof rawName === "string" ? rawName.trim() : "";
   if (!name) throw new Error("Bitte einen Namen für die Person eingeben.");
@@ -7670,6 +7686,20 @@ function confirmPersonCandidate(
 
   if (members.length === 0) {
     throw new Error("Der Personenvorschlag enthält keine unbestätigten Gesichter mehr.");
+  }
+
+  if (
+    Number.isInteger(expectedFaceCount) &&
+    Number(expectedFaceCount) >= 2 &&
+    members.length !== Number(expectedFaceCount)
+  ) {
+    throw new Error(
+      "Die Personengruppe hat sich während der Analyse geändert (" +
+      Number(expectedFaceCount) +
+      " → " +
+      members.length +
+      " Gesichter). Bitte die Ansicht aktualisieren und die Gruppe erneut prüfen."
+    );
   }
 
   db.exec("BEGIN IMMEDIATE");
@@ -8685,7 +8715,10 @@ async function dispatch(method: CatalogMethod, payload: Record<string, unknown> 
           : asNumber(payload.rejectedPetId, "rejectedPetId"),
         payload.fallbackPetDetectionId === undefined
           ? undefined
-          : asNumber(payload.fallbackPetDetectionId, "fallbackPetDetectionId")
+          : asNumber(payload.fallbackPetDetectionId, "fallbackPetDetectionId"),
+        payload.expectedDetectionCount === undefined
+          ? undefined
+          : asNumber(payload.expectedDetectionCount, "expectedDetectionCount")
       );
     case "removePetFromCandidate":
       return removePetFromCandidate(
@@ -8753,7 +8786,10 @@ async function dispatch(method: CatalogMethod, payload: Record<string, unknown> 
         payload.name,
         payload.fallbackFaceDetectionId === undefined
           ? undefined
-          : asNumber(payload.fallbackFaceDetectionId, "fallbackFaceDetectionId")
+          : asNumber(payload.fallbackFaceDetectionId, "fallbackFaceDetectionId"),
+        payload.expectedFaceCount === undefined
+          ? undefined
+          : asNumber(payload.expectedFaceCount, "expectedFaceCount")
       );
     case "removeFaceFromPersonCandidate":
       return removeFaceFromPersonCandidate(
