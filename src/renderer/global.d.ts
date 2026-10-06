@@ -70,7 +70,8 @@ declare global {
         confirmCandidate(
           candidateId: number,
           name: string,
-          fallbackFaceDetectionId?: number
+          fallbackFaceDetectionId?: number,
+          expectedFaceCount?: number
         ): Promise<ConfirmPersonResult>;
         removeCandidateFace(
           candidateId: number,
@@ -96,7 +97,8 @@ declare global {
           candidateId: number,
           name: string,
           rejectedPetId?: number,
-          fallbackPetDetectionId?: number
+          fallbackPetDetectionId?: number,
+          expectedDetectionCount?: number
         ): Promise<ConfirmPetResult>;
         removeCandidatePet(
           candidateId: number,
