@@ -69,7 +69,8 @@ declare global {
         getOverview(sourceId: number, forceRefresh?: boolean): Promise<PersonOverview>;
         confirmCandidate(
           candidateId: number,
-          name: string
+          name: string,
+          fallbackFaceDetectionId?: number
         ): Promise<ConfirmPersonResult>;
         removeCandidateFace(
           candidateId: number,
