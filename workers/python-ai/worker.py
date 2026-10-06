@@ -2015,8 +2015,9 @@ def cluster_pet_embeddings(
 def cluster_face_embeddings(
     faces: list[dict],
     cannot_links: list[dict] | None = None,
-    cluster_threshold: float = 0.50,
-    verification_threshold: float = 0.363,
+    cluster_threshold: float = 0.62,
+    verification_threshold: float = 0.55,
+    min_cluster_size: int = 2,
 ) -> dict:
     if np is None:
         raise RuntimeError(
@@ -2025,6 +2026,7 @@ def cluster_face_embeddings(
 
     cluster_threshold = max(verification_threshold, min(0.95, float(cluster_threshold)))
     verification_threshold = max(0.0, min(cluster_threshold, float(verification_threshold)))
+    min_cluster_size = max(2, int(min_cluster_size))
 
     canonical_by_content: dict[str, dict] = {}
     duplicates_by_content: dict[str, list[dict]] = {}
@@ -2104,10 +2106,17 @@ def cluster_face_embeddings(
             representative_similarity = float(
                 np.dot(vector, cluster["representativeVector"])
             )
+            # Stabiler Anker verhindert Cluster-Drift: Ein Cluster darf nicht
+            # über eine Kette nur mittelbar ähnlicher Gesichter von Person A
+            # zu einer anderen Person wandern.
+            anchor_similarity = float(
+                np.dot(vector, cluster["anchorVector"])
+            )
 
             if (
                 centroid_similarity >= cluster_threshold
                 and representative_similarity >= verification_threshold
+                and anchor_similarity >= verification_threshold
                 and centroid_similarity > best_similarity
             ):
                 best_index = index
@@ -2117,6 +2126,7 @@ def cluster_face_embeddings(
             clusters.append({
                 "centroid": vector.copy(),
                 "representativeVector": vector.copy(),
+                "anchorVector": vector.copy(),
                 "canonicalMembers": [item],
             })
             continue
@@ -2141,6 +2151,7 @@ def cluster_face_embeddings(
         cluster["representativeVector"] = representative["vector"]
 
     result_clusters: list[dict] = []
+    ungrouped_count = 0
 
     for cluster in clusters:
         centroid = cluster["centroid"]
@@ -2168,7 +2179,8 @@ def cluster_face_embeddings(
 
         members.sort(key=lambda member: int(member["faceDetectionId"]))
 
-        if not members:
+        if len(members) < min_cluster_size:
+            ungrouped_count += len(members)
             continue
 
         result_clusters.append({
@@ -2187,10 +2199,12 @@ def cluster_face_embeddings(
     )
 
     return {
-        "algorithm": "person-centroid-v1",
+        "algorithm": "person-anchor-centroid-v2",
         "clusterThreshold": cluster_threshold,
         "verificationThreshold": verification_threshold,
+        "minClusterSize": min_cluster_size,
         "clusterCount": len(result_clusters),
+        "ungroupedCount": ungrouped_count,
         "clusters": result_clusters,
     }
 
@@ -6091,8 +6105,9 @@ def handle(message: dict) -> bool:
             result=cluster_face_embeddings(
                 faces,
                 payload.get("cannotLinks") or [],
-                float(payload.get("clusterThreshold", 0.50)),
-                float(payload.get("verificationThreshold", 0.363)),
+                float(payload.get("clusterThreshold", 0.62)),
+                float(payload.get("verificationThreshold", 0.55)),
+                int(payload.get("minClusterSize", 2)),
             ),
         )
         return True
