@@ -8433,6 +8433,62 @@ function resetCatalog(): { reset: true } {
 
       DELETE FROM sqlite_sequence;
     `);
+    const resetTables = [
+      "analysis_jobs",
+      "person_candidate_faces",
+      "person_candidates",
+      "person_cluster_runs",
+      "person_cluster_exclusions",
+      "person_face_exclusions",
+      "person_face_assignments",
+      "persons",
+      "pet_candidate_items",
+      "pet_candidates",
+      "pet_cluster_runs",
+      "pet_cluster_exclusions",
+      "pet_assignment_exclusions",
+      "pet_assignments",
+      "pets",
+      "pet_embeddings",
+      "pet_fused_detections",
+      "pet_detections",
+      "object_fused_detections",
+      "object_detections",
+      "media_semantic_annotations",
+      "semantic_embeddings",
+      "face_embeddings",
+      "face_detections",
+      "media_image_metadata",
+      "media_thumbnails",
+      "media_items",
+      "media_directories",
+      "scans",
+      "media_sources"
+    ];
+
+    const leftovers = resetTables
+      .map((table) => ({
+        table,
+        count: Number(
+          db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get()?.count ?? 0
+        )
+      }))
+      .filter((entry) => entry.count !== 0);
+
+    if (leftovers.length > 0) {
+      throw new Error(
+        "Datenbank-Reset unvollständig: " +
+        leftovers.map((entry) => entry.table + "=" + entry.count).join(", ")
+      );
+    }
+
+    const foreignKeyIssues = db.prepare("PRAGMA foreign_key_check").all();
+    if (foreignKeyIssues.length > 0) {
+      throw new Error(
+        "Datenbank-Reset hat Inkonsistenzen in Fremdschlüsseln hinterlassen."
+      );
+    }
+
     db.exec("COMMIT");
   } catch (error) {
     db.exec("ROLLBACK");
