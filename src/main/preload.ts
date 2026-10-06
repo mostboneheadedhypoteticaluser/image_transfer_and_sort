@@ -98,9 +98,15 @@ const api = {
       ipcRenderer.invoke("people:getOverview", sourceId, forceRefresh),
     confirmCandidate: (
       candidateId: number,
-      name: string
+      name: string,
+      fallbackFaceDetectionId?: number
     ): Promise<ConfirmPersonResult> =>
-      ipcRenderer.invoke("people:confirmCandidate", candidateId, name),
+      ipcRenderer.invoke(
+        "people:confirmCandidate",
+        candidateId,
+        name,
+        fallbackFaceDetectionId
+      ),
     removeCandidateFace: (
       candidateId: number,
       faceDetectionId: number
