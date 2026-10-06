@@ -2066,7 +2066,7 @@ function renderIdentityTabStats(stats: IdentityTabStats): void {
     stats.unassignedFaceEmbeddings.toLocaleString("de-DE") +
     " Ges.";
   peopleTabCount.title =
-    "Gesamt über alle aktiven Quellen · " +
+    "Ausgewählte Quelle · " +
     stats.personCandidates.toLocaleString("de-DE") +
     " unbestätigte Personengruppen mit " +
     stats.personCandidateFaces.toLocaleString("de-DE") +
@@ -2088,7 +2088,7 @@ function renderIdentityTabStats(stats: IdentityTabStats): void {
     stats.unassignedDogEmbeddings.toLocaleString("de-DE") +
     " Hunde";
   petsTabCount.title =
-    "Gesamt über alle aktiven Quellen · " +
+    "Ausgewählte Quelle · " +
     stats.petCandidates.toLocaleString("de-DE") +
     " unbestätigte Hundegruppen mit " +
     stats.petCandidateDetections.toLocaleString("de-DE") +
@@ -2106,48 +2106,14 @@ function renderIdentityTabStats(stats: IdentityTabStats): void {
 }
 
 async function refreshIdentityTabStats(): Promise<void> {
-  const enabledSources = sources.filter((source) => source.enabled);
-  const aggregate: IdentityTabStats = {
-    personCandidates: 0,
-    personCandidateFaces: 0,
-    detectedFaces: 0,
-    embeddedFaces: 0,
-    unassignedFaceEmbeddings: 0,
-    persons: 0,
-    assignedPersonFaces: 0,
-    petCandidates: 0,
-    petCandidateDetections: 0,
-    fusedDogs: 0,
-    embeddedDogs: 0,
-    unassignedDogEmbeddings: 0,
-    pets: 0,
-    assignedPetDetections: 0
-  };
+  const sourceId = selectedSourceId();
+  if (sourceId === null) return;
 
-  const statsList = await Promise.all(
-    enabledSources.map((source) =>
-      window.imageSorter.catalog.getStats(source.id)
-    )
-  );
-
-  for (const stats of statsList) {
-    aggregate.personCandidates += stats.personCandidates;
-    aggregate.personCandidateFaces += stats.personCandidateFaces;
-    aggregate.detectedFaces += stats.detectedFaces;
-    aggregate.embeddedFaces += stats.embeddedFaces;
-    aggregate.unassignedFaceEmbeddings += stats.unassignedFaceEmbeddings;
-    aggregate.persons += stats.persons;
-    aggregate.assignedPersonFaces += stats.assignedPersonFaces;
-    aggregate.petCandidates += stats.petCandidates;
-    aggregate.petCandidateDetections += stats.petCandidateDetections;
-    aggregate.fusedDogs += stats.fusedDogs;
-    aggregate.embeddedDogs += stats.embeddedDogs;
-    aggregate.unassignedDogEmbeddings += stats.unassignedDogEmbeddings;
-    aggregate.pets += stats.pets;
-    aggregate.assignedPetDetections += stats.assignedPetDetections;
-  }
-
-  renderIdentityTabStats(aggregate);
+  // Zähler und Bestätigungsansicht müssen zwingend dieselbe Quelle meinen.
+  // Eine globale Summe bei gleichzeitig quellenbezogener Kartenansicht war
+  // irreführend (z. B. 1.100 Gruppen oben, aber nur ~60 Gruppen darunter).
+  const stats = await window.imageSorter.catalog.getStats(sourceId);
+  renderIdentityTabStats(stats);
 }
 
 function scheduleIdentityTabStatsRefresh(): void {
@@ -2176,20 +2142,32 @@ function renderPersonOverview(overview: PersonOverview): void {
     0
   );
 
+  const candidateWindowTruncated =
+    overview.candidates.length < overview.candidateTotal;
+  const candidateWindowText = candidateWindowTruncated
+    ? "Gezeigt werden die " +
+      overview.candidates.length.toLocaleString("de-DE") +
+      " neuesten von " +
+      overview.candidateTotal.toLocaleString("de-DE") +
+      " Gruppen. "
+    : overview.candidateTotal.toLocaleString("de-DE") +
+      (overview.candidateTotal === 1 ? " Gruppe. " : " Gruppen. ");
+
   if (overview.clusteringPending) {
     personStatus.textContent =
-      overview.candidates.length.toLocaleString("de-DE") + " Gruppen mit " +
-      candidateFaces.toLocaleString("de-DE") +
-      " unbestätigten Gesichtern · " +
+      candidateWindowText +
+      overview.candidateFaceTotal.toLocaleString("de-DE") +
+      " unbestätigte Gesichter insgesamt · " +
       assignedFaces.toLocaleString("de-DE") +
       " Gesichter bereits bestätigt. " +
       "Neue SFace-Ergebnisse werden während der laufenden Analyse regelmäßig neu gruppiert.";
-  } else if (overview.candidates.length > 0) {
+  } else if (overview.candidateTotal > 0) {
     personStatus.textContent =
-      overview.candidates.length.toLocaleString("de-DE") + " unbestätigte " +
-      (overview.candidates.length === 1 ? "Gruppe" : "Gruppen") + " mit " +
-      candidateFaces.toLocaleString("de-DE") + " Gesichtern gefunden. " +
-      assignedFaces.toLocaleString("de-DE") + " Gesichter sind bereits bestätigt.";
+      candidateWindowText +
+      overview.candidateFaceTotal.toLocaleString("de-DE") +
+      " unbestätigte Gesichter insgesamt · " +
+      assignedFaces.toLocaleString("de-DE") +
+      " Gesichter bereits bestätigt.";
   } else {
     personStatus.textContent =
       "Aktuell gibt es keine unbestätigten Personenvorschläge. " +
@@ -2586,7 +2564,6 @@ async function loadPersonOverview(
       forceRefresh
     );
     renderPersonOverview(overview);
-    const stats = await window.imageSorter.catalog.getStats(sourceId);
     await refreshIdentityTabStats();
   } finally {
     refreshPeopleButton.disabled = false;
