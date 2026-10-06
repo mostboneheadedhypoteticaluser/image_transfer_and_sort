@@ -316,6 +316,11 @@ export class AnalysisCoordinator {
     };
 
     for (const spec of MODULES) {
+      // Die beiden Haustierdetektoren werden für die Anzeige weiter unten
+      // bildbezogen zusammengeführt. Einfaches Addieren würde jedes Bild
+      // doppelt zählen.
+      if (spec.stage === "petDetection") continue;
+
       const stats = await this.catalog.request<AnalysisQueueStats>(
         "getAnalysisQueueStats",
         { module: spec.module }
@@ -323,6 +328,11 @@ export class AnalysisCoordinator {
 
       result[spec.stage] = addStats(result[spec.stage], stats);
     }
+
+    result.petDetection =
+      await this.catalog.request<AnalysisQueueStats>(
+        "getPetDetectionQueueStats"
+      );
 
     for (const stage of Object.keys(result) as PythonStage[]) {
       this.onStats(stage, result[stage]);
