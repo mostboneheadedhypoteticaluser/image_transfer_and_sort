@@ -330,6 +330,7 @@ export type PetCandidate = {
   id: number;
   petClass: "dog" | "cat";
   detectionCount: number;
+  newestPetId: number;
   representativePetId: number | null;
   averageSimilarity: number;
   minSimilarity: number;
@@ -360,6 +361,8 @@ export type PetOverview = {
   candidates: PetCandidate[];
   pets: PetRecord[];
   clusteringPending: boolean;
+  candidateTotal: number;
+  candidateDetectionTotal: number;
 };
 
 export type ConfirmPetResult = {
@@ -427,6 +430,7 @@ export type PersonCandidateFace = {
 export type PersonCandidate = {
   id: number;
   faceCount: number;
+  newestFaceId: number;
   representativeFaceId: number | null;
   averageSimilarity: number;
   minSimilarity: number;
