@@ -2661,7 +2661,10 @@ function retryFailedAnalysisJobs(sourceId?: number) {
   }
 }
 
-function claimAnalysisJob(module = "file-probe-v1") {
+function claimAnalysisJob(
+  module = "file-probe-v1",
+  mediaId?: number
+) {
   db.exec("BEGIN IMMEDIATE");
   try {
     const row = db.prepare(`
@@ -2678,6 +2681,7 @@ function claimAnalysisJob(module = "file-probe-v1") {
       WHERE j.module=?
         AND j.status='PENDING'
         AND m.availability='AVAILABLE'
+        ${mediaId === undefined ? "" : "AND j.media_id=?"}
         AND (
           j.module<>'face-embed-sface-v1'
           OR EXISTS (
@@ -2750,9 +2754,16 @@ function claimAnalysisJob(module = "file-probe-v1") {
             )
           )
         )
-      ORDER BY j.priority ASC, j.id ASC
+      ORDER BY
+        j.priority ASC,
+        m.first_seen_at DESC,
+        j.id ASC
       LIMIT 1
-    `).get(module);
+    `).get(...(
+      mediaId === undefined
+        ? [module]
+        : [module, mediaId]
+    ));
 
     if (!row) {
       db.exec("COMMIT");
@@ -8244,7 +8255,10 @@ async function dispatch(method: CatalogMethod, payload: Record<string, unknown> 
       );
     case "claimAnalysisJob":
       return claimAnalysisJob(
-        typeof payload.module === "string" ? payload.module : "file-probe-v1"
+        typeof payload.module === "string" ? payload.module : "file-probe-v1",
+        payload.mediaId === undefined
+          ? undefined
+          : asNumber(payload.mediaId, "mediaId")
       );
     case "completeAnalysisJob":
       return completeAnalysisJob(
