@@ -22,6 +22,11 @@ type ClusterWorkerResult = {
   clusters: PersonClusterInput[];
 };
 
+type ReplacePersonCandidatesResult = {
+  writtenClusters: number;
+  writtenFaces: number;
+};
+
 export class PersonService {
   constructor(
     private readonly catalog: CatalogService,
@@ -67,12 +72,35 @@ export class PersonService {
           120000
         );
 
-        await this.catalog.request("replacePersonCandidates", {
+        const replaced =
+          await this.catalog.request<ReplacePersonCandidatesResult>(
+            "replacePersonCandidates",
+            {
+              sourceId,
+              revision: set.revision,
+              algorithmVersion: ALGORITHM_VERSION,
+              clusters: clustered.clusters
+            }
+          );
+
+        this.analysis.logDiagnostic("IDENTITY_CLUSTER_RESULT", {
+          identity: "people",
           sourceId,
-          revision: set.revision,
-          algorithmVersion: ALGORITHM_VERSION,
-          clusters: clustered.clusters
+          inputEmbeddings: set.faces.length,
+          workerClusters: clustered.clusterCount,
+          writtenClusters: replaced.writtenClusters,
+          writtenItems: replaced.writtenFaces
         });
+
+        if (replaced.writtenFaces !== set.faces.length) {
+          throw new Error(
+            "Personengruppierung hat " +
+            set.faces.length +
+            " gültige Gesichtsmerkmale erhalten, aber nur " +
+            replaced.writtenFaces +
+            " Gesichter in Kandidaten gespeichert."
+          );
+        }
       }
     }
 
