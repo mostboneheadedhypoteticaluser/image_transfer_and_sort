@@ -5585,7 +5585,7 @@ function replacePetCandidates(
   const clusters = Array.isArray(rawClusters) ? rawClusters : [];
 
   const eligibleRows = db.prepare(`
-    SELECT pd.id
+    SELECT pd.id, pd.detection_index, m.sha256
     FROM pet_fused_detections pd
     JOIN pet_embeddings pe ON pe.pet_detection_id=pd.id
     JOIN media_items m ON m.id=pd.media_id
@@ -5601,6 +5601,12 @@ function replacePetCandidates(
 
   const eligibleIds = new Set(
     eligibleRows.map((row) => Number(row.id))
+  );
+  const contentKeyByPetId = new Map(
+    eligibleRows.map((row) => [
+      Number(row.id),
+      `${String(row.sha256)}:${Number(row.detection_index)}`
+    ])
   );
 
   const insertCandidate = db.prepare(`
@@ -5655,7 +5661,12 @@ function replacePetCandidates(
             !usedPets.has(member.petDetectionId)
         );
 
-      if (members.length < 2) continue;
+      const independentContentKeys = new Set(
+        members
+          .map((member) => contentKeyByPetId.get(member.petDetectionId))
+          .filter((value): value is string => Boolean(value))
+      );
+      if (independentContentKeys.size < 2) continue;
 
       const requestedRepresentative = Number(cluster.representativePetId);
       const representativePetId = members.some(
@@ -7043,7 +7054,7 @@ function replacePersonCandidates(
   const clusters = Array.isArray(rawClusters) ? rawClusters : [];
 
   const eligibleRows = db.prepare(`
-    SELECT fd.id
+    SELECT fd.id, fd.detection_index, m.sha256
     FROM face_detections fd
     JOIN face_embeddings fe ON fe.face_detection_id=fd.id
     JOIN media_items m ON m.id=fd.media_id
@@ -7058,6 +7069,12 @@ function replacePersonCandidates(
 
   const eligibleIds = new Set(
     eligibleRows.map((row) => Number(row.id))
+  );
+  const contentKeyByFaceId = new Map(
+    eligibleRows.map((row) => [
+      Number(row.id),
+      `${String(row.sha256)}:${Number(row.detection_index)}`
+    ])
   );
 
   const insertCandidate = db.prepare(`
@@ -7110,10 +7127,14 @@ function replacePersonCandidates(
             !usedFaces.has(member.faceDetectionId)
         );
 
-      // Ein einzelnes Gesicht ist kein Bestätigungsvorschlag. Solche
-      // Singletons bleiben als unzugeordnetes Embedding erhalten und können
-      // später mit weiteren Treffern eine echte Gruppe bilden.
-      if (members.length < 2) continue;
+      // Eine Gruppe braucht mindestens zwei unabhängige Erkennungen.
+      // Mehrere Dateikopien derselben Aufnahme/detection_index zählen nicht.
+      const independentContentKeys = new Set(
+        members
+          .map((member) => contentKeyByFaceId.get(member.faceDetectionId))
+          .filter((value): value is string => Boolean(value))
+      );
+      if (independentContentKeys.size < 2) continue;
 
       const requestedRepresentative = Number(cluster.representativeFaceId);
       const representativeFaceId = members.some(
