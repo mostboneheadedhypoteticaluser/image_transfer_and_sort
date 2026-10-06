@@ -94,6 +94,19 @@ export class CatalogWatchService {
     this.pendingScans.clear();
   }
 
+  async waitUntilIdle(timeoutMs = 300000): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    while (this.processingScans && Date.now() < deadline) {
+      await new Promise<void>((resolve) => setTimeout(resolve, 100));
+    }
+
+    if (this.processingScans) {
+      throw new Error(
+        "Ein automatischer Dateiscan läuft noch. Der Datenbank-Reset wurde zur Sicherheit nicht gestartet."
+      );
+    }
+  }
+
   getSnapshot(): CatalogWatchSnapshot {
     return {
       sources: [...this.sources.values()]
