@@ -858,8 +858,7 @@ function registerIpc(): void {
         imageMetadata,
         faces,
         faceEmbeddings,
-        petNanoDet,
-        petYolox,
+        petDetection,
         petFusion,
         petEmbeddings,
         semanticEmbeddings,
@@ -870,24 +869,14 @@ function registerIpc(): void {
         queue("image-metadata-v1"),
         queue("face-detect-yunet-v1"),
         queue("face-embed-sface-v1"),
-        queue("pet-detect-nanodet-v1"),
-        queue("pet-detect-yolox-v1"),
+        catalog!.request<AnalysisQueueStats>("getPetDetectionQueueStats", {
+          sourceId
+        }),
         queue("pet-fuse-ensemble-v1"),
         queue("pet-embed-dogreid-v1"),
         queue("semantic-embed-siglip2-v1"),
         queue("catalog-semantic-qwen3vl4b-v3")
       ]);
-
-      const combine = (
-        left: AnalysisQueueStats,
-        right: AnalysisQueueStats
-      ): AnalysisQueueStats => ({
-        pending: left.pending + right.pending,
-        running: left.running + right.running,
-        done: left.done + right.done,
-        failed: left.failed + right.failed,
-        unavailable: left.unavailable + right.unavailable
-      });
 
       return {
         technical,
@@ -895,7 +884,7 @@ function registerIpc(): void {
         imageMetadata,
         faces,
         faceEmbeddings,
-        petDetection: combine(petNanoDet, petYolox),
+        petDetection,
         petFusion,
         petEmbeddings,
         objectVerification,
