@@ -332,6 +332,7 @@ export type PetCandidate = {
   petClass: "dog" | "cat";
   detectionCount: number;
   newestPetId: number;
+  memberSignature: string;
   representativePetId: number | null;
   averageSimilarity: number;
   minSimilarity: number;
@@ -434,6 +435,7 @@ export type PersonCandidate = {
   id: number;
   faceCount: number;
   newestFaceId: number;
+  memberSignature: string;
   representativeFaceId: number | null;
   averageSimilarity: number;
   minSimilarity: number;
