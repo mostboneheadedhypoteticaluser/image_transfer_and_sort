@@ -139,13 +139,15 @@ const api = {
     confirmCandidate: (
       candidateId: number,
       name: string,
-      rejectedPetId?: number
+      rejectedPetId?: number,
+      fallbackPetDetectionId?: number
     ): Promise<ConfirmPetResult> =>
       ipcRenderer.invoke(
         "pets:confirmCandidate",
         candidateId,
         name,
-        rejectedPetId
+        rejectedPetId,
+        fallbackPetDetectionId
       ),
     removeCandidatePet: (
       candidateId: number,
