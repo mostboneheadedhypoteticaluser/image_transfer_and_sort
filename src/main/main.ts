@@ -57,8 +57,8 @@ let catalogWatchService: CatalogWatchService | null = null;
 let thumbnailCacheRoot = "";
 let personRefreshTimer: NodeJS.Timeout | null = null;
 let personRefreshRunning = false;
-let groupedFaceEmbeddingsDone = 0;
-let groupedPetEmbeddingsDone = 0;
+let groupedFaceEmbeddingCount: number | null = null;
+let groupedPetEmbeddingCount: number | null = null;
 let isQuitting = false;
 let qwenBenchmarkMode = false;
 let qwenBenchmarkPreparing: Promise<void> | null = null;
@@ -135,11 +135,27 @@ function sendToRenderer(channel: string, payload: unknown): void {
   win.webContents.send(channel, payload);
 }
 
-function identityResultsChanged(): boolean {
-  return (
-    pipelineStatus.faceEmbeddings.done > groupedFaceEmbeddingsDone ||
-    pipelineStatus.petEmbeddings.done > groupedPetEmbeddingsDone
-  );
+async function getIdentityEmbeddingTotals(): Promise<{
+  faces: number;
+  dogs: number;
+}> {
+  if (!catalog) return { faces: 0, dogs: 0 };
+
+  const sources = await catalog.request<SourceRecord[]>("listSources");
+  let faces = 0;
+  let dogs = 0;
+
+  for (const source of sources) {
+    if (!source.enabled) continue;
+
+    const stats = await catalog.request<CatalogStats>("getStats", {
+      sourceId: source.id
+    });
+    faces += stats.embeddedFaces;
+    dogs += stats.embeddedDogs;
+  }
+
+  return { faces, dogs };
 }
 
 function schedulePersonRefresh(): void {
@@ -147,21 +163,21 @@ function schedulePersonRefresh(): void {
     isQuitting ||
     (!personService && !petService) ||
     personRefreshRunning ||
-    personRefreshTimer ||
-    !identityResultsChanged()
+    personRefreshTimer
   ) {
     return;
   }
 
-  // Während der bildweisen Fast-Lane werden Kandidaten regelmäßig
-  // nachgezogen, ohne nach jedem einzelnen Gesicht/Hund teuer neu zu clustern.
+  // Kandidaten werden weiterhin während der Fast-Lane nachgezogen, aber nicht
+  // mehr wegen jedes abgeschlossenen Embedding-Jobs. Jobs ohne Gesicht/Hund
+  // erhöhen nur den DONE-Zähler und dürfen kein komplettes Re-Clustering aller
+  // vorhandenen Identitäten auslösen.
   personRefreshTimer = setTimeout(() => {
     personRefreshTimer = null;
     if (
       (!personService && !petService) ||
       isQuitting ||
-      personRefreshRunning ||
-      !identityResultsChanged()
+      personRefreshRunning
     ) {
       return;
     }
@@ -169,12 +185,22 @@ function schedulePersonRefresh(): void {
     personRefreshRunning = true;
 
     void (async () => {
+      const totals = await getIdentityEmbeddingTotals();
       const faceChanged =
-        pipelineStatus.faceEmbeddings.done > groupedFaceEmbeddingsDone;
+        groupedFaceEmbeddingCount === null ||
+        totals.faces !== groupedFaceEmbeddingCount;
       const petChanged =
-        pipelineStatus.petEmbeddings.done > groupedPetEmbeddingsDone;
-      const faceDoneAtStart = pipelineStatus.faceEmbeddings.done;
-      const petDoneAtStart = pipelineStatus.petEmbeddings.done;
+        groupedPetEmbeddingCount === null ||
+        totals.dogs !== groupedPetEmbeddingCount;
+
+      if (!faceChanged && !petChanged) return;
+
+      analysis?.logDiagnostic("IDENTITY_REFRESH_BEGIN", {
+        faceEmbeddings: totals.faces,
+        dogEmbeddings: totals.dogs,
+        previousFaceEmbeddings: groupedFaceEmbeddingCount,
+        previousDogEmbeddings: groupedPetEmbeddingCount
+      });
 
       await analysisCoordinator?.pauseForMaintenance();
 
@@ -182,19 +208,13 @@ function schedulePersonRefresh(): void {
         if (faceChanged && personService) {
           // true = bewusst auch bei noch offener Embedding-Queue clustern.
           await personService.refreshAllSources(true);
-          groupedFaceEmbeddingsDone = Math.max(
-            groupedFaceEmbeddingsDone,
-            faceDoneAtStart
-          );
+          groupedFaceEmbeddingCount = totals.faces;
           sendToRenderer("people:updated", {});
         }
 
         if (petChanged && petService) {
           await petService.refreshAllSources(true);
-          groupedPetEmbeddingsDone = Math.max(
-            groupedPetEmbeddingsDone,
-            petDoneAtStart
-          );
+          groupedPetEmbeddingCount = totals.dogs;
           sendToRenderer("pets:updated", {});
         }
       } finally {
@@ -202,19 +222,16 @@ function schedulePersonRefresh(): void {
       }
     })()
       .catch((error) => {
-        // Bei einem temporären Clusterfehler bleiben die Done-Zähler bewusst
-        // unverändert; dadurch wird der nächste Sammellauf erneut versucht.
+        // Bei einem temporären Clusterfehler bleiben die Embedding-Zähler
+        // unverändert; der nächste Sammellauf versucht denselben Stand erneut.
         analysis?.logDiagnostic("IDENTITY_REFRESH_ERROR", {
           error: error instanceof Error ? error.message : String(error)
         });
       })
       .finally(() => {
         personRefreshRunning = false;
-        // Sind während des Clusterings weitere Identitätsmerkmale fertig
-        // geworden, wird automatisch der nächste Sammellauf vorgemerkt.
-        schedulePersonRefresh();
       });
-  }, 10000);
+  }, 30000);
   personRefreshTimer.unref();
 }
 
@@ -447,8 +464,8 @@ function registerIpc(): void {
       clearTimeout(personRefreshTimer);
       personRefreshTimer = null;
     }
-    groupedFaceEmbeddingsDone = 0;
-    groupedPetEmbeddingsDone = 0;
+    groupedFaceEmbeddingCount = null;
+    groupedPetEmbeddingCount = null;
 
     await new Promise<void>((resolve) => setTimeout(resolve, 800));
 
