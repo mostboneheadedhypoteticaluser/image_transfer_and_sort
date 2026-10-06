@@ -659,6 +659,27 @@ function renderStage(
     `${stats.unavailable.toLocaleString("de-DE")} fehlen`;
 }
 
+async function refreshSelectedPipelineStatus(): Promise<void> {
+  const sourceId = selectedSourceId();
+  const status = await window.imageSorter.analysis.getPipelineStatus(
+    sourceId ?? undefined
+  );
+  renderPipelineStatus(status);
+}
+
+function scheduleSelectedPipelineRefresh(): void {
+  if (sourcePipelineRefreshTimer !== null) {
+    window.clearTimeout(sourcePipelineRefreshTimer);
+  }
+
+  sourcePipelineRefreshTimer = window.setTimeout(() => {
+    sourcePipelineRefreshTimer = null;
+    void refreshSelectedPipelineStatus().catch(() => {
+      // Die Katalogansicht bleibt auch bei einem kurzzeitigen Statusfehler bedienbar.
+    });
+  }, 250);
+}
+
 function renderPipelineStatus(status: PipelineStatus): void {
   renderStage(technicalStageState, technicalStageCounts, status.technical);
   renderStage(thumbnailStageState, thumbnailStageCounts, status.thumbnails);
@@ -3296,6 +3317,7 @@ async function loadSources(preselectId?: number): Promise<void> {
   if (preselectId !== undefined) sourceSelect.value = String(preselectId);
   renderCatalogWatchState();
   await refreshCatalog();
+  await refreshSelectedPipelineStatus();
 }
 
 async function runSafely(action: () => Promise<void>): Promise<void> {
@@ -3737,6 +3759,7 @@ imagePreviewDialog.addEventListener("close", () => {
 
 sourceSelect.addEventListener("change", () => {
   renderCatalogWatchState();
+  scheduleSelectedPipelineRefresh();
   clearSearchControls();
   searchFacetsSourceId = null;
   searchTabCount.textContent = "0";
@@ -3814,7 +3837,9 @@ window.imageSorter.analysis.onQwenBenchmarkStage((stage) => {
     renderQwenBenchmarkStage(stage);
   }
 });
-window.imageSorter.analysis.onPipelineStatus(renderPipelineStatus);
+window.imageSorter.analysis.onPipelineStatus(() => {
+  scheduleSelectedPipelineRefresh();
+});
 
 window.imageSorter.people.onUpdated(() => {
   const sourceId = selectedSourceId();
@@ -3852,7 +3877,7 @@ void window.imageSorter.analysis
   .catch(() => renderAutomaticQwenState(false));
 
 void window.imageSorter.analysis
-  .getPipelineStatus()
+  .getPipelineStatus(selectedSourceId() ?? undefined)
   .then(renderPipelineStatus)
   .catch(() => {
     renderPipelineStatus({
