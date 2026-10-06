@@ -2611,6 +2611,71 @@ function getAnalysisQueueStats(sourceId?: number, module = "file-probe-v1") {
 }
 
 
+function getPetDetectionQueueStats(sourceId?: number) {
+  const sourceFilter = sourceId === undefined ? "" : "AND m.source_id=?";
+  const args = sourceId === undefined ? [] : [sourceId];
+
+  const row = db.prepare(`
+    SELECT
+      SUM(CASE
+        WHEN nano_status='DONE' AND yolox_status='DONE' THEN 1
+        ELSE 0
+      END) AS done,
+      SUM(CASE
+        WHEN nano_status='RUNNING' OR yolox_status='RUNNING' THEN 1
+        ELSE 0
+      END) AS running,
+      SUM(CASE
+        WHEN nano_status<>'RUNNING'
+          AND yolox_status<>'RUNNING'
+          AND (nano_status='FAILED' OR yolox_status='FAILED')
+        THEN 1 ELSE 0
+      END) AS failed,
+      SUM(CASE
+        WHEN nano_status<>'RUNNING'
+          AND yolox_status<>'RUNNING'
+          AND nano_status<>'FAILED'
+          AND yolox_status<>'FAILED'
+          AND (nano_status='UNAVAILABLE' OR yolox_status='UNAVAILABLE')
+        THEN 1 ELSE 0
+      END) AS unavailable,
+      SUM(CASE
+        WHEN NOT (nano_status='DONE' AND yolox_status='DONE')
+          AND nano_status<>'RUNNING'
+          AND yolox_status<>'RUNNING'
+          AND nano_status<>'FAILED'
+          AND yolox_status<>'FAILED'
+          AND nano_status<>'UNAVAILABLE'
+          AND yolox_status<>'UNAVAILABLE'
+        THEN 1 ELSE 0
+      END) AS pending
+    FROM (
+      SELECT
+        m.id,
+        COALESCE(MAX(CASE
+          WHEN j.module='pet-detect-nanodet-v1' THEN j.status
+        END), 'PENDING') AS nano_status,
+        COALESCE(MAX(CASE
+          WHEN j.module='pet-detect-yolox-v1' THEN j.status
+        END), 'PENDING') AS yolox_status
+      FROM media_items m
+      JOIN analysis_jobs j ON j.media_id=m.id
+      WHERE j.module IN ('pet-detect-nanodet-v1','pet-detect-yolox-v1')
+        ${sourceFilter}
+      GROUP BY m.id
+    )
+  `).get(...args);
+
+  return {
+    pending: Number(row?.pending ?? 0),
+    running: Number(row?.running ?? 0),
+    done: Number(row?.done ?? 0),
+    failed: Number(row?.failed ?? 0),
+    unavailable: Number(row?.unavailable ?? 0)
+  };
+}
+
+
 function countAnalysisErrors(sourceId?: number): number {
   const sourceFilter = sourceId === undefined ? "" : "AND m.source_id=?";
   const args: number[] = sourceId === undefined ? [] : [sourceId];
@@ -8607,6 +8672,10 @@ async function dispatch(method: CatalogMethod, payload: Record<string, unknown> 
       return getAnalysisQueueStats(
         payload.sourceId === undefined ? undefined : asNumber(payload.sourceId, "sourceId"),
         typeof payload.module === "string" ? payload.module : "file-probe-v1"
+      );
+    case "getPetDetectionQueueStats":
+      return getPetDetectionQueueStats(
+        payload.sourceId === undefined ? undefined : asNumber(payload.sourceId, "sourceId")
       );
     case "listAnalysisErrors":
       return listAnalysisErrors(
