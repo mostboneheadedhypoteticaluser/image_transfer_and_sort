@@ -2044,13 +2044,19 @@ function renderIdentityTabStats(stats: CatalogStats): void {
   peopleTabCount.textContent =
     stats.personCandidates.toLocaleString("de-DE") +
     " Gr. · " +
-    stats.personCandidateFaces.toLocaleString("de-DE") +
+    stats.unassignedFaceEmbeddings.toLocaleString("de-DE") +
     " Ges.";
   peopleTabCount.title =
     stats.personCandidates.toLocaleString("de-DE") +
-    " unbestätigte Personengruppen · " +
+    " unbestätigte Personengruppen mit " +
     stats.personCandidateFaces.toLocaleString("de-DE") +
-    " unbestätigte Gesichter · " +
+    " gruppierten Gesichtern · " +
+    stats.unassignedFaceEmbeddings.toLocaleString("de-DE") +
+    " SFace-Gesichter warten insgesamt auf Zuordnung · " +
+    stats.embeddedFaces.toLocaleString("de-DE") +
+    " Gesichtsmerkmale gespeichert · " +
+    stats.detectedFaces.toLocaleString("de-DE") +
+    " Gesichter erkannt · " +
     stats.persons.toLocaleString("de-DE") +
     " bestätigte Personen mit " +
     stats.assignedPersonFaces.toLocaleString("de-DE") +
@@ -2059,13 +2065,19 @@ function renderIdentityTabStats(stats: CatalogStats): void {
   petsTabCount.textContent =
     stats.petCandidates.toLocaleString("de-DE") +
     " Gr. · " +
-    stats.petCandidateDetections.toLocaleString("de-DE") +
+    stats.unassignedDogEmbeddings.toLocaleString("de-DE") +
     " Hunde";
   petsTabCount.title =
     stats.petCandidates.toLocaleString("de-DE") +
-    " unbestätigte Hundegruppen · " +
+    " unbestätigte Hundegruppen mit " +
     stats.petCandidateDetections.toLocaleString("de-DE") +
-    " unbestätigte Hundefundstellen · " +
+    " gruppierten Fundstellen · " +
+    stats.unassignedDogEmbeddings.toLocaleString("de-DE") +
+    " Dog-ReID-Fundstellen warten insgesamt auf Zuordnung · " +
+    stats.embeddedDogs.toLocaleString("de-DE") +
+    " Hundemerkmale gespeichert · " +
+    stats.fusedDogs.toLocaleString("de-DE") +
+    " Hunde nach Ensemble-Fusion erkannt · " +
     stats.pets.toLocaleString("de-DE") +
     " bestätigte Haustiere mit " +
     stats.assignedPetDetections.toLocaleString("de-DE") +
@@ -2104,10 +2116,6 @@ function renderPersonOverview(overview: PersonOverview): void {
       "Aktuell gibt es keine unbestätigten Personenvorschläge. " +
       assignedFaces.toLocaleString("de-DE") + " Gesichter sind bereits bestätigt.";
   }
-
-  peopleTabCount.textContent =
-    overview.candidates.length.toLocaleString("de-DE") +
-    " Gr. · " + candidateFaces.toLocaleString("de-DE") + " Ges.";
 
   if (overview.candidates.length === 0) {
     const empty = document.createElement("div");
@@ -2499,6 +2507,8 @@ async function loadPersonOverview(
       forceRefresh
     );
     renderPersonOverview(overview);
+    const stats = await window.imageSorter.catalog.getStats(sourceId);
+    renderIdentityTabStats(stats);
   } finally {
     refreshPeopleButton.disabled = false;
   }
@@ -2539,10 +2549,6 @@ function renderPetOverview(overview: PetOverview): void {
       assignedDogs.toLocaleString("de-DE") +
       " Hundefundstellen sind bereits zugeordnet. Gruppen benötigen mindestens zwei ausreichend ähnliche Fundstellen.";
   }
-
-  petsTabCount.textContent =
-    overview.candidates.length.toLocaleString("de-DE") +
-    " Gr. · " + candidateDogs.toLocaleString("de-DE") + " Hunde";
 
   if (overview.candidates.length === 0) {
     const empty = document.createElement("div");
@@ -2720,8 +2726,7 @@ function renderPetOverview(overview: PetOverview): void {
           if (sourceId !== null) {
             await loadPetOverview(sourceId, true);
             const stats = await window.imageSorter.catalog.getStats(sourceId);
-            petsTabCount.textContent =
-              stats.petCandidates.toLocaleString("de-DE");
+            renderIdentityTabStats(stats);
           }
         } catch (error) {
           progressText.textContent =
@@ -3023,6 +3028,8 @@ async function loadPetOverview(
       forceRefresh
     );
     renderPetOverview(overview);
+    const stats = await window.imageSorter.catalog.getStats(sourceId);
+    renderIdentityTabStats(stats);
   } finally {
     refreshPetsButton.disabled = false;
   }
@@ -3847,7 +3854,7 @@ window.imageSorter.people.onUpdated(() => {
 
   void runSafely(async () => {
     const stats = await window.imageSorter.catalog.getStats(sourceId);
-    peopleTabCount.textContent = stats.personCandidates.toLocaleString("de-DE");
+    renderIdentityTabStats(stats);
 
     // Neue Vorschläge dürfen im Hintergrund entstehen, aber eine laufende
     // Eingabe wird niemals durch replaceChildren()/Neuaufbau unterbrochen.
@@ -3863,7 +3870,7 @@ window.imageSorter.pets.onUpdated(() => {
 
   void runSafely(async () => {
     const stats = await window.imageSorter.catalog.getStats(sourceId);
-    petsTabCount.textContent = stats.petCandidates.toLocaleString("de-DE");
+    renderIdentityTabStats(stats);
 
     if (currentView === "pets" && !isEditingPetView()) {
       await loadPetOverview(sourceId);
