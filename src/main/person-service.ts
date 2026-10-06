@@ -64,7 +64,11 @@ export class PersonService {
         }
       );
 
-      if (forceRefresh || (rebuildIfNeeded && set.needsRebuild)) {
+      if (
+        forceRefresh ||
+        set.algorithmChanged ||
+        (rebuildIfNeeded && set.needsRebuild)
+      ) {
         const clustered = await this.analysis.request<ClusterWorkerResult>(
           "cluster_face_embeddings",
           {
