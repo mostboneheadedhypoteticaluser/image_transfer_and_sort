@@ -68,9 +68,13 @@ export class CatalogWatchService {
     }
 
     if (runInitialSafetyScan) {
+      // Der vorhandene SQLite-Katalog soll beim Programmstart sofort
+      // sichtbar sein. Ein Vollscan direkt nach 1,2 s blockiert sonst den
+      // seriellen Katalog-Worker und verzögert listSources/getStats/listMedia.
+      // Live-Watching startet sofort; der Sicherheits-Vollscan folgt später.
       setTimeout(() => {
         if (!this.stopped) void this.runSafetySweep("Programmstart");
-      }, 1200).unref();
+      }, 30000).unref();
     }
   }
 
