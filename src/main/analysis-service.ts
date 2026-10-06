@@ -128,6 +128,13 @@ export class AnalysisService {
     return this.devLogPath;
   }
 
+  logDiagnostic(
+    event: string,
+    fields: Record<string, unknown> = {}
+  ): void {
+    this.devLog(event, fields);
+  }
+
   private prepareDevLog(): void {
     try {
       mkdirSync(path.dirname(this.devLogPath), { recursive: true });
