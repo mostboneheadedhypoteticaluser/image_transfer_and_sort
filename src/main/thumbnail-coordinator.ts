@@ -40,6 +40,19 @@ export class ThumbnailCoordinator {
     this.timer = null;
   }
 
+  async waitUntilIdle(timeoutMs = 15000): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    while (this.pumping && Date.now() < deadline) {
+      await new Promise<void>((resolve) => setTimeout(resolve, 50));
+    }
+
+    if (this.pumping) {
+      throw new Error(
+        "Thumbnail-Pipeline konnte vor dem Datenbank-Reset nicht sauber angehalten werden."
+      );
+    }
+  }
+
   private async enqueueExistingSources(): Promise<void> {
     const sources = await this.catalog.request<SourceRecord[]>("listSources");
 
