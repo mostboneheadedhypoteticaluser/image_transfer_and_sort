@@ -283,10 +283,12 @@ export class AnalysisCoordinator {
     // zählen deren wartende Jobs nicht als aktive Worker-Warteschlange. Die
     // Pipeline-Kachel zeigt sie weiterhin als offen, aber der Worker bleibt
     // speicherschonend ohne llama.cpp-Modell.
-    const qwenQueued = this.automaticQwenEnabled
+    const qwenRunnable =
+      this.automaticQwenEnabled && this.analysis.isQwen3vl4bAvailable();
+    const qwenQueued = qwenRunnable
       ? result.objectVerification.pending
       : 0;
-    const qwenActive = this.automaticQwenEnabled
+    const qwenActive = qwenRunnable
       ? result.objectVerification.running
       : 0;
 
@@ -312,7 +314,7 @@ export class AnalysisCoordinator {
       result.semanticEmbeddings.running;
 
     const pausedQwen =
-      !this.automaticQwenEnabled &&
+      (!this.automaticQwenEnabled || !this.analysis.isQwen3vl4bAvailable()) &&
       (result.objectVerification.pending > 0 ||
         result.objectVerification.running > 0);
 
@@ -322,7 +324,9 @@ export class AnalysisCoordinator {
       queued > 0 || active > 0
         ? "Bildanalyse verarbeitet Medien im Hintergrund."
         : pausedQwen
-          ? "Qwen-Serienanalyse pausiert · Einzelbildtest ist frei."
+          ? this.analysis.isQwen3vl4bAvailable()
+            ? "Qwen-Serienanalyse pausiert · Einzelbildtest ist frei."
+            : (this.analysis.getQwen3vl4bIssue() ?? "Qwen3-VL 4B ist derzeit nicht verfügbar.")
           : "Python-Analyse ist aktuell abgearbeitet."
     );
 
@@ -336,7 +340,10 @@ export class AnalysisCoordinator {
     for (const spec of MODULES) {
       if (
         spec.module === "catalog-semantic-qwen3vl4b-v3" &&
-        !this.automaticQwenEnabled
+        (
+          !this.automaticQwenEnabled ||
+          !this.analysis.isQwen3vl4bAvailable()
+        )
       ) {
         continue;
       }
