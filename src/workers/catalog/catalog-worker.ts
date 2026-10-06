@@ -8567,7 +8567,7 @@ async function dispatch(method: CatalogMethod, payload: Record<string, unknown> 
         asNumber(payload.sourceId, "sourceId"),
         typeof payload.algorithmVersion === "string"
           ? payload.algorithmVersion
-          : "person-centroid-v1"
+          : "person-anchor-centroid-v3"
       );
     case "replacePersonCandidates":
       return replacePersonCandidates(
@@ -8575,7 +8575,7 @@ async function dispatch(method: CatalogMethod, payload: Record<string, unknown> 
         typeof payload.revision === "string" ? payload.revision : "",
         typeof payload.algorithmVersion === "string"
           ? payload.algorithmVersion
-          : "person-centroid-v1",
+          : "person-anchor-centroid-v3",
         payload.clusters
       );
     case "listPersonCandidates":
