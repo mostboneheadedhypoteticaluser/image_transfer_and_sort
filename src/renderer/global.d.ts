@@ -36,7 +36,7 @@ declare global {
       pickSource(): Promise<string | null>;
       analysis: {
         getStatus(): Promise<AnalysisWorkerStatus>;
-        getPipelineStatus(): Promise<PipelineStatus>;
+        getPipelineStatus(sourceId?: number): Promise<PipelineStatus>;
         openDevLog(): Promise<{ opened: true; path: string }>;
         copyDevLog(): Promise<{
           copied: true;
