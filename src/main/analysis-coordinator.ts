@@ -551,10 +551,48 @@ export class AnalysisCoordinator {
           spec.timeoutMs
         );
 
-        await this.catalog.request(spec.completeMethod, {
-          jobId: job.id,
-          result
-        });
+        const completion = await this.catalog.request<Record<string, unknown>>(
+          spec.completeMethod,
+          {
+            jobId: job.id,
+            result
+          }
+        );
+
+        if (
+          spec.module === "face-detect-yunet-v1" ||
+          spec.module === "face-embed-sface-v1" ||
+          spec.module === "pet-fuse-ensemble-v1" ||
+          spec.module === "pet-embed-dogreid-v1"
+        ) {
+          const workerItems =
+            spec.module === "face-detect-yunet-v1"
+              ? (Array.isArray(result.faces) ? result.faces.length : 0)
+              : spec.module === "face-embed-sface-v1"
+                ? (Array.isArray(result.embeddings) ? result.embeddings.length : 0)
+                : spec.module === "pet-fuse-ensemble-v1"
+                  ? (Array.isArray(result.pets)
+                      ? result.pets.filter(
+                          (item) =>
+                            item &&
+                            typeof item === "object" &&
+                            (item as Record<string, unknown>).class === "dog"
+                        ).length
+                      : 0)
+                  : (Array.isArray(result.embeddings) ? result.embeddings.length : 0);
+
+          this.analysis.logDiagnostic("IDENTITY_STAGE_RESULT", {
+            module: spec.module,
+            mediaId: job.mediaId,
+            target: job.absolutePath,
+            workerItems,
+            databaseItems:
+              completion.embeddingCount ??
+              completion.petCount ??
+              completion.faceCount ??
+              null
+          });
+        }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         await this.catalog.request("failAnalysisJob", {
