@@ -63,6 +63,9 @@ let isQuitting = false;
 let qwenBenchmarkMode = false;
 let qwenBenchmarkPreparing: Promise<void> | null = null;
 
+const IDENTITY_FACE_BATCH_SIZE = 100;
+const IDENTITY_DOG_BATCH_SIZE = 20;
+
 const EMPTY_QUEUE: AnalysisQueueStats = {
   pending: 0,
   running: 0,
@@ -202,12 +205,32 @@ function schedulePersonRefresh(): void {
 
     void (async () => {
       const counts = await getIdentityEmbeddingCounts();
-      const faceChangedSources = counts.filter(
-        (entry) => groupedFaceEmbeddingCounts.get(entry.sourceId) !== entry.faces
-      );
-      const petChangedSources = counts.filter(
-        (entry) => groupedPetEmbeddingCounts.get(entry.sourceId) !== entry.dogs
-      );
+      const faceQueueIdle =
+        pipelineStatus.faceEmbeddings.pending === 0 &&
+        pipelineStatus.faceEmbeddings.running === 0;
+      const petQueueIdle =
+        pipelineStatus.petEmbeddings.pending === 0 &&
+        pipelineStatus.petEmbeddings.running === 0;
+
+      const faceChangedSources = counts.filter((entry) => {
+        const previous = groupedFaceEmbeddingCounts.get(entry.sourceId) ?? 0;
+        const delta = entry.faces - previous;
+        return (
+          delta < 0 ||
+          delta >= IDENTITY_FACE_BATCH_SIZE ||
+          (faceQueueIdle && delta !== 0)
+        );
+      });
+
+      const petChangedSources = counts.filter((entry) => {
+        const previous = groupedPetEmbeddingCounts.get(entry.sourceId) ?? 0;
+        const delta = entry.dogs - previous;
+        return (
+          delta < 0 ||
+          delta >= IDENTITY_DOG_BATCH_SIZE ||
+          (petQueueIdle && delta !== 0)
+        );
+      });
 
       if (faceChangedSources.length === 0 && petChangedSources.length === 0) {
         return;
@@ -231,8 +254,15 @@ function schedulePersonRefresh(): void {
       try {
         if (personService) {
           for (const entry of faceChangedSources) {
-            // Nur die tatsächlich geänderte Quelle neu gruppieren.
-            await personService.getOverview(entry.sourceId, true, true);
+            // Nur die tatsächlich geänderte Quelle prüfen. forceRefresh=false
+            // verhindert beim App-Start einen teuren Neuaufbau, wenn die
+            // gespeicherte Cluster-Revision bereits exakt aktuell ist.
+            await personService.getOverview(
+              entry.sourceId,
+              false,
+              true,
+              true
+            );
             groupedFaceEmbeddingCounts.set(entry.sourceId, entry.faces);
           }
           if (faceChangedSources.length > 0) {
@@ -242,7 +272,12 @@ function schedulePersonRefresh(): void {
 
         if (petService) {
           for (const entry of petChangedSources) {
-            await petService.getOverview(entry.sourceId, true, true);
+            await petService.getOverview(
+              entry.sourceId,
+              false,
+              true,
+              true
+            );
             groupedPetEmbeddingCounts.set(entry.sourceId, entry.dogs);
           }
           if (petChangedSources.length > 0) {
