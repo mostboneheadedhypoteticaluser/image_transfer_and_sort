@@ -13,7 +13,7 @@ import type {
 import { AnalysisService } from "./analysis-service";
 import { CatalogService } from "./catalog-service";
 
-const ALGORITHM_VERSION = "person-anchor-centroid-v3";
+const ALGORITHM_VERSION = "person-complete-link-v4";
 
 type ClusterWorkerResult = {
   algorithm: string;
@@ -134,7 +134,11 @@ export class PersonService {
       persons,
       clusteringPending,
       candidateTotal: stats.personCandidates,
-      candidateFaceTotal: stats.personCandidateFaces
+      candidateFaceTotal: stats.personCandidateFaces,
+      ungroupedFaceTotal: Math.max(
+        0,
+        stats.unassignedFaceEmbeddings - stats.personCandidateFaces
+      )
     };
   }
 
@@ -207,6 +211,10 @@ export class PersonService {
       ),
       candidateFaceTotal: overviews.reduce(
         (sum, overview) => sum + overview.candidateFaceTotal,
+        0
+      ),
+      ungroupedFaceTotal: overviews.reduce(
+        (sum, overview) => sum + overview.ungroupedFaceTotal,
         0
       )
     };
