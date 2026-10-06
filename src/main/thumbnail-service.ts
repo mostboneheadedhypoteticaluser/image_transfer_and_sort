@@ -62,6 +62,11 @@ export class ThumbnailService {
     });
 
     child.on("exit", (code) => {
+      // Ein absichtlich beendeter alter Worker darf einen inzwischen neu
+      // gestarteten Worker weder auf null setzen noch dessen neue Requests
+      // verwerfen.
+      if (this.child !== child) return;
+
       const error = new Error(
         `Thumbnail-Worker wurde beendet (Code ${code ?? "unbekannt"}).`
       );
@@ -277,7 +282,19 @@ export class ThumbnailService {
   }
 
   stop(): void {
-    this.child?.kill();
+    const child = this.child;
+    if (!child) return;
+
+    // Zuerst logisch vom alten Worker trennen. Dadurch kann dessen späteres
+    // exit-Ereignis einen neu gestarteten Worker nicht mehr beeinflussen.
     this.child = null;
+
+    const error = new Error("Thumbnail-Worker wurde für einen Neustart beendet.");
+    for (const pending of this.pending.values()) {
+      pending.reject(error);
+    }
+    this.pending.clear();
+
+    child.kill();
   }
 }
