@@ -480,7 +480,9 @@ function registerIpc(): void {
   });
 
   ipcMain.handle("analysis:getAutomaticQwenState", () => ({
-    enabled: analysisCoordinator?.isAutomaticQwenEnabled() ?? false
+    enabled:
+      (analysisCoordinator?.isAutomaticQwenEnabled() ?? false) &&
+      (analysis?.isQwen3vl4bAvailable() ?? false)
   }));
 
   ipcMain.handle("analysis:startAutomaticQwen", async () => {
@@ -494,11 +496,19 @@ function registerIpc(): void {
       throw new Error("Analyse-Worker ist noch nicht initialisiert.");
     }
 
-    analysisCoordinator.enableAutomaticQwen();
-
     if (analysis.getStatus().state !== "READY") {
       await analysis.start();
     }
+
+    if (!analysis.isQwen3vl4bAvailable()) {
+      throw new Error(
+        analysis.getQwen3vl4bIssue() ??
+        "Qwen3-VL 4B ist derzeit nicht verfügbar."
+      );
+    }
+
+    analysisCoordinator.enableAutomaticQwen();
+
     if (analysis.getStatus().state === "READY") {
       await analysisCoordinator.start();
     }
