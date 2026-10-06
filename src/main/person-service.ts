@@ -125,6 +125,75 @@ export class PersonService {
     };
   }
 
+  async getCombinedOverview(forceRefresh = false): Promise<PersonOverview> {
+    const sources = await this.catalog.request<Array<{
+      id: number;
+      path: string;
+      enabled: boolean;
+    }>>("listSources");
+    const enabledSources = sources.filter((source) => source.enabled);
+
+    const overviews: PersonOverview[] = [];
+    for (const source of enabledSources) {
+      overviews.push(await this.getOverview(source.id, forceRefresh, false));
+    }
+
+    const personMap = new Map<number, PersonRecord>();
+    for (const overview of overviews) {
+      for (const person of overview.persons) {
+        const existing = personMap.get(person.id);
+        if (!existing) {
+          personMap.set(person.id, {
+            ...person,
+            faces: [...person.faces]
+          });
+          continue;
+        }
+
+        existing.faceCount += person.faceCount;
+        if (existing.representativeFaceId === null) {
+          existing.representativeFaceId = person.representativeFaceId;
+        }
+
+        const knownFaceIds = new Set(
+          existing.faces.map((face) => face.faceDetectionId)
+        );
+        for (const face of person.faces) {
+          if (!knownFaceIds.has(face.faceDetectionId)) {
+            existing.faces.push(face);
+            knownFaceIds.add(face.faceDetectionId);
+          }
+        }
+      }
+    }
+
+    const candidates = overviews
+      .flatMap((overview) => overview.candidates)
+      .sort(
+        (a, b) =>
+          b.newestFaceId - a.newestFaceId ||
+          b.faceCount - a.faceCount ||
+          b.averageSimilarity - a.averageSimilarity
+      )
+      .slice(0, 500);
+
+    return {
+      candidates,
+      persons: [...personMap.values()].sort(
+        (a, b) => a.name.localeCompare(b.name, "de", { sensitivity: "base" })
+      ),
+      clusteringPending: overviews.some((overview) => overview.clusteringPending),
+      candidateTotal: overviews.reduce(
+        (sum, overview) => sum + overview.candidateTotal,
+        0
+      ),
+      candidateFaceTotal: overviews.reduce(
+        (sum, overview) => sum + overview.candidateFaceTotal,
+        0
+      )
+    };
+  }
+
   async refreshAllSources(incremental = false): Promise<void> {
     const sources = await this.catalog.request<Array<{
       id: number;
