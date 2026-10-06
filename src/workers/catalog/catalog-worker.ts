@@ -6913,12 +6913,16 @@ function getFaceEmbeddingsForClustering(
     WHERE source_id=?
   `).get(sourceId);
 
+  const algorithmChanged =
+    !previousRun ||
+    String(previousRun.algorithm_version) !== algorithmVersion;
+
   return {
     revision,
     needsRebuild:
-      !previousRun ||
-      String(previousRun.embedding_revision) !== revision ||
-      String(previousRun.algorithm_version) !== algorithmVersion,
+      algorithmChanged ||
+      String(previousRun?.embedding_revision ?? "") !== revision,
+    algorithmChanged,
     faces: rows.map((row) => ({
       faceDetectionId: Number(row.face_detection_id),
       mediaId: Number(row.media_id),
@@ -7620,8 +7624,10 @@ function confirmPersonCandidate(
     }
 
     db.prepare("DELETE FROM person_candidates WHERE id=?").run(resolvedCandidateId);
-    db.prepare("DELETE FROM person_cluster_runs WHERE source_id=?")
-      .run(Number(candidate.source_id));
+    // Den letzten Clusterlauf absichtlich behalten. Die Revision ist durch
+    // die neue Zuordnung zwar veraltet, aber die UI darf nach "Bestätigen"
+    // nicht synchron tausende Gesichter neu clustern. Der nächste reguläre
+    // Hintergrundlauf bzw. ein explizites Aktualisieren baut sauber neu.
 
     db.exec("COMMIT");
 
