@@ -697,6 +697,7 @@ export type CatalogMethod =
   | "listRecycleMedia"
   | "enqueueAnalysisJobs"
   | "getAnalysisQueueStats"
+  | "getPetDetectionQueueStats"
   | "listAnalysisErrors"
   | "countAnalysisErrors"
   | "retryAnalysisJob"
