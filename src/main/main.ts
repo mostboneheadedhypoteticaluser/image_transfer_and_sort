@@ -821,8 +821,8 @@ function registerIpc(): void {
 
   ipcMain.handle(
     "people:getOverview",
-    (_event, sourceId: number, forceRefresh = false): Promise<PersonOverview> =>
-      personService!.getOverview(sourceId, Boolean(forceRefresh))
+    (_event, _sourceId: number, forceRefresh = false): Promise<PersonOverview> =>
+      personService!.getCombinedOverview(Boolean(forceRefresh))
   );
 
   ipcMain.handle(
@@ -877,8 +877,8 @@ function registerIpc(): void {
 
   ipcMain.handle(
     "pets:getOverview",
-    (_event, sourceId: number, forceRefresh = false): Promise<PetOverview> =>
-      petService!.getOverview(sourceId, Boolean(forceRefresh))
+    (_event, _sourceId: number, forceRefresh = false): Promise<PetOverview> =>
+      petService!.getCombinedOverview(Boolean(forceRefresh))
   );
 
   ipcMain.handle(
