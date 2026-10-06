@@ -13,7 +13,7 @@ import type {
 import { AnalysisService } from "./analysis-service";
 import { CatalogService } from "./catalog-service";
 
-const ALGORITHM_VERSION = "person-complete-link-v4";
+const ALGORITHM_VERSION = "person-complete-link-v5";
 
 type ClusterWorkerResult = {
   algorithm: string;
