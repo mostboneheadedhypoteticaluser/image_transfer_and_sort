@@ -7544,21 +7544,38 @@ function confirmPersonCandidate(
     WHERE id=?
   `).get(resolvedCandidateId);
 
-  // Kandidaten-IDs ändern sich bei einem Hintergrund-Re-Clustering. Wenn der
-  // Nutzer währenddessen im Namensfeld bleibt, kann die sichtbare ID veraltet
-  // sein. Das Referenzgesicht ist stabil und findet den aktuellen Kandidaten.
-  if (
-    !candidate &&
+  // Kandidaten-IDs ändern sich bei einem Hintergrund-Re-Clustering und
+  // können von SQLite später sogar wiederverwendet werden. Deshalb reicht
+  // "ID existiert" nicht: Das sichtbare Referenzgesicht muss weiterhin genau
+  // zu diesem Kandidaten gehören. Andernfalls wird die aktuelle Gruppe über
+  // das stabile Gesicht aufgelöst.
+  const stableFaceId =
     Number.isInteger(fallbackFaceDetectionId) &&
     Number(fallbackFaceDetectionId) > 0
-  ) {
+      ? Number(fallbackFaceDetectionId)
+      : null;
+
+  const candidateStillMatches =
+    candidate && stableFaceId !== null
+      ? Boolean(
+          db.prepare(`
+            SELECT 1
+            FROM person_candidate_faces
+            WHERE candidate_id=?
+              AND face_detection_id=?
+            LIMIT 1
+          `).get(resolvedCandidateId, stableFaceId)
+        )
+      : Boolean(candidate);
+
+  if (!candidateStillMatches && stableFaceId !== null) {
     candidate = db.prepare(`
       SELECT pc.id, pc.source_id
       FROM person_candidate_faces pcf
       JOIN person_candidates pc ON pc.id=pcf.candidate_id
       WHERE pcf.face_detection_id=?
       LIMIT 1
-    `).get(Number(fallbackFaceDetectionId));
+    `).get(stableFaceId);
 
     if (candidate) {
       resolvedCandidateId = Number(candidate.id);
