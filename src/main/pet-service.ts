@@ -1,5 +1,6 @@
 import type {
   AnalysisQueueStats,
+  CatalogStats,
   ConfirmPetResult,
   PetCandidate,
   PetClusterInput,
@@ -100,18 +101,88 @@ export class PetService {
       await this.catalog.request("autoAssignKnownPetCandidates", { sourceId });
     }
 
-    const [candidates, pets] = await Promise.all([
+    const [candidates, pets, stats] = await Promise.all([
       this.catalog.request<PetCandidate[]>("listPetCandidates", {
         sourceId,
-        limit: 100
+        limit: 500
       }),
-      this.catalog.request<PetRecord[]>("listPets", { sourceId })
+      this.catalog.request<PetRecord[]>("listPets", { sourceId }),
+      this.catalog.request<CatalogStats>("getStats", { sourceId })
     ]);
 
     return {
       candidates,
       pets,
-      clusteringPending
+      clusteringPending,
+      candidateTotal: stats.petCandidates,
+      candidateDetectionTotal: stats.petCandidateDetections
+    };
+  }
+
+  async getCombinedOverview(forceRefresh = false): Promise<PetOverview> {
+    const sources = await this.catalog.request<SourceRecord[]>("listSources");
+    const enabledSources = sources.filter((source) => source.enabled);
+
+    const overviews: PetOverview[] = [];
+    for (const source of enabledSources) {
+      overviews.push(await this.getOverview(source.id, forceRefresh, false));
+    }
+
+    const petMap = new Map<number, PetRecord>();
+    for (const overview of overviews) {
+      for (const pet of overview.pets) {
+        const existing = petMap.get(pet.id);
+        if (!existing) {
+          petMap.set(pet.id, {
+            ...pet,
+            pets: [...pet.pets]
+          });
+          continue;
+        }
+
+        existing.detectionCount += pet.detectionCount;
+        existing.confirmedCount += pet.confirmedCount;
+        existing.automaticCount += pet.automaticCount;
+        if (existing.representativePetId === null) {
+          existing.representativePetId = pet.representativePetId;
+        }
+
+        const knownDetectionIds = new Set(
+          existing.pets.map((item) => item.petDetectionId)
+        );
+        for (const item of pet.pets) {
+          if (!knownDetectionIds.has(item.petDetectionId)) {
+            existing.pets.push(item);
+            knownDetectionIds.add(item.petDetectionId);
+          }
+        }
+      }
+    }
+
+    const candidates = overviews
+      .flatMap((overview) => overview.candidates)
+      .sort(
+        (a, b) =>
+          b.newestPetId - a.newestPetId ||
+          b.detectionCount - a.detectionCount ||
+          b.averageSimilarity - a.averageSimilarity
+      )
+      .slice(0, 500);
+
+    return {
+      candidates,
+      pets: [...petMap.values()].sort(
+        (a, b) => a.name.localeCompare(b.name, "de", { sensitivity: "base" })
+      ),
+      clusteringPending: overviews.some((overview) => overview.clusteringPending),
+      candidateTotal: overviews.reduce(
+        (sum, overview) => sum + overview.candidateTotal,
+        0
+      ),
+      candidateDetectionTotal: overviews.reduce(
+        (sum, overview) => sum + overview.candidateDetectionTotal,
+        0
+      )
     };
   }
 
