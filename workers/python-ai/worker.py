@@ -1917,13 +1917,14 @@ def cluster_pet_embeddings(
                 continue
 
             centroid_similarity = float(np.dot(vector, cluster["centroid"]))
-            representative_similarity = float(
-                np.dot(vector, cluster["representativeVector"])
+            minimum_member_similarity = min(
+                float(np.dot(vector, member["vector"]))
+                for member in cluster["canonicalMembers"]
             )
 
             if (
                 centroid_similarity >= cluster_threshold
-                and representative_similarity >= verification_threshold
+                and minimum_member_similarity >= verification_threshold
                 and centroid_similarity > best_similarity
             ):
                 best_index = index
@@ -2003,7 +2004,7 @@ def cluster_pet_embeddings(
     )
 
     return {
-        "algorithm": "dogreid-centroid-v1",
+        "algorithm": "dogreid-complete-link-v2",
         "clusterThreshold": cluster_threshold,
         "verificationThreshold": verification_threshold,
         "minClusterSize": min_cluster_size,
@@ -2103,24 +2104,20 @@ def cluster_face_embeddings(
                 continue
 
             centroid_similarity = float(np.dot(vector, cluster["centroid"]))
-            representative_similarity = float(
-                np.dot(vector, cluster["representativeVector"])
-            )
-            # Stabiler Anker verhindert Cluster-Drift: Ein Cluster darf nicht
-            # über eine Kette nur mittelbar ähnlicher Gesichter von Person A
-            # zu einer anderen Person wandern.
-            anchor_similarity = float(
-                np.dot(vector, cluster["anchorVector"])
-            )
-            edge_similarity = float(
-                np.dot(vector, cluster["edgeVector"])
+
+            # Complete-link-Schutz gegen Cluster-Drift: Ein neues Gesicht muss
+            # nicht nur zum Schwerpunkt, sondern zu JEDEM bereits enthaltenen
+            # unabhängigen Gesicht mindestens die Verifikationsschwelle halten.
+            # Damit kann A~B, B~C nicht mehr dazu führen, dass A und C trotz
+            # mangelnder Ähnlichkeit in derselben Personengruppe landen.
+            minimum_member_similarity = min(
+                float(np.dot(vector, member["vector"]))
+                for member in cluster["canonicalMembers"]
             )
 
             if (
                 centroid_similarity >= cluster_threshold
-                and representative_similarity >= verification_threshold
-                and anchor_similarity >= verification_threshold
-                and edge_similarity >= verification_threshold
+                and minimum_member_similarity >= verification_threshold
                 and centroid_similarity > best_similarity
             ):
                 best_index = index
@@ -2130,8 +2127,6 @@ def cluster_face_embeddings(
             clusters.append({
                 "centroid": vector.copy(),
                 "representativeVector": vector.copy(),
-                "anchorVector": vector.copy(),
-                "edgeVector": vector.copy(),
                 "canonicalMembers": [item],
             })
             continue
@@ -2153,12 +2148,7 @@ def cluster_face_embeddings(
             cluster["canonicalMembers"],
             key=lambda member: float(np.dot(member["vector"], centroid)),
         )
-        edge = min(
-            cluster["canonicalMembers"],
-            key=lambda member: float(np.dot(member["vector"], centroid)),
-        )
         cluster["representativeVector"] = representative["vector"]
-        cluster["edgeVector"] = edge["vector"]
 
     result_clusters: list[dict] = []
     ungrouped_count = 0
@@ -2171,6 +2161,15 @@ def cluster_face_embeddings(
             canonical_members,
             key=lambda member: float(np.dot(member["vector"], centroid)),
         )
+
+        # Exakte Dateiduplikate werden über contentKey zusammengefasst.
+        # Zwei Kopien derselben Aufnahme sind daher noch keine Personengruppe.
+        if len(canonical_members) < min_cluster_size:
+            ungrouped_count += sum(
+                len(duplicates_by_content.get(member["contentKey"], []))
+                for member in canonical_members
+            )
+            continue
 
         members: list[dict] = []
         similarities: list[float] = []
@@ -2189,10 +2188,6 @@ def cluster_face_embeddings(
 
         members.sort(key=lambda member: int(member["faceDetectionId"]))
 
-        if len(members) < min_cluster_size:
-            ungrouped_count += len(members)
-            continue
-
         result_clusters.append({
             "representativeFaceId": int(representative["faceDetectionId"]),
             "averageSimilarity": float(sum(similarities) / len(similarities)),
@@ -2209,7 +2204,7 @@ def cluster_face_embeddings(
     )
 
     return {
-        "algorithm": "person-anchor-centroid-v3",
+        "algorithm": "person-complete-link-v4",
         "clusterThreshold": cluster_threshold,
         "verificationThreshold": verification_threshold,
         "minClusterSize": min_cluster_size,
