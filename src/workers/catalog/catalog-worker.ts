@@ -923,6 +923,83 @@ function getStats(sourceId: number) {
       ) AS assigned_detection_count
   `).get(sourceId, sourceId, sourceId, sourceId);
 
+  const facePipelineStats = db.prepare(`
+    SELECT
+      (
+        SELECT COUNT(*)
+        FROM face_detections fd
+        JOIN media_items m ON m.id=fd.media_id
+        WHERE m.source_id=?
+          AND m.availability='AVAILABLE'
+          AND fd.input_sha256=m.sha256
+      ) AS detected_face_count,
+      (
+        SELECT COUNT(*)
+        FROM face_embeddings fe
+        JOIN face_detections fd ON fd.id=fe.face_detection_id
+        JOIN media_items m ON m.id=fe.media_id
+        WHERE m.source_id=?
+          AND m.availability='AVAILABLE'
+          AND fe.model_version='SFace 2021dec'
+          AND fe.input_sha256=m.sha256
+          AND fd.input_sha256=m.sha256
+      ) AS embedded_face_count,
+      (
+        SELECT COUNT(*)
+        FROM face_embeddings fe
+        JOIN face_detections fd ON fd.id=fe.face_detection_id
+        JOIN media_items m ON m.id=fe.media_id
+        LEFT JOIN person_face_assignments pfa
+          ON pfa.face_detection_id=fd.id
+        WHERE m.source_id=?
+          AND m.availability='AVAILABLE'
+          AND fe.model_version='SFace 2021dec'
+          AND fe.input_sha256=m.sha256
+          AND fd.input_sha256=m.sha256
+          AND pfa.face_detection_id IS NULL
+      ) AS unassigned_face_embedding_count
+  `).get(sourceId, sourceId, sourceId);
+
+  const dogPipelineStats = db.prepare(`
+    SELECT
+      (
+        SELECT COUNT(*)
+        FROM pet_fused_detections pd
+        JOIN media_items m ON m.id=pd.media_id
+        WHERE m.source_id=?
+          AND m.availability='AVAILABLE'
+          AND pd.pet_class='dog'
+          AND pd.input_sha256=m.sha256
+      ) AS fused_dog_count,
+      (
+        SELECT COUNT(*)
+        FROM pet_embeddings pe
+        JOIN pet_fused_detections pd ON pd.id=pe.pet_detection_id
+        JOIN media_items m ON m.id=pe.media_id
+        WHERE m.source_id=?
+          AND m.availability='AVAILABLE'
+          AND pd.pet_class='dog'
+          AND pe.model_version='DogReID DINOv2-B14 0.2.0'
+          AND pe.input_sha256=m.sha256
+          AND pd.input_sha256=m.sha256
+      ) AS embedded_dog_count,
+      (
+        SELECT COUNT(*)
+        FROM pet_embeddings pe
+        JOIN pet_fused_detections pd ON pd.id=pe.pet_detection_id
+        JOIN media_items m ON m.id=pe.media_id
+        LEFT JOIN pet_assignments pa
+          ON pa.pet_detection_id=pd.id
+        WHERE m.source_id=?
+          AND m.availability='AVAILABLE'
+          AND pd.pet_class='dog'
+          AND pe.model_version='DogReID DINOv2-B14 0.2.0'
+          AND pe.input_sha256=m.sha256
+          AND pd.input_sha256=m.sha256
+          AND pa.pet_detection_id IS NULL
+      ) AS unassigned_dog_embedding_count
+  `).get(sourceId, sourceId, sourceId);
+
   const lastScan = db.prepare(`
     SELECT finished_at
     FROM scans
@@ -940,10 +1017,20 @@ function getStats(sourceId: number) {
     duplicateFiles: Number(duplicateStats?.duplicate_files ?? 0),
     personCandidates: Number(personStats?.candidate_count ?? 0),
     personCandidateFaces: Number(personStats?.candidate_face_count ?? 0),
+    detectedFaces: Number(facePipelineStats?.detected_face_count ?? 0),
+    embeddedFaces: Number(facePipelineStats?.embedded_face_count ?? 0),
+    unassignedFaceEmbeddings: Number(
+      facePipelineStats?.unassigned_face_embedding_count ?? 0
+    ),
     persons: Number(personStats?.person_count ?? 0),
     assignedPersonFaces: Number(personStats?.assigned_face_count ?? 0),
     petCandidates: Number(petIdentityStats?.candidate_count ?? 0),
     petCandidateDetections: Number(petIdentityStats?.candidate_detection_count ?? 0),
+    fusedDogs: Number(dogPipelineStats?.fused_dog_count ?? 0),
+    embeddedDogs: Number(dogPipelineStats?.embedded_dog_count ?? 0),
+    unassignedDogEmbeddings: Number(
+      dogPipelineStats?.unassigned_dog_embedding_count ?? 0
+    ),
     pets: Number(petIdentityStats?.pet_count ?? 0),
     assignedPetDetections: Number(petIdentityStats?.assigned_detection_count ?? 0),
     lastScan: lastScan?.finished_at ? String(lastScan.finished_at) : null
