@@ -35,7 +35,8 @@ const api = {
   pickSource: (): Promise<string | null> => ipcRenderer.invoke("dialog:pickSource"),
   analysis: {
     getStatus: (): Promise<AnalysisWorkerStatus> => ipcRenderer.invoke("analysis:getStatus"),
-    getPipelineStatus: (): Promise<PipelineStatus> => ipcRenderer.invoke("analysis:getPipelineStatus"),
+    getPipelineStatus: (sourceId?: number): Promise<PipelineStatus> =>
+      ipcRenderer.invoke("analysis:getPipelineStatus", sourceId),
     openDevLog: (): Promise<{ opened: true; path: string }> =>
       ipcRenderer.invoke("analysis:openDevLog"),
     copyDevLog: (): Promise<{
