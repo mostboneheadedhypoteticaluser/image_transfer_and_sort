@@ -2133,10 +2133,6 @@ function renderPersonOverview(overview: PersonOverview): void {
   personCandidates.replaceChildren();
   confirmedPersons.replaceChildren();
 
-  const candidateFaces = overview.candidates.reduce(
-    (sum, candidate) => sum + candidate.faceCount,
-    0
-  );
   const assignedFaces = overview.persons.reduce(
     (sum, person) => sum + person.faceCount,
     0
@@ -3304,7 +3300,9 @@ async function refreshCatalog(): Promise<void> {
     renderPersonOverview({
       candidates: [],
       persons: [],
-      clusteringPending: false
+      clusteringPending: false,
+      candidateTotal: 0,
+      candidateFaceTotal: 0
     });
     renderPetOverview({
       candidates: [],
