@@ -1091,9 +1091,11 @@ def detect_pets(file_path: str) -> dict:
             }
             objects.append(item)
 
-            # Für die bestehende Haustier-Fusion bleibt die bisherige
-            # Mindestqualität erhalten.
-            if class_id in (15, 16) and confidence >= 0.38:
+            # Schwächere Hund/Katze-Treffer dürfen bis zur Zwei-Modell-Fusion
+            # weiterlaufen. Einzelmodell-Treffer werden dort weiterhin deutlich
+            # strenger gefiltert; zwei Modelle können sich dagegen gegenseitig
+            # bestätigen.
+            if class_id in (15, 16) and confidence >= raw_threshold:
                 pets.append({
                     "class": "cat" if class_id == 15 else "dog",
                     "classId": class_id,
@@ -1106,6 +1108,22 @@ def detect_pets(file_path: str) -> dict:
 
     objects.sort(key=lambda item: float(item["score"]), reverse=True)
     pets.sort(key=lambda pet: float(pet["score"]), reverse=True)
+
+    dog_object_scores = [
+        float(item["score"])
+        for item in objects
+        if item.get("label") == "dog"
+    ]
+    dev_log(
+        "PET_DETECT_RESULT",
+        target=file_path,
+        detector="NanoDet 2022nov",
+        pets=len(pets),
+        dogs=sum(1 for pet in pets if pet.get("class") == "dog"),
+        cats=sum(1 for pet in pets if pet.get("class") == "cat"),
+        rawDogCandidates=len(dog_object_scores),
+        bestDogScore=max(dog_object_scores) if dog_object_scores else None,
+    )
 
     return {
         "module": "pet-detect-nanodet-v1",
@@ -1287,6 +1305,22 @@ def detect_pets_yolox(file_path: str) -> dict:
         reverse=True,
     )
     pet_candidates.sort(key=lambda pet: float(pet["score"]), reverse=True)
+
+    dog_object_scores = [
+        float(item["score"])
+        for item in object_candidates
+        if item.get("label") == "dog"
+    ]
+    dev_log(
+        "PET_DETECT_RESULT",
+        target=file_path,
+        detector="YOLOX-S 2022nov",
+        pets=len(pet_candidates),
+        dogs=sum(1 for pet in pet_candidates if pet.get("class") == "dog"),
+        cats=sum(1 for pet in pet_candidates if pet.get("class") == "cat"),
+        rawDogCandidates=len(dog_object_scores),
+        bestDogScore=max(dog_object_scores) if dog_object_scores else None,
+    )
 
     return {
         "module": "pet-detect-yolox-v1",
@@ -1559,6 +1593,11 @@ def fuse_pet_detections(
             minimum = 0.45 if detector.startswith("YOLOX") else 0.50
             if max(scores) < minimum:
                 continue
+        else:
+            # Zwei unabhängige Modelle dürfen schwächere Treffer gemeinsam
+            # bestätigen, aber nicht beliebig niedrige Zufallstreffer.
+            if max(scores) < 0.32 or (sum(scores) / len(scores)) < 0.28:
+                continue
 
         weights = np.array(
             [max(0.01, score) for score in scores],
@@ -1597,6 +1636,14 @@ def fuse_pet_detections(
             -int(pet["agreementCount"]),
             -float(pet["score"]),
         )
+    )
+
+    dev_log(
+        "PET_FUSION_RESULT",
+        rawPetDetections=len(cleaned),
+        fusedPets=len(fused),
+        fusedDogs=sum(1 for pet in fused if pet.get("class") == "dog"),
+        fusedCats=sum(1 for pet in fused if pet.get("class") == "cat"),
     )
 
     return {
