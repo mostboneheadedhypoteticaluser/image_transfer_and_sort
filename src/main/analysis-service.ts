@@ -1,22 +1,51 @@
 import { randomUUID } from "node:crypto";
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { existsSync, readdirSync } from "node:fs";
+import {
+  spawn,
+  spawnSync,
+  type ChildProcessWithoutNullStreams
+} from "node:child_process";
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  renameSync,
+  statSync,
+  unlinkSync
+} from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import readline from "node:readline";
-import type { AnalysisWorkerStatus } from "../shared/protocol";
+import type {
+  AnalysisWorkerProgress,
+  AnalysisWorkerStatus
+} from "../shared/protocol";
 
 type Pending = {
   resolve: (value: unknown) => void;
   reject: (reason: Error) => void;
   timeout: NodeJS.Timeout;
+  timeoutMs: number;
+  method: string;
+  startedAtMs: number;
+  target: string | null;
 };
 
 type WorkerResponse = {
   id?: string | null;
-  ok: boolean;
+  ok?: boolean;
   result?: unknown;
   error?: string;
+  event?: string;
+  requestId?: string | null;
+  message?: string;
+  phase?: string;
+  current?: number;
+  total?: number;
+  processKind?: string;
+  processState?: string;
+  pid?: number;
+  port?: number;
 };
 
 type PythonCandidate = {
@@ -68,22 +97,101 @@ const DEFAULT_STATUS: AnalysisWorkerStatus = {
   maxConcurrentJobs: 1,
   queuedJobs: 0,
   activeJobs: 0,
-  message: "Analyse-Worker ist noch nicht gestartet."
+  message: "Analyse-Worker ist noch nicht gestartet.",
+  progress: null
 };
 
 export class AnalysisService {
   private child: ChildProcessWithoutNullStreams | null = null;
   private readonly pending = new Map<string, Pending>();
   private stopping = false;
+  private qwenServerPid: number | null = null;
+  private qwen3vl4bAvailable = false;
+  private qwen3vl4bIssue: string | null = "Qwen3-VL 4B wurde noch nicht geprüft.";
   private status: AnalysisWorkerStatus = { ...DEFAULT_STATUS };
 
   constructor(
     private readonly workerPath: string,
-    private readonly onStatus: (status: AnalysisWorkerStatus) => void
-  ) {}
+    private readonly onStatus: (status: AnalysisWorkerStatus) => void,
+    private readonly devLogPath: string
+  ) {
+    this.prepareDevLog();
+    this.devLog("ELECTRON_SERVICE_CREATED", {
+      workerPath: this.workerPath,
+      node: process.version,
+      platform: process.platform,
+      arch: process.arch
+    });
+  }
+
+  getDevLogPath(): string {
+    return this.devLogPath;
+  }
+
+  private prepareDevLog(): void {
+    try {
+      mkdirSync(path.dirname(this.devLogPath), { recursive: true });
+
+      if (existsSync(this.devLogPath)) {
+        const maxBytes = 8 * 1024 * 1024;
+        const size = statSync(this.devLogPath).size;
+
+        if (size >= maxBytes) {
+          const rotated = this.devLogPath + ".1";
+          try {
+            if (existsSync(rotated)) unlinkSync(rotated);
+          } catch {
+            // Rotation ist nur Komfort; Logging selbst soll weiterlaufen.
+          }
+          try {
+            renameSync(this.devLogPath, rotated);
+          } catch {
+            // Falls AV/Editor die Datei kurz blockiert, hängen wir weiter an.
+          }
+        }
+      }
+    } catch {
+      // Ein Diagnoseprotokoll darf den eigentlichen Worker niemals verhindern.
+    }
+  }
+
+  private devLog(
+    event: string,
+    fields: Record<string, unknown> = {}
+  ): void {
+    try {
+      const memory = process.memoryUsage();
+      const line = JSON.stringify({
+        ts: new Date().toISOString(),
+        source: "electron-analysis",
+        pid: process.pid,
+        event,
+        electronRssMiB: Math.round(memory.rss / 1024 / 1024),
+        systemFreeMiB: Math.round(os.freemem() / 1024 / 1024),
+        systemTotalMiB: Math.round(os.totalmem() / 1024 / 1024),
+        ...fields
+      });
+      appendFileSync(this.devLogPath, line + "\n", "utf8");
+    } catch {
+      // Diagnose darf die Anwendung nicht beeinflussen.
+    }
+  }
+
+  private requestTarget(payload: Record<string, unknown>): string | null {
+    const value = payload.path;
+    return typeof value === "string" && value.trim() ? value : null;
+  }
 
   getStatus(): AnalysisWorkerStatus {
     return { ...this.status };
+  }
+
+  isQwen3vl4bAvailable(): boolean {
+    return this.qwen3vl4bAvailable;
+  }
+
+  getQwen3vl4bIssue(): string | null {
+    return this.qwen3vl4bIssue;
   }
 
   private publish(patch: Partial<AnalysisWorkerStatus>): void {
@@ -130,7 +238,15 @@ export class AnalysisService {
   }
 
   async start(): Promise<void> {
-    if (this.child) return;
+    if (this.child) {
+      this.devLog("START_SKIPPED_CHILD_ALREADY_PRESENT", {
+        childPid: this.child.pid ?? null
+      });
+      return;
+    }
+
+    const startAt = Date.now();
+    this.devLog("START_BEGIN");
 
     this.stopping = false;
     this.publish({
@@ -141,13 +257,28 @@ export class AnalysisService {
     let lastError: Error | null = null;
 
     for (const candidate of this.candidates()) {
+      const candidateAt = Date.now();
+      this.devLog("PYTHON_CANDIDATE_BEGIN", {
+        label: candidate.label,
+        command: candidate.command
+      });
       try {
         await this.launch(candidate);
+        this.devLog("PYTHON_SPAWN_READY", {
+          label: candidate.label,
+          childPid: this.status.pid,
+          elapsedMs: Date.now() - candidateAt
+        });
+
+        const pingAt = Date.now();
         const ping = await this.request<Record<string, unknown>>(
           "ping",
           {},
-          20000
+          60000
         );
+        this.devLog("PING_OK", {
+          elapsedMs: Date.now() - pingAt
+        });
 
         const capabilities =
           ping.capabilities && typeof ping.capabilities === "object"
@@ -204,6 +335,59 @@ export class AnalysisService {
           );
         }
 
+        if (
+          capabilities.siglip2Model !== true ||
+          capabilities.torch !== true ||
+          capabilities.transformers !== true ||
+          capabilities.semanticEmbeddings !== true
+        ) {
+          throw new Error(
+            "SigLIP2 So400m NaFlex oder seine Python-Abhängigkeiten fehlen. " +
+            "Bitte 'npm.cmd run setup:ai' ausführen. " +
+            "Der einmalige SigLIP2-Download ist etwa 4,6 GB groß."
+          );
+        }
+
+        const qwen4bModelReady = capabilities.qwen3vl4bModel === true;
+        const qwen4bRuntimeReady = capabilities.qwen3vl4bRuntime === true;
+        const qwen4bBenchmarkReady = capabilities.qwen3vl4bBenchmark === true;
+        this.qwen3vl4bAvailable =
+          qwen4bModelReady && qwen4bRuntimeReady && qwen4bBenchmarkReady;
+
+        if (this.qwen3vl4bAvailable) {
+          this.qwen3vl4bIssue = null;
+          this.devLog("QWEN4B_CAPABILITY_READY", {
+            diagnostics: capabilities.qwen3vl4bDiagnostics ?? null
+          });
+        } else {
+          const missing: string[] = [];
+          if (!qwen4bModelReady) missing.push("4B-GGUF/Projektor");
+          if (!qwen4bRuntimeReady) missing.push("llama.cpp");
+          if (!qwen4bBenchmarkReady && qwen4bModelReady && qwen4bRuntimeReady) {
+            missing.push("Vision-Fähigkeit");
+          }
+
+          this.qwen3vl4bIssue =
+            "Qwen3-VL 4B pausiert: " +
+            (missing.length > 0 ? missing.join(", ") + " nicht verfügbar." : "nicht verfügbar.");
+
+          this.devLog("QWEN4B_OPTIONAL_UNAVAILABLE", {
+            qwen3vl4bModel: qwen4bModelReady,
+            qwen3vl4bRuntime: qwen4bRuntimeReady,
+            qwen3vl4bBenchmark: qwen4bBenchmarkReady,
+            diagnostics: capabilities.qwen3vl4bDiagnostics ?? null
+          });
+        }
+
+        // Das frühere 8B-Modell bleibt nur Legacy/optional. Es wird von der
+        // Katalogpipeline nicht mehr verwendet.
+        if (capabilities.qwen3vlModel !== true) {
+          this.devLog("QWEN8B_LEGACY_UNAVAILABLE", {
+            qwen3vlModel: false
+          });
+        }
+
+        const configureAt = Date.now();
         const configured = await this.request<Record<string, unknown>>(
           "configure",
           {
@@ -211,20 +395,40 @@ export class AnalysisService {
             cpuBudgetPercent: 50,
             profile: "background"
           },
-          5000
+          15000
         );
+        this.devLog("CONFIGURE_OK", {
+          elapsedMs: Date.now() - configureAt
+        });
 
         this.applyWorkerResult(configured);
         this.publish({
           state: "READY",
-          message: "Analyse-Worker läuft getrennt im Hintergrund."
+          message: this.qwen3vl4bAvailable
+            ? "Analyse-Worker läuft getrennt im Hintergrund."
+            : "Analyse-Worker läuft. " + (this.qwen3vl4bIssue ?? "Qwen3-VL 4B ist pausiert.")
+        });
+        this.devLog("START_READY", {
+          totalElapsedMs: Date.now() - startAt,
+          childPid: this.status.pid,
+          python: candidate.label
         });
         return;
       } catch (error) {
         lastError = error instanceof Error ? error : new Error(String(error));
+        this.devLog("PYTHON_CANDIDATE_ERROR", {
+          label: candidate.label,
+          elapsedMs: Date.now() - candidateAt,
+          error: lastError.message
+        });
         this.killChild();
       }
     }
+
+    this.devLog("START_FAILED", {
+      totalElapsedMs: Date.now() - startAt,
+      error: lastError?.message ?? "Keine passende Python-Installation gefunden."
+    });
 
     this.publish({
       state: "ERROR",
@@ -238,9 +442,24 @@ export class AnalysisService {
 
   private launch(candidate: PythonCandidate): Promise<void> {
     return new Promise((resolve, reject) => {
+      const launchAt = Date.now();
+      this.devLog("SPAWN_BEGIN", {
+        label: candidate.label,
+        command: candidate.command
+      });
+
       const child = spawn(candidate.command, candidate.args, {
         stdio: ["pipe", "pipe", "pipe"],
-        windowsHide: true
+        windowsHide: true,
+        env: {
+          ...process.env,
+          IMAGE_SORTER_DEV_LOG: this.devLogPath,
+          // Windows-Python darf die IPC-Pipes nicht über die lokale ANSI-
+          // Codepage behandeln. MiniCPM kann beliebige Unicode-Zeichen
+          // zurückgeben; Electron liest die Pipes ebenfalls als UTF-8.
+          PYTHONIOENCODING: "utf-8",
+          PYTHONUTF8: "1"
+        }
       });
 
       let settled = false;
@@ -248,6 +467,11 @@ export class AnalysisService {
       const fail = (error: Error) => {
         if (settled) return;
         settled = true;
+        this.devLog("SPAWN_ERROR", {
+          label: candidate.label,
+          elapsedMs: Date.now() - launchAt,
+          error: error.message
+        });
         reject(error);
       };
 
@@ -259,6 +483,11 @@ export class AnalysisService {
 
         this.child = child;
         this.attachChild(child);
+        this.devLog("SPAWN_EVENT", {
+          label: candidate.label,
+          childPid: child.pid ?? null,
+          elapsedMs: Date.now() - launchAt
+        });
 
         try {
           if (child.pid !== undefined) {
@@ -292,6 +521,94 @@ export class AnalysisService {
         return;
       }
 
+      if (
+        message.event === "process" &&
+        message.processKind === "qwen-server"
+      ) {
+        if (
+          message.processState === "started" &&
+          typeof message.pid === "number" &&
+          Number.isInteger(message.pid) &&
+          message.pid > 0
+        ) {
+          this.qwenServerPid = message.pid;
+          this.devLog("QWEN_SERVER_TRACKED", {
+            qwenServerPid: message.pid,
+            port: message.port ?? null
+          });
+        } else if (message.processState === "stopped") {
+          if (
+            typeof message.pid !== "number" ||
+            this.qwenServerPid === message.pid
+          ) {
+            this.devLog("QWEN_SERVER_UNTRACKED", {
+              qwenServerPid: this.qwenServerPid
+            });
+            this.qwenServerPid = null;
+          }
+        }
+        return;
+      }
+
+      if (message.event === "progress") {
+        const requestId = message.requestId ?? null;
+
+        // Fortschritt nur anzeigen, solange die zugehörige Anfrage wirklich
+        // noch aktiv ist. So kann ein verspätetes Event keinen neueren Status
+        // überschreiben.
+        if (
+          requestId &&
+          this.pending.has(requestId) &&
+          typeof message.message === "string" &&
+          message.message.trim()
+        ) {
+          const current =
+            typeof message.current === "number" && Number.isFinite(message.current)
+              ? Math.max(0, Math.trunc(message.current))
+              : null;
+          const total =
+            typeof message.total === "number" && Number.isFinite(message.total)
+              ? Math.max(0, Math.trunc(message.total))
+              : null;
+
+          const pending = this.pending.get(requestId);
+          const progress: AnalysisWorkerProgress = {
+            kind:
+              pending?.method === "benchmark_minicpm"
+                ? "minicpm"
+                : pending?.method === "benchmark_qwen3vl2b"
+                  ? "qwen3vl2b"
+                  : pending?.method === "benchmark_qwen3vl4b" ||
+                    pending?.method === "analyze_catalog_qwen3vl4b"
+                    ? "qwen3vl4b"
+                    : "qwen3vl",
+            phase:
+              typeof message.phase === "string" && message.phase.trim()
+                ? message.phase.trim()
+                : "working",
+            current,
+            total,
+            message: message.message.trim()
+          };
+
+          if (pending) this.armPendingTimeout(requestId, pending);
+
+          this.devLog("WORKER_PROGRESS", {
+            requestId,
+            phase: progress.phase,
+            current: progress.current,
+            total: progress.total,
+            message: progress.message
+          });
+
+          this.publish({
+            message: progress.message,
+            progress
+          });
+        }
+        return;
+      }
+
       if (!message.id) return;
       const pending = this.pending.get(message.id);
       if (!pending) return;
@@ -299,13 +616,32 @@ export class AnalysisService {
       clearTimeout(pending.timeout);
       this.pending.delete(message.id);
 
-      if (message.ok) pending.resolve(message.result);
-      else pending.reject(new Error(message.error ?? "Analyse-Worker meldet einen Fehler."));
+      const elapsedMs = Date.now() - pending.startedAtMs;
+      if (message.ok) {
+        this.devLog("REQUEST_OK", {
+          requestId: message.id,
+          method: pending.method,
+          target: pending.target,
+          elapsedMs
+        });
+        pending.resolve(message.result);
+      } else {
+        const error = message.error ?? "Analyse-Worker meldet einen Fehler.";
+        this.devLog("REQUEST_ERROR", {
+          requestId: message.id,
+          method: pending.method,
+          target: pending.target,
+          elapsedMs,
+          error
+        });
+        pending.reject(new Error(error));
+      }
     });
 
     child.stderr.on("data", (chunk: Buffer) => {
       const message = chunk.toString("utf8").trim();
       if (!message) return;
+      this.devLog("WORKER_STDERR", { message });
       this.publish({ message: `Analyse-Worker: ${message}` });
     });
 
@@ -318,6 +654,13 @@ export class AnalysisService {
           ? `Analyse-Worker wurde beendet (Signal ${signal}).`
           : `Analyse-Worker wurde beendet (Code ${code ?? "unbekannt"}).`
       );
+
+      this.devLog("WORKER_EXIT", {
+        childPid: child.pid ?? null,
+        code: code ?? null,
+        signal: signal ?? null,
+        wasCurrentChild
+      });
 
       if (wasCurrentChild) {
         for (const pending of this.pending.values()) {
@@ -338,14 +681,16 @@ export class AnalysisService {
           pid: null,
           activeJobs: 0,
           queuedJobs: 0,
-          message: "Analyse-Worker wurde mit der App beendet."
+          message: "Analyse-Worker wurde mit der App beendet.",
+          progress: null
         });
       } else {
         this.publish({
           state: "ERROR",
           pid: null,
           activeJobs: 0,
-          message: error.message
+          message: error.message,
+          progress: null
         });
       }
     });
@@ -366,8 +711,58 @@ export class AnalysisService {
     this.publish({
       queuedJobs: Math.max(0, Math.trunc(queuedJobs)),
       activeJobs: Math.max(0, Math.trunc(activeJobs)),
+      progress: null,
       ...(message ? { message } : {})
     });
+  }
+
+  private armPendingTimeout(id: string, pending: Pending): void {
+    clearTimeout(pending.timeout);
+    pending.timeout = setTimeout(() => {
+      const current = this.pending.get(id);
+      if (!current) return;
+
+      this.pending.delete(id);
+      const error = new Error(
+        `Zeitüberschreitung bei Analyse-Worker-Methode ${current.method}.`
+      );
+      this.devLog("REQUEST_TIMEOUT", {
+        requestId: id,
+        method: current.method,
+        target: current.target,
+        elapsedMs: Date.now() - current.startedAtMs,
+        inactivityTimeoutMs: current.timeoutMs
+      });
+      current.reject(error);
+
+      // Ein abgelaufener Qwen-Aufruf darf nicht im Python-Prozess weiterlaufen
+      // und alle folgenden Jobs blockieren. Worker + llama.cpp-Prozessbaum
+      // werden beendet und anschließend frisch gestartet.
+      if (
+        current.method === "detect_qwen3vl_objects" ||
+        current.method === "analyze_catalog_qwen3vl4b" ||
+        current.method === "benchmark_qwen3vl" ||
+        current.method === "benchmark_minicpm" ||
+        current.method === "benchmark_qwen3vl2b" ||
+        current.method === "benchmark_qwen3vl4b"
+      ) {
+        this.publish({
+          state: "STARTING",
+          progress: null,
+          message:
+            "Das Vision-Modell hat zu lange keine Aktivität gemeldet. " +
+            "Analyse-Worker wird sauber neu gestartet …"
+        });
+
+        this.killChild();
+
+        const restart = setTimeout(() => {
+          void this.start();
+        }, 1200);
+        restart.unref();
+      }
+    }, pending.timeoutMs);
+    pending.timeout.unref();
   }
 
   async request<T>(
@@ -381,15 +776,24 @@ export class AnalysisService {
     const id = randomUUID();
 
     const response = new Promise<T>((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        this.pending.delete(id);
-        reject(new Error(`Zeitüberschreitung bei Analyse-Worker-Methode ${method}.`));
-      }, timeoutMs);
-
-      this.pending.set(id, {
+      const pending: Pending = {
         resolve: (value) => resolve(value as T),
         reject,
-        timeout
+        timeout: setTimeout(() => {}, 1),
+        timeoutMs,
+        method,
+        startedAtMs: Date.now(),
+        target: this.requestTarget(payload)
+      };
+
+      this.pending.set(id, pending);
+      this.armPendingTimeout(id, pending);
+
+      this.devLog("REQUEST_BEGIN", {
+        requestId: id,
+        method,
+        target: pending.target,
+        timeoutMs
       });
     });
 
@@ -411,10 +815,13 @@ export class AnalysisService {
   }
 
   stop(): void {
+    this.devLog("STOP_GRACEFUL_BEGIN", {
+      childPid: this.status.pid
+    });
     this.stopping = true;
     const child = this.child;
     if (!child) {
-      this.publish({ state: "STOPPED", pid: null });
+      this.publish({ state: "STOPPED", pid: null, progress: null });
       return;
     }
 
@@ -433,9 +840,245 @@ export class AnalysisService {
     timer.unref();
   }
 
+  private isTrackedQwenProcessRunning(): boolean {
+    const pid = this.qwenServerPid;
+    if (!pid) return false;
+
+    if (process.platform !== "win32") {
+      try {
+        process.kill(pid, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    }
+
+    try {
+      const probe = spawnSync(
+        "tasklist",
+        ["/FI", `PID eq ${pid}`, "/FO", "CSV", "/NH"],
+        {
+          encoding: "utf8",
+          windowsHide: true,
+          timeout: 5000
+        }
+      );
+
+      const output =
+        typeof probe.stdout === "string" ? probe.stdout : "";
+
+      return /llama-server(?:\.exe)?/i.test(output);
+    } catch {
+      return false;
+    }
+  }
+
+  private killTrackedQwenServerSync(): void {
+    const pid = this.qwenServerPid;
+    if (!pid) return;
+
+    const running = this.isTrackedQwenProcessRunning();
+    this.devLog("QWEN_SERVER_SHUTDOWN_CHECK", {
+      qwenServerPid: pid,
+      running
+    });
+
+    if (!running) {
+      this.qwenServerPid = null;
+      return;
+    }
+
+    try {
+      if (process.platform === "win32") {
+        const killed = spawnSync(
+          "taskkill",
+          ["/PID", String(pid), "/T", "/F"],
+          {
+            stdio: "ignore",
+            windowsHide: true,
+            timeout: 15000
+          }
+        );
+        this.devLog("QWEN_SERVER_FALLBACK_KILL", {
+          qwenServerPid: pid,
+          status: killed.status
+        });
+      } else {
+        process.kill(pid, "SIGKILL");
+        this.devLog("QWEN_SERVER_FALLBACK_KILL", {
+          qwenServerPid: pid,
+          status: 0
+        });
+      }
+    } catch (error) {
+      this.devLog("QWEN_SERVER_FALLBACK_KILL_ERROR", {
+        qwenServerPid: pid,
+        error: error instanceof Error ? error.message : String(error)
+      });
+    } finally {
+      this.qwenServerPid = null;
+    }
+  }
+
+  /**
+   * Stoppt den Analyse-Worker samt llama.cpp synchron, bevor der
+   * Qwen-Einzelbildtest geöffnet wird. Dadurch ist der Arbeitsspeicher bereits
+   * frei, wenn der Windows-Dateidialog erscheint. Laufende Queue-Jobs werden
+   * vom AnalysisCoordinator kontrolliert wieder auf PENDING gesetzt.
+   */
+  stopForBenchmark(): void {
+    const stopAt = Date.now();
+    this.devLog("BENCHMARK_STOP_BEGIN", {
+      childPid: this.status.pid,
+      qwenServerPid: this.qwenServerPid
+    });
+    this.stopping = true;
+    const child = this.child;
+
+    if (child) {
+      this.child = null;
+
+      const interruption = new Error(
+        "Analyse-Worker wurde für den Einzelbildtest pausiert."
+      );
+      for (const pending of this.pending.values()) {
+        clearTimeout(pending.timeout);
+        pending.reject(interruption);
+      }
+      this.pending.clear();
+
+      try {
+        if (process.platform === "win32" && child.pid) {
+          spawnSync(
+            "taskkill",
+            ["/PID", String(child.pid), "/T", "/F"],
+            {
+              stdio: "ignore",
+              windowsHide: true,
+              timeout: 15000
+            }
+          );
+        } else {
+          child.kill("SIGKILL");
+        }
+      } catch {
+        try {
+          child.kill("SIGKILL");
+        } catch {
+          // Prozess ist bereits beendet.
+        }
+      }
+    }
+
+    // taskkill /T nimmt llama.cpp normalerweise mit. Die separat verfolgte
+    // PID ist das Sicherheitsnetz, damit vor dem Dateidialog garantiert kein
+    // Qwen-Modell mehr im Hauptspeicher liegt.
+    this.killTrackedQwenServerSync();
+
+    this.devLog("BENCHMARK_STOP_DONE", {
+      elapsedMs: Date.now() - stopAt
+    });
+
+    this.publish({
+      state: "STOPPED",
+      pid: null,
+      activeJobs: 0,
+      progress: null,
+      message: "Standardanalyse pausiert · Vision-Modell/llama.cpp für Einzeltest entladen."
+    });
+  }
+
+  /**
+   * Harte, synchrone Beendigung für den App-Shutdown.
+   *
+   * Ein laufender Qwen-Aufruf blockiert den Python-Worker in urllib und kann
+   * deshalb kein "shutdown" mehr aus stdin lesen. Beim normalen App-Ende darf
+   * Electron außerdem nicht verschwinden, bevor taskkill den von uns gestarteten
+   * Prozessbaum wirklich beendet hat. Unter Windows wird deshalb synchron
+   * Python + dessen llama-server-Kindprozess beendet.
+   */
+  stopImmediately(): void {
+    const stopAt = Date.now();
+    this.devLog("STOP_IMMEDIATE_BEGIN", {
+      childPid: this.status.pid
+    });
+    this.stopping = true;
+    const child = this.child;
+
+    if (!child) {
+      this.killTrackedQwenServerSync();
+      this.publish({
+        state: "STOPPED",
+        pid: null,
+        activeJobs: 0,
+        queuedJobs: 0,
+        progress: null,
+        message: "Analyse-Worker und Qwen sind beendet."
+      });
+      return;
+    }
+
+    this.child = null;
+
+    const shutdownError = new Error(
+      "Analyse-Worker wurde wegen App-Beendigung gestoppt."
+    );
+    for (const pending of this.pending.values()) {
+      clearTimeout(pending.timeout);
+      pending.reject(shutdownError);
+    }
+    this.pending.clear();
+
+    try {
+      if (process.platform === "win32" && child.pid) {
+        // /T beendet nur den Prozessbaum dieses konkreten Python-Workers.
+        // Dadurch wird kein fremder llama-server auf dem System angefasst.
+        spawnSync(
+          "taskkill",
+          ["/PID", String(child.pid), "/T", "/F"],
+          {
+            stdio: "ignore",
+            windowsHide: true,
+            timeout: 15000
+          }
+        );
+      } else {
+        child.kill("SIGKILL");
+      }
+    } catch {
+      try {
+        child.kill("SIGKILL");
+      } catch {
+        // Prozess ist bereits beendet.
+      }
+    }
+
+    // /T sollte llama.cpp bereits mitnehmen. Der separat verfolgte PID ist ein
+    // Sicherheitsnetz für den seltenen Fall, dass der Server sich vom
+    // Python-Prozess gelöst hat oder der Worker vorher abgestürzt ist.
+    this.killTrackedQwenServerSync();
+
+    this.devLog("STOP_IMMEDIATE_DONE", {
+      elapsedMs: Date.now() - stopAt
+    });
+
+    this.publish({
+      state: "STOPPED",
+      pid: null,
+      activeJobs: 0,
+      queuedJobs: 0,
+      progress: null,
+      message: "Analyse-Worker und Qwen wurden vollständig beendet."
+    });
+  }
+
   private killChild(): void {
     const child = this.child;
     if (!child) return;
+
+    this.devLog("KILL_CHILD_BEGIN", {
+      childPid: child.pid ?? null
+    });
 
     this.child = null;
 
@@ -446,9 +1089,27 @@ export class AnalysisService {
     this.pending.clear();
 
     try {
-      child.kill();
+      if (process.platform === "win32" && child.pid) {
+        const killer = spawn(
+          "taskkill",
+          ["/PID", String(child.pid), "/T", "/F"],
+          {
+            stdio: "ignore",
+            windowsHide: true
+          }
+        );
+        killer.unref();
+      } else {
+        child.kill();
+      }
     } catch {
-      // Prozess ist bereits beendet.
+      try {
+        child.kill();
+      } catch {
+        // Prozess ist bereits beendet.
+      }
     }
+
+    this.killTrackedQwenServerSync();
   }
 }

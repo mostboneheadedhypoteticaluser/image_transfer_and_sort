@@ -1,3 +1,11 @@
+export type AnalysisWorkerProgress = {
+  kind: "qwen3vl" | "minicpm" | "qwen3vl2b" | "qwen3vl4b";
+  phase: string;
+  current: number | null;
+  total: number | null;
+  message: string;
+};
+
 export type AnalysisWorkerStatus = {
   state: "STARTING" | "READY" | "STOPPED" | "ERROR";
   pid: number | null;
@@ -8,6 +16,81 @@ export type AnalysisWorkerStatus = {
   queuedJobs: number;
   activeJobs: number;
   message: string;
+  progress?: AnalysisWorkerProgress | null;
+};
+
+export type QwenBenchmarkModel = "minicpm" | "qwen3vl2b" | "qwen3vl4b";
+
+export type QwenBenchmarkProfile =
+  | "whole"
+  | "tiles4"
+  | "tiles9"
+  | "tiles16";
+
+export type QwenBenchmarkObject = {
+  label: string;
+  score: number;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  agreementCount: number;
+  sources: string[];
+};
+
+export type QwenBenchmarkTimings = {
+  prepareMs: number;
+  imageLoadMs: number;
+  modelReadyMs: number;
+  discoveryMs: number;
+  verificationMs: number;
+  totalMs: number;
+};
+
+export type QwenBenchmarkSemantic = {
+  description: string;
+  subjects: string[];
+  actions: string[];
+  scenes: string[];
+  visibleText: string[];
+  tags: string[];
+  concepts: string[];
+  repaired?: boolean;
+};
+
+export type QwenBenchmarkRegion = {
+  name: string;
+  kind: "whole-image" | "tile";
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  durationMs: number;
+  semantic: QwenBenchmarkSemantic;
+};
+
+export type QwenBenchmarkStageResult = {
+  path: string;
+  profile: QwenBenchmarkProfile;
+  label: string;
+  description: string;
+  model: string;
+  imageWidth: number;
+  imageHeight: number;
+  regionCount: number;
+  candidateCount: number;
+  verifiedCount: number;
+  rejectedCount: number;
+  timings: QwenBenchmarkTimings;
+  semantic: QwenBenchmarkSemantic;
+  regions: QwenBenchmarkRegion[];
+  objects: QwenBenchmarkObject[];
+};
+
+export type QwenBenchmarkRunResult = {
+  path: string;
+  model: QwenBenchmarkModel;
+  results: QwenBenchmarkStageResult[];
 };
 
 export type AnalysisQueueStats = {
@@ -27,6 +110,8 @@ export type PipelineStatus = {
   petDetection: AnalysisQueueStats;
   petFusion: AnalysisQueueStats;
   petEmbeddings: AnalysisQueueStats;
+  objectVerification: AnalysisQueueStats;
+  semanticEmbeddings: AnalysisQueueStats;
 };
 
 export type AnalysisJob = {
@@ -56,10 +141,144 @@ export type RetryAnalysisResult = {
   retried: number;
 };
 
+export type SemanticTextEmbedding = {
+  model: string;
+  query: string;
+  prompt: string;
+  dimension: number;
+  vector: number[];
+  logitScale: number;
+  logitBias: number;
+};
+
 export type MediaPreviewInfo = {
   mediaId: number;
   absolutePath: string;
   inputSha256: string;
+};
+
+export type MediaDetailFace = {
+  id: number;
+  detectorVersion: string;
+  score: number;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  embeddingReady: boolean;
+  embeddingModel: string | null;
+  personId: number | null;
+  personName: string | null;
+  assignmentSource: string | null;
+  assignmentConfidence: number | null;
+  candidateId: number | null;
+  candidateSimilarity: number | null;
+};
+
+export type MediaDetailPet = {
+  id: number;
+  petClass: "dog" | "cat";
+  score: number;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  fusionVersion: string;
+  agreementCount: number;
+  sources: string[];
+  embeddingReady: boolean;
+  embeddingModel: string | null;
+  petId: number | null;
+  petName: string | null;
+  assignmentSource: string | null;
+  assignmentConfidence: number | null;
+  candidateId: number | null;
+  candidateSimilarity: number | null;
+};
+
+export type MediaDetailObject = {
+  label: string;
+  score: number;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  version: string;
+  agreementCount: number | null;
+  sources: string[];
+  raw: boolean;
+};
+
+export type MediaDetailAnalysisJob = {
+  module: string;
+  status: string;
+  attempts: number;
+  errorMessage: string | null;
+  startedAt: string | null;
+  finishedAt: string | null;
+  updatedAt: string;
+};
+
+export type MediaDetails = {
+  mediaId: number;
+  sourceId: number;
+  relativePath: string;
+  absolutePath: string;
+  extension: string;
+  sizeBytes: number;
+  mtimeMs: number;
+  sha256: string;
+  availability: string;
+  deviceId: string | null;
+  inode: string | null;
+  firstSeenAt: string;
+  lastSeenAt: string;
+  lastChangedAt: string;
+  lastMovedAt: string | null;
+  recyclePath: string | null;
+  duplicateCount: number;
+  technicalProbe: Record<string, unknown> | null;
+  imageMetadata: {
+    width: number;
+    height: number;
+    format: string | null;
+    colorMode: string | null;
+    orientation: number | null;
+    capturedAt: string | null;
+    cameraMake: string | null;
+    cameraModel: string | null;
+    lensModel: string | null;
+    gpsLatitude: number | null;
+    gpsLongitude: number | null;
+    updatedAt: string;
+  } | null;
+  faces: MediaDetailFace[];
+  pets: MediaDetailPet[];
+  objects: MediaDetailObject[];
+  semanticEmbedding: {
+    model: string;
+    dimension: number;
+    maxNumPatches: number;
+    precision: string;
+    updatedAt: string;
+  } | null;
+  semantic: {
+    model: string;
+    profileVersion: string;
+    description: string;
+    subjects: string[];
+    actions: string[];
+    scenes: string[];
+    visibleText: string[];
+    tags: string[];
+    concepts: string[];
+    repaired: boolean;
+    regionCount: number;
+    regions: unknown[];
+    timings: Record<string, unknown>;
+    updatedAt: string;
+  } | null;
+  analysisJobs: MediaDetailAnalysisJob[];
 };
 
 export type PetDetectionForEmbedding = {
@@ -295,9 +514,13 @@ export type CatalogStats = {
   duplicateGroups: number;
   duplicateFiles: number;
   personCandidates: number;
+  personCandidateFaces: number;
   persons: number;
+  assignedPersonFaces: number;
   petCandidates: number;
+  petCandidateDetections: number;
   pets: number;
+  assignedPetDetections: number;
   lastScan: string | null;
 };
 
@@ -322,7 +545,38 @@ export type MediaRecord = {
   petSingleModelCount: number;
   objectCount: number;
   objectLabels: string[];
+  semanticReady: boolean;
+  semanticModel: string | null;
+  semanticScore: number | null;
+  catalogSemanticReady: boolean;
+  catalogSemanticModel: string | null;
+  catalogSemanticScore: number | null;
+  combinedSemanticScore: number | null;
+  semanticMatchReasons: string[];
+  semanticDescription: string | null;
+  semanticConcepts: string[];
   lastSeenAt: string;
+};
+
+export type SearchFilter = {
+  personIds: number[];
+  petIds: number[];
+  objectLabels: string[];
+  minDogs: number;
+  minCats: number;
+  semanticQuery: string;
+  semanticMinProbability: number;
+};
+
+export type SearchFacets = {
+  persons: Array<{ id: number; name: string; mediaCount: number }>;
+  pets: Array<{
+    id: number;
+    name: string;
+    petClass: "dog" | "cat";
+    mediaCount: number;
+  }>;
+  objects: Array<{ label: string; mediaCount: number }>;
 };
 
 export type DuplicateItem = {
@@ -340,7 +594,23 @@ export type DuplicateGroup = {
   items: DuplicateItem[];
 };
 
+export type CatalogChangeKind =
+  | "ADDED"
+  | "MOVED"
+  | "CHANGED"
+  | "MISSING"
+  | "RECYCLE"
+  | "RECYCLE_AMBIGUOUS";
+
+export type CatalogChange = {
+  kind: CatalogChangeKind;
+  mediaId: number;
+  path: string;
+  previousPath: string | null;
+};
+
 export type ScanResult = {
+  mode: "FULL" | "INCREMENTAL";
   discovered: number;
   added: number;
   moved: number;
@@ -349,6 +619,40 @@ export type ScanResult = {
   missing: number;
   recycleBin: number;
   errors: number;
+  changes: CatalogChange[];
+};
+
+export type CatalogWatchEventKind =
+  | "WATCHING"
+  | "CHANGE_DETECTED"
+  | "SCAN_STARTED"
+  | "SCAN_FINISHED"
+  | "FALLBACK"
+  | "ERROR";
+
+export type CatalogWatchEvent = {
+  sourceId: number;
+  sourcePath: string;
+  kind: CatalogWatchEventKind;
+  occurredAt: string;
+  message: string;
+  changedPath: string | null;
+  automatic: boolean;
+  scanResult: ScanResult | null;
+};
+
+export type CatalogWatchSourceState = {
+  sourceId: number;
+  sourcePath: string;
+  state: "WATCHING" | "FALLBACK" | "SCANNING" | "ERROR";
+  recursive: boolean;
+  lastEventAt: string | null;
+  lastScanAt: string | null;
+};
+
+export type CatalogWatchSnapshot = {
+  sources: CatalogWatchSourceState[];
+  history: CatalogWatchEvent[];
 };
 
 export type RestoreResult = {
@@ -371,11 +675,14 @@ export type CatalogMethod =
   | "addSource"
   | "getStats"
   | "listMedia"
+  | "getSearchFacets"
+  | "searchMedia"
   | "listDuplicateGroups"
   | "listRecycleMedia"
   | "enqueueAnalysisJobs"
   | "getAnalysisQueueStats"
   | "listAnalysisErrors"
+  | "countAnalysisErrors"
   | "retryAnalysisJob"
   | "retryFailedAnalysisJobs"
   | "claimAnalysisJob"
@@ -388,9 +695,13 @@ export type CatalogMethod =
   | "completeFaceEmbeddingJob"
   | "completePetDetectionJob"
   | "getPetDetectionsForFusion"
+  | "getObjectDetectionsForFusion"
   | "completePetFusionJob"
+  | "completeVerifiedObjectDetectionJob"
+  | "completeCatalogSemanticJob"
   | "getPetDetectionsForEmbedding"
   | "completePetEmbeddingJob"
+  | "completeSemanticEmbeddingJob"
   | "getPetEmbeddingsForClustering"
   | "replacePetCandidates"
   | "autoAssignKnownPetCandidates"
@@ -415,8 +726,10 @@ export type CatalogMethod =
   | "getFaceCropInfo"
   | "getThumbnailInfo"
   | "getMediaPreviewInfo"
+  | "getMediaDetails"
   | "getMediaPath"
   | "scanSource"
+  | "reconcileSourceChanges"
   | "restoreMedia"
   | "resetCatalog";
 

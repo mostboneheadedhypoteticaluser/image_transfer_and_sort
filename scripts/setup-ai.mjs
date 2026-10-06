@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import process from "node:process";
@@ -106,6 +106,119 @@ function venvPython() {
     : path.join(venv, "bin", "python");
 }
 
+function hasCommand(command) {
+  const result = spawnSync(command, ["--version"], {
+    encoding: "utf8",
+    windowsHide: true
+  });
+  return !result.error && result.status === 0;
+}
+
+function findWinGetLlamaServer() {
+  if (process.platform !== "win32") return null;
+
+  const local = process.env.LOCALAPPDATA;
+  if (!local) return null;
+
+  const direct = [
+    path.join(local, "Microsoft", "WinGet", "Links", "llama-server.exe"),
+    path.join(local, "Microsoft", "WindowsApps", "llama-server.exe")
+  ];
+
+  for (const candidate of direct) {
+    if (existsSync(candidate)) return candidate;
+  }
+
+  const packagesRoot = path.join(local, "Microsoft", "WinGet", "Packages");
+  if (!existsSync(packagesRoot)) return null;
+
+  const packageDirs = readdirSync(packagesRoot)
+    .filter((name) => name.startsWith("ggml.llamacpp_"))
+    .map((name) => path.join(packagesRoot, name))
+    .filter((candidate) => {
+      try {
+        return statSync(candidate).isDirectory();
+      } catch {
+        return false;
+      }
+    })
+    .sort((left, right) => {
+      try {
+        return statSync(right).mtimeMs - statSync(left).mtimeMs;
+      } catch {
+        return 0;
+      }
+    });
+
+  const findRecursive = (root) => {
+    const stack = [root];
+
+    while (stack.length > 0) {
+      const current = stack.pop();
+      let entries = [];
+      try {
+        entries = readdirSync(current, { withFileTypes: true });
+      } catch {
+        continue;
+      }
+
+      for (const entry of entries) {
+        const full = path.join(current, entry.name);
+        if (entry.isFile() && entry.name.toLowerCase() === "llama-server.exe") {
+          return full;
+        }
+        if (entry.isDirectory()) stack.push(full);
+      }
+    }
+
+    return null;
+  };
+
+  for (const packageDir of packageDirs) {
+    const found = findRecursive(packageDir);
+    if (found) return found;
+  }
+
+  return null;
+}
+
+function requireLlamaCpp() {
+  const configured = process.env.IMAGE_SORTER_LLAMA_SERVER;
+  if (configured && existsSync(configured)) {
+    console.log(`llama.cpp gefunden: ${configured}`);
+    return configured;
+  }
+
+  const candidates =
+    process.platform === "win32"
+      ? ["llama-server.exe", "llama-server"]
+      : ["llama-server"];
+
+  for (const candidate of candidates) {
+    if (hasCommand(candidate)) {
+      console.log(`llama.cpp gefunden: ${candidate}`);
+      return candidate;
+    }
+  }
+
+  const wingetServer = findWinGetLlamaServer();
+  if (wingetServer) {
+    console.log(`llama.cpp über WinGet gefunden: ${wingetServer}`);
+    return wingetServer;
+  }
+
+  const installHint =
+    process.platform === "win32"
+      ? "winget install llama.cpp"
+      : "Bitte eine aktuelle llama.cpp-Version mit llama-server installieren.";
+
+  throw new Error(
+    "llama.cpp / llama-server wurde nicht gefunden. " +
+    "Installiere es zuerst mit: " + installHint +
+    " Danach dieses Setup erneut ausführen."
+  );
+}
+
 async function ensureModel(model) {
   mkdirSync(modelDir, { recursive: true });
 
@@ -163,8 +276,56 @@ for (const model of models) {
 }
 
 console.log("");
+console.log("Prüfe/lade SigLIP2 So400m NaFlex für die semantische Analyse …");
+run(venvPython(), [
+  path.join(root, "workers", "python-ai", "setup_siglip2.py")
+]);
+
+console.log("");
+console.log("Prüfe/lade MiniCPM-V 4.6 Q4_K_M für den schnellen Einzelbildtest …");
+run(venvPython(), [
+  path.join(root, "workers", "python-ai", "setup_minicpm.py")
+]);
+
+console.log("");
+console.log("Prüfe/lade Qwen3-VL-2B-Instruct Q4_K_M für den Vergleichstest …");
+run(venvPython(), [
+  path.join(root, "workers", "python-ai", "setup_qwen3vl2b.py")
+]);
+
+console.log("");
+console.log("Prüfe/lade Qwen3-VL-4B-Instruct Q4_K_M für die nächste Qualitätsstufe …");
+run(venvPython(), [
+  path.join(root, "workers", "python-ai", "setup_qwen3vl4b.py")
+]);
+
+console.log("");
+console.log("Prüfe llama.cpp …");
+const llamaServer = requireLlamaCpp();
+
+console.log("");
 console.log("AI-Umgebung ist bereit.");
 console.log(`Python: ${venvPython()}`);
 for (const model of models) {
   console.log(`${model.name}: ${model.path}`);
 }
+console.log(
+  "SigLIP2 So400m NaFlex: " +
+  path.join(modelDir, "siglip2-so400m-patch16-naflex")
+);
+console.log(
+  "MiniCPM-V 4.6 Q4_K_M: " +
+  path.join(modelDir, "minicpm-v-4.6-gguf")
+);
+console.log(
+  "Qwen3-VL-2B-Instruct Q4_K_M: " +
+  path.join(modelDir, "qwen3-vl-2b-instruct-gguf")
+);
+console.log(
+  "Qwen3-VL-4B-Instruct Q4_K_M: " +
+  path.join(modelDir, "qwen3-vl-4b-instruct-gguf")
+);
+console.log(
+  "Qwen3-VL 8B Legacy: optional; vorhandene Dateien bleiben erhalten."
+);
+console.log("llama.cpp Server: " + llamaServer);

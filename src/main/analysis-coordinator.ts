@@ -16,7 +16,9 @@ type PythonStage =
   | "faceEmbeddings"
   | "petDetection"
   | "petFusion"
-  | "petEmbeddings";
+  | "petEmbeddings"
+  | "objectVerification"
+  | "semanticEmbeddings";
 
 type ModuleSpec = {
   module: string;
@@ -29,7 +31,10 @@ type ModuleSpec = {
     | "completeFaceEmbeddingJob"
     | "completePetDetectionJob"
     | "completePetFusionJob"
-    | "completePetEmbeddingJob";
+    | "completePetEmbeddingJob"
+    | "completeVerifiedObjectDetectionJob"
+    | "completeCatalogSemanticJob"
+    | "completeSemanticEmbeddingJob";
   label: string;
   timeoutMs: number;
 };
@@ -98,8 +103,39 @@ const MODULES: ModuleSpec[] = [
     completeMethod: "completePetEmbeddingJob",
     label: "Individuelle Hundemerkmale",
     timeoutMs: 120000
+  },
+  {
+    module: "semantic-embed-siglip2-v1",
+    stage: "semanticEmbeddings",
+    workerMethod: "extract_semantic_image_embedding",
+    completeMethod: "completeSemanticEmbeddingJob",
+    label: "Semantikanalyse · SigLIP2 So400m NaFlex",
+    timeoutMs: 1800000
+  },
+  {
+    module: "catalog-semantic-qwen3vl4b-v3",
+    stage: "objectVerification",
+    workerMethod: "analyze_catalog_qwen3vl4b",
+    completeMethod: "completeCatalogSemanticJob",
+    label: "Kataloginhalt · Qwen3-VL 4B Gesamtbild + 4 Teilbilder",
+    // Inaktivitäts-Watchdog statt absoluter Jobdauer. Fortschrittsereignisse
+    // aus dem Worker setzen diese Frist jeweils neu.
+    timeoutMs: 1800000
   }
 ];
+
+const HEAVY_MODULE_NAMES = new Set([
+  "semantic-embed-siglip2-v1",
+  "catalog-semantic-qwen3vl4b-v3"
+]);
+
+const FAST_MODULES = MODULES.filter(
+  (spec) => !HEAVY_MODULE_NAMES.has(spec.module)
+);
+
+const HEAVY_MODULES = MODULES.filter(
+  (spec) => HEAVY_MODULE_NAMES.has(spec.module)
+);
 
 type PythonPipelineStats = Pick<
   PipelineStatus,
@@ -110,6 +146,8 @@ type PythonPipelineStats = Pick<
   | "petDetection"
   | "petFusion"
   | "petEmbeddings"
+  | "objectVerification"
+  | "semanticEmbeddings"
 >;
 
 function emptyStats(): AnalysisQueueStats {
@@ -133,7 +171,14 @@ export class AnalysisCoordinator {
   private timer: NodeJS.Timeout | null = null;
   private pumping = false;
   private stopped = true;
-  private cursor = 0;
+  private benchmarkPaused = false;
+  private maintenancePaused = false;
+  private currentFastMediaId: number | null = null;
+
+  // Die 4B-Kataloganalyse läuft wieder automatisch. Sie bleibt bewusst die
+  // letzte Pipeline-Stufe, damit neue Bilder zuerst alle schnellen technischen,
+  // Personen-, Haustier- und SigLIP2-Stufen erhalten.
+  private automaticQwenEnabled = true;
 
   constructor(
     private readonly catalog: CatalogService,
@@ -161,8 +206,72 @@ export class AnalysisCoordinator {
 
   stop(): void {
     this.stopped = true;
+    this.maintenancePaused = false;
+    this.currentFastMediaId = null;
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
+  }
+
+  async pauseForMaintenance(): Promise<void> {
+    this.maintenancePaused = true;
+
+    // Einen bereits laufenden schnellen Bildschritt sauber fertigstellen.
+    // Nicht abbrechen: danach kann die Gruppierung denselben Worker exklusiv
+    // nutzen und die Fast-Lane setzt exakt beim aktuellen Bild fort.
+    while (this.pumping && !this.stopped) {
+      await new Promise<void>((resolve) => setTimeout(resolve, 50));
+    }
+  }
+
+  resumeAfterMaintenance(): void {
+    this.maintenancePaused = false;
+
+    if (!this.stopped && !this.benchmarkPaused) {
+      void this.pump();
+    }
+  }
+
+  async pauseForBenchmark(): Promise<void> {
+    this.benchmarkPaused = true;
+    this.stop();
+
+    // Wichtig: nicht nur keine neuen Jobs starten, sondern einen bereits
+    // laufenden Qwen/llama.cpp-Prozess wirklich beenden. Sonst bleibt der PC
+    // so ausgelastet, dass selbst der Dateidialog des Einzeltests stockt.
+    this.analysis.stopForBenchmark();
+
+    const deadline = Date.now() + 15000;
+    while (this.pumping && Date.now() < deadline) {
+      await new Promise<void>((resolve) => setTimeout(resolve, 50));
+    }
+
+    this.analysis.setQueueState(
+      0,
+      0,
+      "Standardanalyse für Qwen-Einzelbildtest pausiert."
+    );
+  }
+
+  endBenchmarkPause(): void {
+    this.benchmarkPaused = false;
+  }
+
+  isAutomaticQwenEnabled(): boolean {
+    return this.automaticQwenEnabled;
+  }
+
+  enableAutomaticQwen(): void {
+    this.automaticQwenEnabled = true;
+
+    // Falls alle leichteren Stufen bereits fertig sind, muss die Queue nicht
+    // bis zum nächsten Intervall warten.
+    if (!this.stopped && !this.benchmarkPaused) {
+      void this.pump();
+    }
+  }
+
+  disableAutomaticQwen(): void {
+    this.automaticQwenEnabled = false;
   }
 
   private async enqueueExistingSources(): Promise<void> {
@@ -188,7 +297,9 @@ export class AnalysisCoordinator {
       faceEmbeddings: emptyStats(),
       petDetection: emptyStats(),
       petFusion: emptyStats(),
-      petEmbeddings: emptyStats()
+      petEmbeddings: emptyStats(),
+      objectVerification: emptyStats(),
+      semanticEmbeddings: emptyStats()
     };
 
     for (const spec of MODULES) {
@@ -204,6 +315,19 @@ export class AnalysisCoordinator {
       this.onStats(stage, result[stage]);
     }
 
+    // Solange die Qwen-Serienanalyse nicht ausdrücklich gestartet wurde,
+    // zählen deren wartende Jobs nicht als aktive Worker-Warteschlange. Die
+    // Pipeline-Kachel zeigt sie weiterhin als offen, aber der Worker bleibt
+    // speicherschonend ohne llama.cpp-Modell.
+    const qwenRunnable =
+      this.automaticQwenEnabled && this.analysis.isQwen3vl4bAvailable();
+    const qwenQueued = qwenRunnable
+      ? result.objectVerification.pending
+      : 0;
+    const qwenActive = qwenRunnable
+      ? result.objectVerification.running
+      : 0;
+
     const queued =
       result.technical.pending +
       result.imageMetadata.pending +
@@ -211,7 +335,9 @@ export class AnalysisCoordinator {
       result.faceEmbeddings.pending +
       result.petDetection.pending +
       result.petFusion.pending +
-      result.petEmbeddings.pending;
+      result.petEmbeddings.pending +
+      qwenQueued +
+      result.semanticEmbeddings.pending;
     const active =
       result.technical.running +
       result.imageMetadata.running +
@@ -219,39 +345,97 @@ export class AnalysisCoordinator {
       result.faceEmbeddings.running +
       result.petDetection.running +
       result.petFusion.running +
-      result.petEmbeddings.running;
+      result.petEmbeddings.running +
+      qwenActive +
+      result.semanticEmbeddings.running;
+
+    const pausedQwen =
+      (!this.automaticQwenEnabled || !this.analysis.isQwen3vl4bAvailable()) &&
+      (result.objectVerification.pending > 0 ||
+        result.objectVerification.running > 0);
 
     this.analysis.setQueueState(
       queued,
       active,
       queued > 0 || active > 0
         ? "Bildanalyse verarbeitet Medien im Hintergrund."
-        : "Python-Analyse ist aktuell abgearbeitet."
+        : pausedQwen
+          ? this.analysis.isQwen3vl4bAvailable()
+            ? "Qwen-Serienanalyse pausiert · Einzelbildtest ist frei."
+            : (this.analysis.getQwen3vl4bIssue() ?? "Qwen3-VL 4B ist derzeit nicht verfügbar.")
+          : "Python-Analyse ist aktuell abgearbeitet."
     );
 
     return result;
   }
 
-  private async nextPendingSpec(): Promise<ModuleSpec | null> {
-    for (let offset = 0; offset < MODULES.length; offset += 1) {
-      const index = (this.cursor + offset) % MODULES.length;
-      const spec = MODULES[index];
-      const stats = await this.catalog.request<AnalysisQueueStats>(
-        "getAnalysisQueueStats",
+  private async claimFastJob(): Promise<{
+    spec: ModuleSpec;
+    job: AnalysisJob;
+  } | null> {
+    // Ein angefangenes Bild wird bewusst durch alle schnellen Stufen geführt,
+    // bevor ein anderes Bild an die Reihe kommt.
+    if (this.currentFastMediaId !== null) {
+      for (const spec of FAST_MODULES) {
+        const job = await this.catalog.request<AnalysisJob | null>(
+          "claimAnalysisJob",
+          {
+            module: spec.module,
+            mediaId: this.currentFastMediaId
+          }
+        );
+
+        if (job) return { spec, job };
+      }
+
+      this.currentFastMediaId = null;
+    }
+
+    // Danach beginnt das nächste Bild. Durch die Sortierung im Katalog-Worker
+    // werden neu hinzugekommene Bilder vor altem Backlog bevorzugt.
+    for (const spec of FAST_MODULES) {
+      const job = await this.catalog.request<AnalysisJob | null>(
+        "claimAnalysisJob",
         { module: spec.module }
       );
 
-      if (stats.pending > 0) {
-        this.cursor = (index + 1) % MODULES.length;
-        return spec;
+      if (job) {
+        this.currentFastMediaId = job.mediaId;
+        return { spec, job };
       }
     }
 
     return null;
   }
 
+  private async nextHeavySpec(): Promise<ModuleSpec | null> {
+    // Schwere Stufen werden erst betrachtet, wenn kein schneller Job im
+    // gesamten Katalog mehr ausführbar ist. SigLIP2 steht vor Qwen4B, sodass
+    // zunächst alle Vektoren und erst danach die 5-fache 4B-Analyse laufen.
+    for (const spec of HEAVY_MODULES) {
+      if (
+        spec.module === "catalog-semantic-qwen3vl4b-v3" &&
+        (
+          !this.automaticQwenEnabled ||
+          !this.analysis.isQwen3vl4bAvailable()
+        )
+      ) {
+        continue;
+      }
+
+      const stats = await this.catalog.request<AnalysisQueueStats>(
+        "getAnalysisQueueStats",
+        { module: spec.module }
+      );
+
+      if (stats.pending > 0) return spec;
+    }
+
+    return null;
+  }
+
   private async pump(): Promise<void> {
-    if (this.stopped || this.pumping) return;
+    if (this.stopped || this.pumping || this.maintenancePaused) return;
     if (this.analysis.getStatus().state !== "READY") return;
 
     this.pumping = true;
@@ -265,24 +449,34 @@ export class AnalysisCoordinator {
         stats.faceEmbeddings.running +
         stats.petDetection.running +
         stats.petFusion.running +
-        stats.petEmbeddings.running;
+        stats.petEmbeddings.running +
+        stats.objectVerification.running +
+        stats.semanticEmbeddings.running;
 
       if (totalRunning > 0) return;
 
-      const spec = await this.nextPendingSpec();
-      if (!spec) return;
+      let selection = await this.claimFastJob();
 
-      const job = await this.catalog.request<AnalysisJob | null>(
-        "claimAnalysisJob",
-        { module: spec.module }
-      );
+      if (!selection) {
+        const heavySpec = await this.nextHeavySpec();
+        if (heavySpec) {
+          const heavyJob = await this.catalog.request<AnalysisJob | null>(
+            "claimAnalysisJob",
+            { module: heavySpec.module }
+          );
 
-      // Ein abhängiger Job kann PENDING sein, obwohl seine Vorstufe noch läuft.
-      // Dann probieren wir beim nächsten Takt weiter, ohne ihn fälschlich zu starten.
-      if (!job) {
+          if (heavyJob) {
+            selection = { spec: heavySpec, job: heavyJob };
+          }
+        }
+      }
+
+      if (!selection) {
         await this.refreshAllStats();
         return;
       }
+
+      const { spec, job } = selection;
 
       const queued =
         stats.technical.pending +
@@ -291,7 +485,9 @@ export class AnalysisCoordinator {
         stats.faceEmbeddings.pending +
         stats.petDetection.pending +
         stats.petFusion.pending +
-        stats.petEmbeddings.pending - 1;
+        stats.petEmbeddings.pending +
+        stats.objectVerification.pending +
+        stats.semanticEmbeddings.pending - 1;
 
       this.analysis.setQueueState(
         Math.max(0, queued),
@@ -321,8 +517,14 @@ export class AnalysisCoordinator {
             mediaId: job.mediaId,
             inputSha256: job.sha256
           });
+          const objects = await this.catalog.request<
+            Array<Record<string, unknown>>
+          >("getObjectDetectionsForFusion", {
+            mediaId: job.mediaId,
+            inputSha256: job.sha256
+          });
 
-          extraPayload = { detections };
+          extraPayload = { detections, objects };
         }
 
         if (spec.module === "pet-embed-dogreid-v1") {
@@ -354,10 +556,21 @@ export class AnalysisCoordinator {
           result
         });
       } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
         await this.catalog.request("failAnalysisJob", {
           jobId: job.id,
-          error: error instanceof Error ? error.message : String(error)
+          error: message
         });
+
+        // Der Einzelbildtest darf den gerade unterbrochenen Standardjob nicht
+        // als echten Analysefehler hinterlassen. Nach dem kontrollierten Kill
+        // wird er sofort wieder auf PENDING gesetzt und erst nach Testende neu
+        // gestartet.
+        if (this.benchmarkPaused) {
+          await this.catalog.request("retryAnalysisJob", {
+            jobId: job.id
+          });
+        }
       }
 
       await this.refreshAllStats();

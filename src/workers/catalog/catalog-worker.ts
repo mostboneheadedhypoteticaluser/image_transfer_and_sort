@@ -3,8 +3,12 @@ import { existsSync } from "node:fs";
 import { stat } from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";
 import { randomUUID } from "node:crypto";
-import { walkMedia, type DiscoveredDirectory } from "../../catalog/file-scanner";
-import { IMAGE_EXTENSIONS } from "../../catalog/constants";
+import {
+  walkMedia,
+  type DiscoveredDirectory,
+  type DiscoveredFile
+} from "../../catalog/file-scanner";
+import { IMAGE_EXTENSIONS, MEDIA_EXTENSIONS } from "../../catalog/constants";
 import { sha256File } from "../../catalog/hash";
 import {
   findRenamedSibling,
@@ -18,8 +22,12 @@ import {
   type RecycleBinItem
 } from "./recycle-bin";
 import type {
+  CatalogChange,
   CatalogMethod,
   RestoreResult,
+  SearchFacets,
+  SearchFilter,
+  SemanticTextEmbedding,
   ScanProgress,
   ScanResult,
   WorkerRequest,
@@ -216,6 +224,46 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_face_embedding_media
     ON face_embeddings(media_id);
 
+  CREATE TABLE IF NOT EXISTS semantic_embeddings (
+    media_id INTEGER PRIMARY KEY REFERENCES media_items(id) ON DELETE CASCADE,
+    model_version TEXT NOT NULL,
+    input_sha256 TEXT NOT NULL,
+    dimension INTEGER NOT NULL,
+    vector_blob BLOB NOT NULL,
+    max_num_patches INTEGER NOT NULL,
+    precision TEXT NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_semantic_embedding_hash
+    ON semantic_embeddings(input_sha256);
+  CREATE INDEX IF NOT EXISTS idx_semantic_embedding_model
+    ON semantic_embeddings(model_version);
+
+  CREATE TABLE IF NOT EXISTS media_semantic_annotations (
+    media_id INTEGER PRIMARY KEY REFERENCES media_items(id) ON DELETE CASCADE,
+    model_version TEXT NOT NULL,
+    input_sha256 TEXT NOT NULL,
+    profile_version TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    subjects_json TEXT NOT NULL DEFAULT '[]',
+    actions_json TEXT NOT NULL DEFAULT '[]',
+    scenes_json TEXT NOT NULL DEFAULT '[]',
+    visible_text_json TEXT NOT NULL DEFAULT '[]',
+    tags_json TEXT NOT NULL DEFAULT '[]',
+    concepts_json TEXT NOT NULL DEFAULT '[]',
+    repaired INTEGER NOT NULL DEFAULT 0 CHECK(repaired IN (0,1)),
+    region_count INTEGER NOT NULL DEFAULT 0,
+    regions_json TEXT NOT NULL DEFAULT '[]',
+    timings_json TEXT NOT NULL DEFAULT '{}',
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_media_semantic_annotation_hash
+    ON media_semantic_annotations(input_sha256);
+  CREATE INDEX IF NOT EXISTS idx_media_semantic_annotation_model
+    ON media_semantic_annotations(model_version);
+
   CREATE TABLE IF NOT EXISTS pet_detections (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     media_id INTEGER NOT NULL REFERENCES media_items(id) ON DELETE CASCADE,
@@ -259,6 +307,30 @@ db.exec(`
     ON object_detections(media_id);
   CREATE INDEX IF NOT EXISTS idx_object_detection_label
     ON object_detections(label);
+
+  CREATE TABLE IF NOT EXISTS object_fused_detections (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    media_id INTEGER NOT NULL REFERENCES media_items(id) ON DELETE CASCADE,
+    fusion_version TEXT NOT NULL,
+    detection_index INTEGER NOT NULL,
+    input_sha256 TEXT NOT NULL,
+    class_id INTEGER NOT NULL,
+    label TEXT NOT NULL,
+    x REAL NOT NULL,
+    y REAL NOT NULL,
+    width REAL NOT NULL,
+    height REAL NOT NULL,
+    score REAL NOT NULL,
+    agreement_count INTEGER NOT NULL DEFAULT 1,
+    sources_json TEXT NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(media_id, fusion_version, detection_index)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_object_fused_media
+    ON object_fused_detections(media_id);
+  CREATE INDEX IF NOT EXISTS idx_object_fused_label
+    ON object_fused_detections(label);
 
   CREATE TABLE IF NOT EXISTS pet_fused_detections (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -541,12 +613,82 @@ db.prepare(`
     started_at=NULL,
     finished_at=NULL,
     updated_at=CURRENT_TIMESTAMP
-  WHERE module='pet-detect-yolox-v1'
+  WHERE module IN ('pet-detect-nanodet-v1', 'pet-detect-yolox-v1')
     AND status='DONE'
     AND (
       result_json IS NULL
-      OR result_json NOT LIKE '%"objectCount"%'
+      OR result_json NOT LIKE '%"objectDetectorVersion":"motif-raw-v2"%'
     )
+`).run();
+
+// Nur wirklich veraltete Haustier-Fusionsjobs neu rechnen. Eine ältere
+// Migration prüfte hier fälschlich auf "objectFusionVersion". Dieses Feld wird
+// seit der Trennung von Haustier- und allgemeiner Motiverkennung nicht mehr in
+// result_json gespeichert und setzte dadurch bei JEDEM App-Start alle
+// Haustier-Fusionsjobs erneut auf PENDING. completePetFusionJob() setzte danach
+// wiederum Dog-ReID zurück – daher liefen die individuellen Hundemerkmale
+// unnötig bei jedem Start erneut.
+db.prepare(`
+  UPDATE analysis_jobs
+  SET
+    status='PENDING',
+    attempts=0,
+    result_json=NULL,
+    error_message=NULL,
+    started_at=NULL,
+    finished_at=NULL,
+    updated_at=CURRENT_TIMESTAMP
+  WHERE module='pet-fuse-ensemble-v1'
+    AND status='DONE'
+    AND (
+      result_json IS NULL
+      OR result_json NOT LIKE '%"fusion":"NanoDet+YOLOX-S weighted-box-v1"%'
+    )
+`).run();
+
+// Ein früherer SigLIP2-Adapter hat BaseModelOutputWithPooling fälschlich wie
+// einen Tensor behandelt. Nur genau diese bekannte, inzwischen behobene
+// Fehlersignatur wird unabhängig vom ausgeschöpften Versuchszähler erneut
+// eingeplant. Andere echte Fehler bleiben weiterhin nach 3 Versuchen stehen.
+db.prepare(`
+  UPDATE analysis_jobs
+  SET
+    status='PENDING',
+    attempts=0,
+    result_json=NULL,
+    error_message=NULL,
+    started_at=NULL,
+    finished_at=NULL,
+    updated_at=CURRENT_TIMESTAMP
+  WHERE module='semantic-embed-siglip2-v1'
+    AND status='FAILED'
+    AND error_message LIKE '%BaseModelOutputWithPooling%object has no attribute%detach%'
+`).run();
+
+// Bekannter Programmfehler aus dem ersten 420-Sekunden-Timeout-Patch:
+// Python interpretierte im Timeout-Handler einen String als Funktionsaufruf.
+// Nur genau diese dadurch fehlgeschlagenen Qwen-4B-Jobs automatisch neu planen.
+db.prepare(`
+  UPDATE analysis_jobs
+  SET
+    status='PENDING',
+    attempts=0,
+    result_json=NULL,
+    error_message=NULL,
+    started_at=NULL,
+    finished_at=NULL,
+    updated_at=CURRENT_TIMESTAMP
+  WHERE module='catalog-semantic-qwen3vl4b-v3'
+    AND status='FAILED'
+    AND lower(COALESCE(error_message,'')) LIKE '%object is not callable%'
+`).run();
+
+// Die frühere Qwen-8B-Serienstufe ist vollständig durch die neue
+// Qwen3-VL-4B-Katalogsemantik ersetzt. Alte Jobzustände werden entfernt;
+// vorhandene Bild-/Suchdaten bleiben davon unberührt.
+db.prepare(`
+  DELETE FROM analysis_jobs
+  WHERE module='object-detect-qwen3vl-gguf-v2'
 `).run();
 
 let scanRunning = false;
@@ -735,25 +877,51 @@ function getStats(sourceId: number) {
     SELECT
       (SELECT COUNT(*) FROM person_candidates WHERE source_id=?) AS candidate_count,
       (
+        SELECT COUNT(*)
+        FROM person_candidate_faces pcf
+        JOIN person_candidates pc ON pc.id=pcf.candidate_id
+        WHERE pc.source_id=?
+      ) AS candidate_face_count,
+      (
         SELECT COUNT(DISTINCT pfa.person_id)
         FROM person_face_assignments pfa
         JOIN face_detections fd ON fd.id=pfa.face_detection_id
         JOIN media_items m ON m.id=fd.media_id
         WHERE m.source_id=?
-      ) AS person_count
-  `).get(sourceId, sourceId);
+      ) AS person_count,
+      (
+        SELECT COUNT(*)
+        FROM person_face_assignments pfa
+        JOIN face_detections fd ON fd.id=pfa.face_detection_id
+        JOIN media_items m ON m.id=fd.media_id
+        WHERE m.source_id=?
+      ) AS assigned_face_count
+  `).get(sourceId, sourceId, sourceId, sourceId);
 
   const petIdentityStats = db.prepare(`
     SELECT
       (SELECT COUNT(*) FROM pet_candidates WHERE source_id=?) AS candidate_count,
+      (
+        SELECT COUNT(*)
+        FROM pet_candidate_items pci
+        JOIN pet_candidates pc ON pc.id=pci.candidate_id
+        WHERE pc.source_id=?
+      ) AS candidate_detection_count,
       (
         SELECT COUNT(DISTINCT pa.pet_id)
         FROM pet_assignments pa
         JOIN pet_fused_detections pd ON pd.id=pa.pet_detection_id
         JOIN media_items m ON m.id=pd.media_id
         WHERE m.source_id=?
-      ) AS pet_count
-  `).get(sourceId, sourceId);
+      ) AS pet_count,
+      (
+        SELECT COUNT(*)
+        FROM pet_assignments pa
+        JOIN pet_fused_detections pd ON pd.id=pa.pet_detection_id
+        JOIN media_items m ON m.id=pd.media_id
+        WHERE m.source_id=?
+      ) AS assigned_detection_count
+  `).get(sourceId, sourceId, sourceId, sourceId);
 
   const lastScan = db.prepare(`
     SELECT finished_at
@@ -771,17 +939,294 @@ function getStats(sourceId: number) {
     duplicateGroups: Number(duplicateStats?.duplicate_groups ?? 0),
     duplicateFiles: Number(duplicateStats?.duplicate_files ?? 0),
     personCandidates: Number(personStats?.candidate_count ?? 0),
+    personCandidateFaces: Number(personStats?.candidate_face_count ?? 0),
     persons: Number(personStats?.person_count ?? 0),
+    assignedPersonFaces: Number(personStats?.assigned_face_count ?? 0),
     petCandidates: Number(petIdentityStats?.candidate_count ?? 0),
+    petCandidateDetections: Number(petIdentityStats?.candidate_detection_count ?? 0),
     pets: Number(petIdentityStats?.pet_count ?? 0),
+    assignedPetDetections: Number(petIdentityStats?.assigned_detection_count ?? 0),
     lastScan: lastScan?.finished_at ? String(lastScan.finished_at) : null
   };
 }
 
-function listMedia(sourceId: number, requestedLimit: number) {
-  const limit = Math.max(1, Math.min(2000, Math.trunc(requestedLimit || 500)));
+function normalizeSearchFilter(raw: SearchFilter | undefined): SearchFilter | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
 
-  return db.prepare(`
+  const uniquePositiveIds = (values: unknown): number[] => {
+    if (!Array.isArray(values)) return [];
+    return [...new Set(
+      values
+        .map((value) => Number(value))
+        .filter((value) => Number.isInteger(value) && value > 0)
+    )];
+  };
+
+  const objectLabels = Array.isArray(raw.objectLabels)
+    ? [...new Set(
+        raw.objectLabels
+          .filter((value): value is string => typeof value === "string")
+          .map((value) => value.trim())
+          .filter(Boolean)
+      )]
+    : [];
+
+  const semanticQuery =
+    typeof raw.semanticQuery === "string"
+      ? raw.semanticQuery.trim()
+      : "";
+  const semanticMinProbability = Math.max(
+    0,
+    Math.min(0.999, Number(raw.semanticMinProbability) || 0)
+  );
+
+  return {
+    personIds: uniquePositiveIds(raw.personIds),
+    petIds: uniquePositiveIds(raw.petIds),
+    objectLabels,
+    minDogs: Math.max(0, Math.min(20, Math.trunc(Number(raw.minDogs) || 0))),
+    minCats: Math.max(0, Math.min(20, Math.trunc(Number(raw.minCats) || 0))),
+    semanticQuery,
+    semanticMinProbability
+  };
+}
+
+const SEMANTIC_SEARCH_STOP_WORDS = new Set([
+  "am", "an", "auf", "aus", "bei", "beim", "das", "dem", "den", "der", "die",
+  "ein", "eine", "einem", "einen", "einer", "im", "in", "ist", "mit", "oder",
+  "und", "vom", "von", "vor", "zu", "zum", "zur"
+]);
+
+function normalizeSemanticSearchText(value: unknown): string {
+  return String(value ?? "")
+    .toLocaleLowerCase("de-DE")
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/ß/g, "ss")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function semanticSearchTokens(query: string): string[] {
+  return [...new Set(
+    normalizeSemanticSearchText(query)
+      .split(/\s+/)
+      .filter(
+        (token) =>
+          token.length >= 2 &&
+          !SEMANTIC_SEARCH_STOP_WORDS.has(token)
+      )
+  )];
+}
+
+function semanticSearchTokenMatches(queryToken: string, candidate: string): boolean {
+  if (queryToken === candidate) return true;
+  if (queryToken.length >= 4 && candidate.startsWith(queryToken)) return true;
+  if (candidate.length >= 4 && queryToken.startsWith(candidate)) return true;
+  return false;
+}
+
+function parseSemanticStringList(value: unknown): string[] {
+  if (typeof value !== "string" || !value.trim()) return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed)
+      ? parsed.filter((item): item is string => typeof item === "string")
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function catalogSemanticMatch(
+  query: string,
+  annotation: {
+    description: string;
+    subjects: string[];
+    actions: string[];
+    scenes: string[];
+    visibleText: string[];
+    tags: string[];
+    concepts: string[];
+  }
+): { score: number; reasons: string[] } {
+  const queryTokens = semanticSearchTokens(query);
+  if (queryTokens.length === 0) return { score: 0, reasons: [] };
+
+  const fields: Array<{
+    label: string;
+    values: string[];
+    weight: number;
+  }> = [
+    { label: "Konzept", values: annotation.concepts, weight: 1.00 },
+    { label: "Motiv", values: annotation.subjects, weight: 0.90 },
+    { label: "Handlung", values: annotation.actions, weight: 0.90 },
+    { label: "Suchbegriff", values: annotation.tags, weight: 0.82 },
+    { label: "Szene", values: annotation.scenes, weight: 0.65 },
+    {
+      label: "Beschreibung",
+      values: annotation.description ? [annotation.description] : [],
+      weight: 0.60
+    },
+    { label: "Bildtext", values: annotation.visibleText, weight: 0.55 }
+  ];
+
+  let scoreSum = 0;
+  let conceptHit = false;
+  let subjectHit = false;
+  const reasons: Array<{ weight: number; text: string }> = [];
+
+  for (const queryToken of queryTokens) {
+    let bestWeight = 0;
+    let bestReason = "";
+
+    for (const field of fields) {
+      for (const value of field.values) {
+        const words = normalizeSemanticSearchText(value).split(/\s+/).filter(Boolean);
+        if (!words.some((word) => semanticSearchTokenMatches(queryToken, word))) {
+          continue;
+        }
+
+        if (field.weight > bestWeight) {
+          bestWeight = field.weight;
+          bestReason = field.label + ": " + value;
+        }
+      }
+    }
+
+    if (bestWeight > 0) {
+      scoreSum += bestWeight;
+      if (bestReason.startsWith("Konzept:")) conceptHit = true;
+      if (bestReason.startsWith("Motiv:")) subjectHit = true;
+      reasons.push({ weight: bestWeight, text: bestReason });
+    }
+  }
+
+  let score = scoreSum / queryTokens.length;
+  if (conceptHit) score += 0.05;
+  if (subjectHit) score += 0.03;
+
+  const normalizedQuery = normalizeSemanticSearchText(query);
+  if (normalizedQuery.length >= 5) {
+    const phraseFields = [
+      ...annotation.concepts,
+      ...annotation.actions,
+      ...annotation.tags,
+      annotation.description
+    ];
+    if (
+      phraseFields.some((value) =>
+        normalizeSemanticSearchText(value).includes(normalizedQuery)
+      )
+    ) {
+      score += 0.07;
+    }
+  }
+
+  const uniqueReasons = [...new Map(
+    reasons
+      .sort((left, right) => right.weight - left.weight)
+      .map((item) => [item.text.toLocaleLowerCase("de-DE"), item.text])
+  ).values()].slice(0, 5);
+
+  return {
+    score: Math.max(0, Math.min(1, score)),
+    reasons: uniqueReasons
+  };
+}
+
+function listMedia(
+  sourceId: number,
+  requestedLimit: number,
+  rawSearch?: SearchFilter,
+  semantic?: SemanticTextEmbedding | null
+) {
+  const limit = Math.max(1, Math.min(2000, Math.trunc(requestedLimit || 500)));
+  const search = normalizeSearchFilter(rawSearch);
+  const searchClauses: string[] = [];
+  const searchArgs: Array<number | string> = [];
+
+  if (search) {
+    searchClauses.push("m.availability='AVAILABLE'");
+
+    for (const personId of search.personIds) {
+      searchClauses.push(`EXISTS (
+        SELECT 1
+        FROM person_face_assignments pfa_search
+        JOIN face_detections fd_search
+          ON fd_search.id=pfa_search.face_detection_id
+        WHERE pfa_search.person_id=?
+          AND fd_search.media_id=m.id
+          AND fd_search.input_sha256=m.sha256
+      )`);
+      searchArgs.push(personId);
+    }
+
+    for (const petId of search.petIds) {
+      searchClauses.push(`EXISTS (
+        SELECT 1
+        FROM pet_assignments pa_search
+        JOIN pet_fused_detections pd_search
+          ON pd_search.id=pa_search.pet_detection_id
+        WHERE pa_search.pet_id=?
+          AND pd_search.media_id=m.id
+          AND pd_search.input_sha256=m.sha256
+      )`);
+      searchArgs.push(petId);
+    }
+
+    for (const label of search.objectLabels) {
+      searchClauses.push(`EXISTS (
+        SELECT 1
+        FROM object_fused_detections od_search
+        WHERE od_search.media_id=m.id
+          AND od_search.input_sha256=m.sha256
+          AND od_search.label=?
+      )`);
+      searchArgs.push(label);
+    }
+
+    if (search.minDogs > 0) {
+      searchClauses.push(`(
+        SELECT COUNT(*)
+        FROM pet_fused_detections dog_search
+        WHERE dog_search.media_id=m.id
+          AND dog_search.input_sha256=m.sha256
+          AND dog_search.pet_class='dog'
+      )>=?`);
+      searchArgs.push(search.minDogs);
+    }
+
+    if (search.minCats > 0) {
+      searchClauses.push(`(
+        SELECT COUNT(*)
+        FROM pet_fused_detections cat_search
+        WHERE cat_search.media_id=m.id
+          AND cat_search.input_sha256=m.sha256
+          AND cat_search.pet_class='cat'
+      )>=?`);
+      searchArgs.push(search.minCats);
+    }
+  }
+
+  const semanticActive = Boolean(search?.semanticQuery);
+  const siglipActive = Boolean(
+    semanticActive &&
+    semantic &&
+    Array.isArray(semantic.vector) &&
+    semantic.vector.length > 0 &&
+    semantic.dimension === semantic.vector.length &&
+    Number.isFinite(semantic.logitScale) &&
+    Number.isFinite(semantic.logitBias)
+  );
+
+  const searchSql =
+    searchClauses.length > 0
+      ? "\n      AND " + searchClauses.join("\n      AND ")
+      : "";
+  const limitSql = semanticActive ? "" : "\n    LIMIT ?";
+
+  const rows = db.prepare(`
     SELECT
       m.id,
       m.relative_path,
@@ -842,16 +1287,79 @@ function listMedia(sourceId: number, requestedLimit: number) {
       ) AS pet_single_model_count,
       (
         SELECT COUNT(DISTINCT od.label)
-        FROM object_detections od
+        FROM object_fused_detections od
         WHERE od.media_id=m.id
           AND od.input_sha256=m.sha256
       ) AS object_count,
       (
         SELECT GROUP_CONCAT(DISTINCT od.label)
-        FROM object_detections od
+        FROM object_fused_detections od
         WHERE od.media_id=m.id
           AND od.input_sha256=m.sha256
       ) AS object_labels,
+      CASE
+        WHEN se.media_id IS NOT NULL AND se.input_sha256=m.sha256 THEN 1
+        ELSE 0
+      END AS semantic_ready,
+      CASE
+        WHEN se.media_id IS NOT NULL AND se.input_sha256=m.sha256
+        THEN se.model_version
+        ELSE NULL
+      END AS semantic_model,
+      CASE
+        WHEN se.media_id IS NOT NULL AND se.input_sha256=m.sha256
+        THEN se.dimension
+        ELSE NULL
+      END AS semantic_dimension,
+      CASE
+        WHEN se.media_id IS NOT NULL AND se.input_sha256=m.sha256
+        THEN se.vector_blob
+        ELSE NULL
+      END AS semantic_vector,
+      CASE
+        WHEN msa.media_id IS NOT NULL AND msa.input_sha256=m.sha256 THEN 1
+        ELSE 0
+      END AS catalog_semantic_ready,
+      CASE
+        WHEN msa.media_id IS NOT NULL AND msa.input_sha256=m.sha256
+        THEN msa.model_version
+        ELSE NULL
+      END AS catalog_semantic_model,
+      CASE
+        WHEN msa.media_id IS NOT NULL AND msa.input_sha256=m.sha256
+        THEN msa.description
+        ELSE NULL
+      END AS catalog_description,
+      CASE
+        WHEN msa.media_id IS NOT NULL AND msa.input_sha256=m.sha256
+        THEN msa.subjects_json
+        ELSE '[]'
+      END AS catalog_subjects_json,
+      CASE
+        WHEN msa.media_id IS NOT NULL AND msa.input_sha256=m.sha256
+        THEN msa.actions_json
+        ELSE '[]'
+      END AS catalog_actions_json,
+      CASE
+        WHEN msa.media_id IS NOT NULL AND msa.input_sha256=m.sha256
+        THEN msa.scenes_json
+        ELSE '[]'
+      END AS catalog_scenes_json,
+      CASE
+        WHEN msa.media_id IS NOT NULL AND msa.input_sha256=m.sha256
+        THEN msa.visible_text_json
+        ELSE '[]'
+      END AS catalog_visible_text_json,
+      CASE
+        WHEN msa.media_id IS NOT NULL AND msa.input_sha256=m.sha256
+        THEN msa.tags_json
+        ELSE '[]'
+      END AS catalog_tags_json,
+      CASE
+        WHEN msa.media_id IS NOT NULL AND msa.input_sha256=m.sha256
+        THEN msa.concepts_json
+        ELSE '[]'
+      END AS catalog_concepts_json,
       CASE
         WHEN m.availability='AVAILABLE' THEN (
           SELECT COUNT(*) - 1
@@ -866,7 +1374,9 @@ function listMedia(sourceId: number, requestedLimit: number) {
     FROM media_items m
     LEFT JOIN media_thumbnails t ON t.media_id=m.id
     LEFT JOIN media_image_metadata md ON md.media_id=m.id
-    WHERE m.source_id=?
+    LEFT JOIN semantic_embeddings se ON se.media_id=m.id
+    LEFT JOIN media_semantic_annotations msa ON msa.media_id=m.id
+    WHERE m.source_id=?${searchSql}
     ORDER BY
       CASE
         WHEN m.availability='MISSING' AND m.in_recycle_bin=1 THEN 1
@@ -875,8 +1385,87 @@ function listMedia(sourceId: number, requestedLimit: number) {
         ELSE 0
       END,
       m.relative_path COLLATE NOCASE
-    LIMIT ?
-  `).all(sourceId, limit).map((row) => ({
+    ${limitSql}
+  `).all(
+    sourceId,
+    ...searchArgs,
+    ...(semanticActive ? [] : [limit])
+  );
+
+  const mapped = rows.map((row) => {
+    let semanticScore: number | null = null;
+
+    if (siglipActive && semantic) {
+      const dimension = Number(row.semantic_dimension);
+
+      if (
+        dimension === semantic.vector.length &&
+        row.semantic_vector &&
+        String(row.semantic_model ?? "") === semantic.model
+      ) {
+        const imageVector = vectorFromBlob(row.semantic_vector, dimension);
+        let dot = 0;
+        for (let index = 0; index < dimension; index += 1) {
+          dot += imageVector[index] * semantic.vector[index];
+        }
+
+        const logit = dot * semantic.logitScale + semantic.logitBias;
+        const score =
+          logit >= 0
+            ? 1 / (1 + Math.exp(-logit))
+            : Math.exp(logit) / (1 + Math.exp(logit));
+
+        if (Number.isFinite(score)) semanticScore = score;
+      }
+    }
+
+    const catalogSemanticReady = Boolean(row.catalog_semantic_ready);
+    const catalogDescription = catalogSemanticReady && row.catalog_description
+      ? String(row.catalog_description)
+      : "";
+    const semanticConcepts = catalogSemanticReady
+      ? parseSemanticStringList(row.catalog_concepts_json)
+      : [];
+
+    const catalogMatch =
+      semanticActive && catalogSemanticReady && search
+        ? catalogSemanticMatch(search.semanticQuery, {
+            description: catalogDescription,
+            subjects: parseSemanticStringList(row.catalog_subjects_json),
+            actions: parseSemanticStringList(row.catalog_actions_json),
+            scenes: parseSemanticStringList(row.catalog_scenes_json),
+            visibleText: parseSemanticStringList(row.catalog_visible_text_json),
+            tags: parseSemanticStringList(row.catalog_tags_json),
+            concepts: semanticConcepts
+          })
+        : { score: 0, reasons: [] };
+
+    const catalogSemanticScore =
+      semanticActive && catalogSemanticReady
+        ? catalogMatch.score
+        : null;
+
+    const combinedSemanticScore = semanticActive
+      ? semanticScore !== null && catalogSemanticScore !== null
+        ? Math.min(
+            1,
+            Math.max(semanticScore, catalogSemanticScore) +
+              0.15 * Math.min(semanticScore, catalogSemanticScore)
+          )
+        : semanticScore ?? catalogSemanticScore
+      : null;
+
+    if (
+      semanticActive &&
+      (
+        combinedSemanticScore === null ||
+        combinedSemanticScore < (search?.semanticMinProbability ?? 0)
+      )
+    ) {
+      return null;
+    }
+
+    return {
     id: Number(row.id),
     relativePath: String(row.relative_path),
     extension: String(row.extension),
@@ -903,8 +1492,95 @@ function listMedia(sourceId: number, requestedLimit: number) {
     objectLabels: row.object_labels
       ? String(row.object_labels).split(",").filter(Boolean)
       : [],
+    semanticReady: Boolean(row.semantic_ready),
+    semanticModel: row.semantic_model ? String(row.semantic_model) : null,
+    semanticScore,
+    catalogSemanticReady,
+    catalogSemanticModel: row.catalog_semantic_model
+      ? String(row.catalog_semantic_model)
+      : null,
+    catalogSemanticScore,
+    combinedSemanticScore,
+    semanticMatchReasons: catalogMatch.reasons,
+    semanticDescription: catalogDescription || null,
+    semanticConcepts,
     lastSeenAt: String(row.last_seen_at)
+    };
+  }).filter((row): row is NonNullable<typeof row> => row !== null);
+
+  if (semanticActive) {
+    mapped.sort((left, right) =>
+      (right.combinedSemanticScore ?? -1) - (left.combinedSemanticScore ?? -1) ||
+      (right.catalogSemanticScore ?? -1) - (left.catalogSemanticScore ?? -1) ||
+      (right.semanticScore ?? -1) - (left.semanticScore ?? -1) ||
+      left.relativePath.localeCompare(right.relativePath, "de")
+    );
+  }
+
+  return mapped.slice(0, limit);
+}
+
+function getSearchFacets(sourceId: number): SearchFacets {
+  const persons = db.prepare(`
+    SELECT
+      p.id,
+      p.name,
+      COUNT(DISTINCT fd.media_id) AS media_count
+    FROM persons p
+    JOIN person_face_assignments pfa ON pfa.person_id=p.id
+    JOIN face_detections fd ON fd.id=pfa.face_detection_id
+    JOIN media_items m ON m.id=fd.media_id
+    WHERE m.source_id=?
+      AND m.availability='AVAILABLE'
+      AND fd.input_sha256=m.sha256
+    GROUP BY p.id, p.name
+    ORDER BY p.name COLLATE NOCASE, p.id
+  `).all(sourceId).map((row) => ({
+    id: Number(row.id),
+    name: String(row.name),
+    mediaCount: Number(row.media_count ?? 0)
   }));
+
+  const pets = db.prepare(`
+    SELECT
+      p.id,
+      p.name,
+      p.pet_class,
+      COUNT(DISTINCT pd.media_id) AS media_count
+    FROM pets p
+    JOIN pet_assignments pa ON pa.pet_id=p.id
+    JOIN pet_fused_detections pd ON pd.id=pa.pet_detection_id
+    JOIN media_items m ON m.id=pd.media_id
+    WHERE m.source_id=?
+      AND m.availability='AVAILABLE'
+      AND pd.input_sha256=m.sha256
+    GROUP BY p.id, p.name, p.pet_class
+    ORDER BY p.name COLLATE NOCASE, p.id
+  `).all(sourceId).map((row) => ({
+    id: Number(row.id),
+    name: String(row.name),
+    petClass: String(row.pet_class) === "cat" ? "cat" as const : "dog" as const,
+    mediaCount: Number(row.media_count ?? 0)
+  }));
+
+  const objects = db.prepare(`
+    SELECT
+      od.label,
+      COUNT(DISTINCT od.media_id) AS media_count
+    FROM object_fused_detections od
+    JOIN media_items m ON m.id=od.media_id
+    WHERE m.source_id=?
+      AND m.availability='AVAILABLE'
+      AND od.input_sha256=m.sha256
+      AND od.label NOT IN ('dog','cat')
+    GROUP BY od.label
+    ORDER BY media_count DESC, od.label COLLATE NOCASE
+  `).all(sourceId).map((row) => ({
+    label: String(row.label),
+    mediaCount: Number(row.media_count ?? 0)
+  }));
+
+  return { persons, pets, objects };
 }
 
 function listRecycleMedia(sourceId: number, requestedLimit: number) {
@@ -971,13 +1647,13 @@ function listRecycleMedia(sourceId: number, requestedLimit: number) {
       ) AS pet_single_model_count,
       (
         SELECT COUNT(DISTINCT od.label)
-        FROM object_detections od
+        FROM object_fused_detections od
         WHERE od.media_id=m.id
           AND od.input_sha256=m.sha256
       ) AS object_count,
       (
         SELECT GROUP_CONCAT(DISTINCT od.label)
-        FROM object_detections od
+        FROM object_fused_detections od
         WHERE od.media_id=m.id
           AND od.input_sha256=m.sha256
       ) AS object_labels
@@ -1016,6 +1692,9 @@ function listRecycleMedia(sourceId: number, requestedLimit: number) {
     objectLabels: row.object_labels
       ? String(row.object_labels).split(",").filter(Boolean)
       : [],
+    semanticReady: false,
+    semanticModel: null,
+    semanticScore: null,
     lastSeenAt: String(row.last_seen_at)
   }));
 }
@@ -1192,7 +1871,8 @@ function applyDirectoryMove(
   oldPrefix: string,
   newPrefix: string,
   directoryIndex: DirectoryIndex,
-  mediaByPath: Map<string, IndexedMedia>
+  mediaByPath: Map<string, IndexedMedia>,
+  changes: CatalogChange[]
 ): number {
   if (oldPrefix === newPrefix) return 0;
 
@@ -1236,9 +1916,16 @@ function applyDirectoryMove(
     }
 
     for (const media of affectedMedia) {
-      const newRelativePath = replaceDirectoryPrefix(media.relativePath, oldPrefix, newPrefix);
+      const previousPath = media.relativePath;
+      const newRelativePath = replaceDirectoryPrefix(previousPath, oldPrefix, newPrefix);
       const newAbsolutePath = path.join(root, ...newRelativePath.split("/"));
       updateMedia.run(newRelativePath, newAbsolutePath, media.id, sourceId);
+      changes.push({
+        kind: "MOVED",
+        mediaId: media.id,
+        path: newRelativePath,
+        previousPath
+      });
     }
 
     db.exec("COMMIT");
@@ -1287,7 +1974,8 @@ function reconcileDirectory(
   scanToken: string,
   directoryIndex: DirectoryIndex,
   seenDirectoryIds: Set<number>,
-  mediaByPath: Map<string, IndexedMedia>
+  mediaByPath: Map<string, IndexedMedia>,
+  changes: CatalogChange[]
 ): number {
   const existingAtPath = directoryIndex.byPath.get(directory.relativePath);
 
@@ -1329,7 +2017,8 @@ function reconcileDirectory(
       candidate.relativePath,
       directory.relativePath,
       directoryIndex,
-      mediaByPath
+      mediaByPath,
+      changes
     );
 
     const movedDirectory = directoryIndex.all.get(candidate.id)!;
@@ -1693,7 +2382,9 @@ function enqueueAnalysisJobs(sourceId: number, module = "file-probe-v1") {
     "pet-detect-nanodet-v1",
     "pet-detect-yolox-v1",
     "pet-fuse-ensemble-v1",
-    "pet-embed-dogreid-v1"
+    "pet-embed-dogreid-v1",
+    "catalog-semantic-qwen3vl4b-v3",
+    "semantic-embed-siglip2-v1"
   ]);
   const imageFilter =
     imageOnlyModules.has(module)
@@ -1792,6 +2483,33 @@ function getAnalysisQueueStats(sourceId?: number, module = "file-probe-v1") {
     failed: Number(row?.failed ?? 0),
     unavailable: Number(row?.unavailable ?? 0)
   };
+}
+
+
+function countAnalysisErrors(sourceId?: number): number {
+  const sourceFilter = sourceId === undefined ? "" : "AND m.source_id=?";
+  const args: number[] = sourceId === undefined ? [] : [sourceId];
+
+  const row = db.prepare(`
+    SELECT COUNT(*) AS count
+    FROM analysis_jobs j
+    JOIN media_items m ON m.id=j.media_id
+    WHERE (
+        j.status='FAILED'
+        OR (
+          j.status='UNAVAILABLE'
+          AND j.id=(
+            SELECT MIN(j2.id)
+            FROM analysis_jobs j2
+            WHERE j2.media_id=j.media_id
+              AND j2.status='UNAVAILABLE'
+          )
+        )
+      )
+      ${sourceFilter}
+  `).get(...args);
+
+  return Number(row?.count ?? 0);
 }
 
 
@@ -1973,7 +2691,10 @@ function retryFailedAnalysisJobs(sourceId?: number) {
   }
 }
 
-function claimAnalysisJob(module = "file-probe-v1") {
+function claimAnalysisJob(
+  module = "file-probe-v1",
+  mediaId?: number
+) {
   db.exec("BEGIN IMMEDIATE");
   try {
     const row = db.prepare(`
@@ -1990,6 +2711,7 @@ function claimAnalysisJob(module = "file-probe-v1") {
       WHERE j.module=?
         AND j.status='PENDING'
         AND m.availability='AVAILABLE'
+        ${mediaId === undefined ? "" : "AND j.media_id=?"}
         AND (
           j.module<>'face-embed-sface-v1'
           OR EXISTS (
@@ -2033,9 +2755,45 @@ function claimAnalysisJob(module = "file-probe-v1") {
               AND dependency.input_sha256=j.input_sha256
           )
         )
-      ORDER BY j.priority ASC, j.id ASC
+        AND (
+          j.module<>'catalog-semantic-qwen3vl4b-v3'
+          OR (
+            EXISTS (
+              SELECT 1
+              FROM analysis_jobs dependency
+              WHERE dependency.media_id=j.media_id
+                AND dependency.module='pet-detect-nanodet-v1'
+                AND dependency.status='DONE'
+                AND dependency.input_sha256=j.input_sha256
+            )
+            AND EXISTS (
+              SELECT 1
+              FROM analysis_jobs dependency
+              WHERE dependency.media_id=j.media_id
+                AND dependency.module='pet-detect-yolox-v1'
+                AND dependency.status='DONE'
+                AND dependency.input_sha256=j.input_sha256
+            )
+            AND EXISTS (
+              SELECT 1
+              FROM analysis_jobs dependency
+              WHERE dependency.media_id=j.media_id
+                AND dependency.module='semantic-embed-siglip2-v1'
+                AND dependency.status='DONE'
+                AND dependency.input_sha256=j.input_sha256
+            )
+          )
+        )
+      ORDER BY
+        j.priority ASC,
+        m.first_seen_at DESC,
+        j.id ASC
       LIMIT 1
-    `).get(module);
+    `).get(...(
+      mediaId === undefined
+        ? [module]
+        : [module, mediaId]
+    ));
 
     if (!row) {
       db.exec("COMMIT");
@@ -2212,6 +2970,666 @@ function failAnalysisJob(jobId: number, errorMessage: string) {
   return { failed: true };
 }
 
+function enqueueAllAnalysisJobs(sourceId: number): void {
+  for (const module of [
+    "file-probe-v1",
+    "thumbnail-v1",
+    "image-metadata-v1",
+    "face-detect-yunet-v1",
+    "face-embed-sface-v1",
+    "pet-detect-nanodet-v1",
+    "pet-detect-yolox-v1",
+    "pet-fuse-ensemble-v1",
+    "pet-embed-dogreid-v1",
+    "semantic-embed-siglip2-v1",
+    "catalog-semantic-qwen3vl4b-v3"
+  ]) {
+    enqueueAnalysisJobs(sourceId, module);
+  }
+}
+
+function normalizeChangedRelativePath(root: string, raw: unknown): string | null {
+  if (typeof raw !== "string" || !raw.trim()) return null;
+
+  const candidate = path.resolve(root, raw.trim());
+  const relative = path.relative(root, candidate);
+
+  if (
+    relative === "" ||
+    relative === "." ||
+    relative.startsWith(".." + path.sep) ||
+    path.isAbsolute(relative)
+  ) {
+    return relative === "" || relative === "." ? "" : null;
+  }
+
+  return relative.split(path.sep).join("/");
+}
+
+async function discoveredFileFromPath(
+  root: string,
+  absolutePath: string
+): Promise<DiscoveredFile | null> {
+  const extension = path.extname(absolutePath).toLowerCase();
+  if (!MEDIA_EXTENSIONS.has(extension)) return null;
+
+  const info = await stat(absolutePath, { bigint: true });
+  if (!info.isFile()) return null;
+
+  return {
+    absolutePath,
+    relativePath: path.relative(root, absolutePath).split(path.sep).join("/"),
+    extension,
+    sizeBytes: Number(info.size),
+    mtimeMs: Number(info.mtimeMs),
+    deviceId: info.dev.toString(),
+    inode: info.ino.toString()
+  };
+}
+
+async function reconcileSourceChanges(
+  sourceId: number,
+  rawPaths: unknown
+): Promise<ScanResult> {
+  const requestedPaths = Array.isArray(rawPaths)
+    ? [...new Set(
+        rawPaths
+          .filter((value): value is string => typeof value === "string")
+          .map((value) => value.trim())
+          .filter(Boolean)
+      )]
+    : [];
+
+  // Leere/zu große Ereignisgruppen sind absichtlich Vollscan-Fälle.
+  if (requestedPaths.length === 0 || requestedPaths.length > 24) {
+    return scanSource(sourceId);
+  }
+
+  const root = await resolveSourceRoot(sourceId);
+  const relativePaths: string[] = [];
+
+  for (const rawPath of requestedPaths) {
+    const relative = normalizeChangedRelativePath(root, rawPath);
+    if (relative === null || relative === "") {
+      return scanSource(sourceId);
+    }
+    relativePaths.push(relative);
+  }
+
+  // Ein verschwundener katalogisierter Ordner kann ein Rename, Move oder
+  // Löschen eines ganzen Teilbaums sein. Dafür ist der bestehende Vollscan
+  // bewusst die sichere Wahrheit.
+  const preDirectoryIndex = loadDirectoryIndex(sourceId);
+  for (const relativePath of relativePaths) {
+    const absolutePath = path.join(root, ...relativePath.split("/"));
+    try {
+      const info = await stat(absolutePath);
+      if (info.isDirectory()) continue;
+    } catch {
+      if (preDirectoryIndex.byPath.has(relativePath)) {
+        return scanSource(sourceId);
+      }
+    }
+  }
+
+  if (scanRunning) throw new Error("Es läuft bereits ein Scan.");
+  scanRunning = true;
+
+  let scanId: number | null = null;
+  let discovered = 0;
+  let added = 0;
+  let moved = 0;
+  let changed = 0;
+  let unchanged = 0;
+  let missing = 0;
+  let recycleBin = 0;
+  let errors = 0;
+  const changes: CatalogChange[] = [];
+
+  try {
+    const started = db.prepare("INSERT INTO scans(source_id) VALUES(?)").run(sourceId);
+    scanId = Number(started.lastInsertRowid);
+
+    const token = randomUUID();
+    const { byPath, byHash, byIdentity } = loadIndex(sourceId);
+    const directoryIndex = loadDirectoryIndex(sourceId);
+    const seenIds = new Set<number>();
+    const seenDirectoryIds = new Set<number>();
+    const readErrorPaths: string[] = [];
+    const scannedDirectoryPrefixes = new Set<string>();
+    const missingPaths: string[] = [];
+    const processedFiles = new Set<string>();
+
+    const touch = db.prepare(`
+      UPDATE media_items
+      SET
+        absolute_path=?,
+        device_id=?,
+        inode=?,
+        availability='AVAILABLE',
+        in_recycle_bin=0,
+        recycle_path=NULL,
+        recycle_detected_at=NULL,
+        scan_token=?,
+        last_seen_at=CURRENT_TIMESTAMP
+      WHERE id=?
+    `);
+
+    const statOnly = db.prepare(`
+      UPDATE media_items
+      SET
+        absolute_path=?,
+        size_bytes=?,
+        mtime_ms=?,
+        device_id=?,
+        inode=?,
+        availability='AVAILABLE',
+        in_recycle_bin=0,
+        recycle_path=NULL,
+        recycle_detected_at=NULL,
+        scan_token=?,
+        last_seen_at=CURRENT_TIMESTAMP
+      WHERE id=?
+    `);
+
+    const updateContent = db.prepare(`
+      UPDATE media_items
+      SET
+        absolute_path=?,
+        extension=?,
+        size_bytes=?,
+        mtime_ms=?,
+        sha256=?,
+        device_id=?,
+        inode=?,
+        availability='AVAILABLE',
+        in_recycle_bin=0,
+        recycle_path=NULL,
+        recycle_detected_at=NULL,
+        scan_token=?,
+        last_seen_at=CURRENT_TIMESTAMP,
+        last_changed_at=CURRENT_TIMESTAMP
+      WHERE id=?
+    `);
+
+    const moveExisting = db.prepare(`
+      UPDATE media_items
+      SET
+        relative_path=?,
+        absolute_path=?,
+        extension=?,
+        size_bytes=?,
+        mtime_ms=?,
+        sha256=?,
+        device_id=?,
+        inode=?,
+        availability='AVAILABLE',
+        in_recycle_bin=0,
+        recycle_path=NULL,
+        recycle_detected_at=NULL,
+        scan_token=?,
+        last_seen_at=CURRENT_TIMESTAMP,
+        last_moved_at=CURRENT_TIMESTAMP
+      WHERE id=?
+    `);
+
+    const insertMedia = db.prepare(`
+      INSERT INTO media_items(
+        source_id,
+        relative_path,
+        absolute_path,
+        extension,
+        size_bytes,
+        mtime_ms,
+        sha256,
+        device_id,
+        inode,
+        availability,
+        in_recycle_bin,
+        scan_token
+      )
+      VALUES(?,?,?,?,?,?,?,?,?,'AVAILABLE',0,?)
+    `);
+
+    const reconcileFile = async (file: DiscoveredFile): Promise<void> => {
+      const normalizedAbsolute = normalizeForComparison(file.absolutePath);
+      if (processedFiles.has(normalizedAbsolute)) return;
+      processedFiles.add(normalizedAbsolute);
+      discovered += 1;
+
+      const previous = byPath.get(file.relativePath);
+
+      if (previous) {
+        seenIds.add(previous.id);
+
+        if (
+          previous.sizeBytes === file.sizeBytes &&
+          previous.mtimeMs === file.mtimeMs &&
+          (
+            !identityKey(previous.deviceId, previous.inode) ||
+            sameIdentity(
+              previous.deviceId,
+              previous.inode,
+              file.deviceId,
+              file.inode
+            )
+          )
+        ) {
+          touch.run(
+            file.absolutePath,
+            file.deviceId,
+            file.inode,
+            token,
+            previous.id
+          );
+          previous.absolutePath = file.absolutePath;
+          previous.deviceId = file.deviceId;
+          previous.inode = file.inode;
+          previous.availability = "AVAILABLE";
+          unchanged += 1;
+          return;
+        }
+
+        const hash = await sha256File(file.absolutePath);
+
+        if (previous.sha256 === hash) {
+          statOnly.run(
+            file.absolutePath,
+            file.sizeBytes,
+            file.mtimeMs,
+            file.deviceId,
+            file.inode,
+            token,
+            previous.id
+          );
+          previous.absolutePath = file.absolutePath;
+          previous.sizeBytes = file.sizeBytes;
+          previous.mtimeMs = file.mtimeMs;
+          previous.deviceId = file.deviceId;
+          previous.inode = file.inode;
+          previous.availability = "AVAILABLE";
+          unchanged += 1;
+          return;
+        }
+
+        updateContent.run(
+          file.absolutePath,
+          file.extension,
+          file.sizeBytes,
+          file.mtimeMs,
+          hash,
+          file.deviceId,
+          file.inode,
+          token,
+          previous.id
+        );
+        previous.absolutePath = file.absolutePath;
+        previous.extension = file.extension;
+        previous.sizeBytes = file.sizeBytes;
+        previous.mtimeMs = file.mtimeMs;
+        previous.sha256 = hash;
+        previous.deviceId = file.deviceId;
+        previous.inode = file.inode;
+        previous.availability = "AVAILABLE";
+        changed += 1;
+        changes.push({
+          kind: "CHANGED",
+          mediaId: previous.id,
+          path: file.relativePath,
+          previousPath: null
+        });
+        return;
+      }
+
+      const identityCandidate = await uniqueIdentityMoveCandidate(
+        file.deviceId,
+        file.inode,
+        byIdentity,
+        seenIds
+      );
+
+      if (identityCandidate) {
+        const previousPath = identityCandidate.relativePath;
+        moveExisting.run(
+          file.relativePath,
+          file.absolutePath,
+          file.extension,
+          file.sizeBytes,
+          file.mtimeMs,
+          identityCandidate.sha256,
+          file.deviceId,
+          file.inode,
+          token,
+          identityCandidate.id
+        );
+
+        byPath.delete(previousPath);
+        identityCandidate.relativePath = file.relativePath;
+        identityCandidate.absolutePath = file.absolutePath;
+        identityCandidate.extension = file.extension;
+        identityCandidate.sizeBytes = file.sizeBytes;
+        identityCandidate.mtimeMs = file.mtimeMs;
+        identityCandidate.deviceId = file.deviceId;
+        identityCandidate.inode = file.inode;
+        identityCandidate.availability = "AVAILABLE";
+        byPath.set(file.relativePath, identityCandidate);
+        seenIds.add(identityCandidate.id);
+        moved += 1;
+        changes.push({
+          kind: "MOVED",
+          mediaId: identityCandidate.id,
+          path: file.relativePath,
+          previousPath
+        });
+        return;
+      }
+
+      const hash = await sha256File(file.absolutePath);
+      const moveCandidate = await uniqueMoveCandidate(
+        hash,
+        file.sizeBytes,
+        file.deviceId,
+        file.inode,
+        byHash,
+        seenIds
+      );
+
+      if (moveCandidate) {
+        const previousPath = moveCandidate.relativePath;
+        moveExisting.run(
+          file.relativePath,
+          file.absolutePath,
+          file.extension,
+          file.sizeBytes,
+          file.mtimeMs,
+          hash,
+          file.deviceId,
+          file.inode,
+          token,
+          moveCandidate.id
+        );
+
+        byPath.delete(previousPath);
+        moveCandidate.relativePath = file.relativePath;
+        moveCandidate.absolutePath = file.absolutePath;
+        moveCandidate.extension = file.extension;
+        moveCandidate.sizeBytes = file.sizeBytes;
+        moveCandidate.mtimeMs = file.mtimeMs;
+        moveCandidate.deviceId = file.deviceId;
+        moveCandidate.inode = file.inode;
+        moveCandidate.availability = "AVAILABLE";
+        byPath.set(file.relativePath, moveCandidate);
+        seenIds.add(moveCandidate.id);
+        moved += 1;
+        changes.push({
+          kind: "MOVED",
+          mediaId: moveCandidate.id,
+          path: file.relativePath,
+          previousPath
+        });
+        return;
+      }
+
+      const inserted = insertMedia.run(
+        sourceId,
+        file.relativePath,
+        file.absolutePath,
+        file.extension,
+        file.sizeBytes,
+        file.mtimeMs,
+        hash,
+        file.deviceId,
+        file.inode,
+        token
+      );
+
+      const insertedMedia: IndexedMedia = {
+        id: Number(inserted.lastInsertRowid),
+        relativePath: file.relativePath,
+        absolutePath: file.absolutePath,
+        extension: file.extension,
+        sizeBytes: file.sizeBytes,
+        mtimeMs: file.mtimeMs,
+        sha256: hash,
+        deviceId: file.deviceId,
+        inode: file.inode,
+        availability: "AVAILABLE",
+        inRecycleBin: false
+      };
+
+      byPath.set(insertedMedia.relativePath, insertedMedia);
+      const hashItems = byHash.get(hash) ?? [];
+      hashItems.push(insertedMedia);
+      byHash.set(hash, hashItems);
+      const identity = identityKey(file.deviceId, file.inode);
+      if (identity) {
+        const identityItems = byIdentity.get(identity) ?? [];
+        identityItems.push(insertedMedia);
+        byIdentity.set(identity, identityItems);
+      }
+
+      seenIds.add(insertedMedia.id);
+      added += 1;
+      changes.push({
+        kind: "ADDED",
+        mediaId: insertedMedia.id,
+        path: insertedMedia.relativePath,
+        previousPath: null
+      });
+    };
+
+    // Zuerst alles verarbeiten, was aktuell existiert. Dadurch kann bei einem
+    // Datei-Rename die neue Stelle die alte media_id übernehmen, bevor das
+    // verschwundene alte Watcher-Ereignis betrachtet wird.
+    for (const relativePath of relativePaths) {
+      const absolutePath = path.join(root, ...relativePath.split("/"));
+
+      let info;
+      try {
+        info = await stat(absolutePath);
+      } catch {
+        missingPaths.push(relativePath);
+        continue;
+      }
+
+      if (info.isFile()) {
+        const file = await discoveredFileFromPath(root, absolutePath);
+        if (file) {
+          try {
+            await reconcileFile(file);
+          } catch {
+            errors += 1;
+            readErrorPaths.push(absolutePath);
+          }
+        }
+        continue;
+      }
+
+      if (!info.isDirectory()) continue;
+
+      scannedDirectoryPrefixes.add(relativePath);
+      for await (const file of walkMedia(absolutePath, {
+        onError: (readError) => {
+          errors += 1;
+          readErrorPaths.push(readError.path);
+        },
+        onDirectory: async (directory) => {
+          const sourceRelative = path
+            .relative(root, directory.absolutePath)
+            .split(path.sep)
+            .join("/");
+          moved += reconcileDirectory(
+            sourceId,
+            root,
+            {
+              ...directory,
+              relativePath: sourceRelative
+            },
+            token,
+            directoryIndex,
+            seenDirectoryIds,
+            byPath,
+            changes
+          );
+        }
+      })) {
+        const sourceRelative = path
+          .relative(root, file.absolutePath)
+          .split(path.sep)
+          .join("/");
+
+        try {
+          await reconcileFile({
+            ...file,
+            relativePath: sourceRelative
+          });
+        } catch {
+          errors += 1;
+          readErrorPaths.push(file.absolutePath);
+        }
+      }
+    }
+
+    const markMissing = db.prepare(`
+      UPDATE media_items
+      SET availability='MISSING'
+      WHERE id=?
+    `);
+
+    const markMissingMedia = (media: IndexedMedia): void => {
+      if (media.availability !== "AVAILABLE" || seenIds.has(media.id)) return;
+      if (pathAffectedByReadError(media.absolutePath, readErrorPaths)) return;
+
+      markMissing.run(media.id);
+      media.availability = "MISSING";
+      missing += 1;
+      changes.push({
+        kind: "MISSING",
+        mediaId: media.id,
+        path: media.relativePath,
+        previousPath: null
+      });
+    };
+
+    for (const relativePath of missingPaths) {
+      const media = byPath.get(relativePath);
+      if (media) markMissingMedia(media);
+    }
+
+    for (const prefix of scannedDirectoryPrefixes) {
+      for (const media of byPath.values()) {
+        if (pathIsInside(media.relativePath, prefix)) {
+          markMissingMedia(media);
+        }
+      }
+    }
+
+    recycleBin = await refreshRecycleStatus(sourceId);
+    const recycleState = db.prepare(`
+      SELECT in_recycle_bin, recycle_ambiguous
+      FROM media_items
+      WHERE id=?
+    `);
+
+    for (const change of changes) {
+      if (change.kind !== "MISSING") continue;
+      const state = recycleState.get(change.mediaId);
+      if (state?.in_recycle_bin) change.kind = "RECYCLE";
+      else if (state?.recycle_ambiguous) change.kind = "RECYCLE_AMBIGUOUS";
+    }
+
+    reactivateAvailableMediaJobs(sourceId);
+    enqueueAllAnalysisJobs(sourceId);
+
+    const result: ScanResult = {
+      mode: "INCREMENTAL",
+      discovered,
+      added,
+      moved,
+      changed,
+      unchanged,
+      missing,
+      recycleBin,
+      errors,
+      changes: changes.slice(0, 500)
+    };
+
+    db.prepare(`
+      UPDATE scans
+      SET
+        finished_at=CURRENT_TIMESTAMP,
+        status='DONE',
+        discovered_count=?,
+        added_count=?,
+        moved_count=?,
+        changed_count=?,
+        unchanged_count=?,
+        missing_count=?,
+        recycle_bin_count=?,
+        error_count=?
+      WHERE id=?
+    `).run(
+      discovered,
+      added,
+      moved,
+      changed,
+      unchanged,
+      missing,
+      recycleBin,
+      errors,
+      scanId
+    );
+
+    progress(
+      sourceId,
+      discovered,
+      "Schnellabgleich fertig: " +
+      added.toLocaleString("de-DE") + " neu · " +
+      moved.toLocaleString("de-DE") + " verschoben · " +
+      changed.toLocaleString("de-DE") + " geändert · " +
+      missing.toLocaleString("de-DE") + " fehlend."
+    );
+
+    return result;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+
+    if (scanId !== null) {
+      db.prepare(`
+        UPDATE scans
+        SET
+          finished_at=CURRENT_TIMESTAMP,
+          status='FAILED',
+          discovered_count=?,
+          added_count=?,
+          moved_count=?,
+          changed_count=?,
+          unchanged_count=?,
+          missing_count=?,
+          recycle_bin_count=?,
+          error_count=?,
+          error_message=?
+        WHERE id=?
+      `).run(
+        discovered,
+        added,
+        moved,
+        changed,
+        unchanged,
+        missing,
+        recycleBin,
+        errors + 1,
+        message,
+        scanId
+      );
+    }
+
+    throw error;
+  } finally {
+    scanRunning = false;
+  }
+}
+
 async function scanSource(sourceId: number): Promise<ScanResult> {
   if (scanRunning) throw new Error("Es läuft bereits ein Scan.");
   scanRunning = true;
@@ -2225,6 +3643,7 @@ async function scanSource(sourceId: number): Promise<ScanResult> {
   let missing = 0;
   let recycleBin = 0;
   let errors = 0;
+  const changes: CatalogChange[] = [];
 
   try {
     const root = await resolveSourceRoot(sourceId);
@@ -2354,7 +3773,8 @@ async function scanSource(sourceId: number): Promise<ScanResult> {
           token,
           directoryIndex,
           seenDirectoryIds,
-          byPath
+          byPath,
+          changes
         );
       }
     })) {
@@ -2424,6 +3844,12 @@ async function scanSource(sourceId: number): Promise<ScanResult> {
               previous.deviceId = file.deviceId;
               previous.inode = file.inode;
               changed += 1;
+              changes.push({
+                kind: "CHANGED",
+                mediaId: previous.id,
+                path: file.relativePath,
+                previousPath: null
+              });
             }
           }
         } else {
@@ -2435,6 +3861,7 @@ async function scanSource(sourceId: number): Promise<ScanResult> {
           );
 
           if (identityCandidate) {
+            const previousPath = identityCandidate.relativePath;
             moveExisting.run(
               file.relativePath,
               file.absolutePath,
@@ -2460,6 +3887,12 @@ async function scanSource(sourceId: number): Promise<ScanResult> {
 
             seenIds.add(identityCandidate.id);
             moved += 1;
+            changes.push({
+              kind: "MOVED",
+              mediaId: identityCandidate.id,
+              path: file.relativePath,
+              previousPath
+            });
           } else {
             const hash = await sha256File(file.absolutePath);
             const moveCandidate = await uniqueMoveCandidate(
@@ -2472,6 +3905,7 @@ async function scanSource(sourceId: number): Promise<ScanResult> {
             );
 
             if (moveCandidate) {
+              const previousPath = moveCandidate.relativePath;
               moveExisting.run(
                 file.relativePath,
                 file.absolutePath,
@@ -2497,6 +3931,12 @@ async function scanSource(sourceId: number): Promise<ScanResult> {
 
               seenIds.add(moveCandidate.id);
               moved += 1;
+              changes.push({
+                kind: "MOVED",
+                mediaId: moveCandidate.id,
+                path: file.relativePath,
+                previousPath
+              });
             } else {
               const inserted = insertMedia.run(
                 sourceId,
@@ -2539,6 +3979,12 @@ async function scanSource(sourceId: number): Promise<ScanResult> {
 
               seenIds.add(insertedMedia.id);
               added += 1;
+              changes.push({
+                kind: "ADDED",
+                mediaId: insertedMedia.id,
+                path: insertedMedia.relativePath,
+                previousPath: null
+              });
             }
           }
         }
@@ -2563,7 +4009,7 @@ async function scanSource(sourceId: number): Promise<ScanResult> {
     `).run(sourceId, token);
 
     const staleRows = db.prepare(`
-      SELECT id, absolute_path
+      SELECT id, absolute_path, relative_path
       FROM media_items
       WHERE source_id=?
         AND scan_token<>?
@@ -2587,6 +4033,12 @@ async function scanSource(sourceId: number): Promise<ScanResult> {
 
         markMissing.run(Number(row.id));
         missing += 1;
+        changes.push({
+          kind: "MISSING",
+          mediaId: Number(row.id),
+          path: String(row.relative_path),
+          previousPath: null
+        });
       }
       db.exec("COMMIT");
     } catch (error) {
@@ -2595,18 +4047,24 @@ async function scanSource(sourceId: number): Promise<ScanResult> {
     }
 
     recycleBin = await refreshRecycleStatus(sourceId);
+
+    const recycleState = db.prepare(`
+      SELECT in_recycle_bin, recycle_ambiguous
+      FROM media_items
+      WHERE id=?
+    `);
+    for (const change of changes) {
+      if (change.kind !== "MISSING") continue;
+      const state = recycleState.get(change.mediaId);
+      if (state?.in_recycle_bin) change.kind = "RECYCLE";
+      else if (state?.recycle_ambiguous) change.kind = "RECYCLE_AMBIGUOUS";
+    }
+
     reactivateAvailableMediaJobs(sourceId);
-    enqueueAnalysisJobs(sourceId, "file-probe-v1");
-    enqueueAnalysisJobs(sourceId, "thumbnail-v1");
-    enqueueAnalysisJobs(sourceId, "image-metadata-v1");
-    enqueueAnalysisJobs(sourceId, "face-detect-yunet-v1");
-    enqueueAnalysisJobs(sourceId, "face-embed-sface-v1");
-    enqueueAnalysisJobs(sourceId, "pet-detect-nanodet-v1");
-    enqueueAnalysisJobs(sourceId, "pet-detect-yolox-v1");
-    enqueueAnalysisJobs(sourceId, "pet-fuse-ensemble-v1");
-    enqueueAnalysisJobs(sourceId, "pet-embed-dogreid-v1");
+    enqueueAllAnalysisJobs(sourceId);
 
     const result: ScanResult = {
+      mode: "FULL",
       discovered,
       added,
       moved,
@@ -2614,7 +4072,8 @@ async function scanSource(sourceId: number): Promise<ScanResult> {
       unchanged,
       missing,
       recycleBin,
-      errors
+      errors,
+      changes: changes.slice(0, 500)
     };
 
     db.prepare(`
@@ -3046,53 +4505,51 @@ function completePetDetectionJob(jobId: number, result: unknown) {
       written += 1;
     }
 
-    if (module === "pet-detect-yolox-v1") {
-      for (const rawObject of rawObjects) {
-        if (!rawObject || typeof rawObject !== "object") continue;
+    for (const rawObject of rawObjects) {
+      if (!rawObject || typeof rawObject !== "object") continue;
 
-        const item = rawObject as Record<string, unknown>;
-        const classId = Number(item.classId);
-        const label =
-          typeof item.label === "string" ? item.label.trim() : "";
-        const x = Number(item.x);
-        const y = Number(item.y);
-        const width = Number(item.width);
-        const height = Number(item.height);
-        const score = Number(item.score);
+      const item = rawObject as Record<string, unknown>;
+      const classId = Number(item.classId);
+      const label =
+        typeof item.label === "string" ? item.label.trim() : "";
+      const x = Number(item.x);
+      const y = Number(item.y);
+      const width = Number(item.width);
+      const height = Number(item.height);
+      const score = Number(item.score);
 
-        if (
-          !Number.isInteger(classId) ||
-          !label ||
-          ![x, y, width, height, score].every(Number.isFinite) ||
-          width <= 0 ||
-          height <= 0
-        ) {
-          continue;
-        }
-
-        objectUpsert.run(
-          mediaId,
-          detectorVersion,
-          objectWritten,
-          inputSha256,
-          classId,
-          label,
-          x,
-          y,
-          width,
-          height,
-          score
-        );
-        objectWritten += 1;
+      if (
+        !Number.isInteger(classId) ||
+        !label ||
+        ![x, y, width, height, score].every(Number.isFinite) ||
+        width <= 0 ||
+        height <= 0
+      ) {
+        continue;
       }
 
-      db.prepare(`
-        DELETE FROM object_detections
-        WHERE media_id=?
-          AND detector_version=?
-          AND detection_index>=?
-      `).run(mediaId, detectorVersion, objectWritten);
+      objectUpsert.run(
+        mediaId,
+        detectorVersion,
+        objectWritten,
+        inputSha256,
+        classId,
+        label,
+        x,
+        y,
+        width,
+        height,
+        score
+      );
+      objectWritten += 1;
     }
+
+    db.prepare(`
+      DELETE FROM object_detections
+      WHERE media_id=?
+        AND detector_version=?
+        AND detection_index>=?
+    `).run(mediaId, detectorVersion, objectWritten);
 
     db.prepare(`
       DELETE FROM pet_detections
@@ -3114,10 +4571,28 @@ function completePetDetectionJob(jobId: number, result: unknown) {
       JSON.stringify({
         detector: detectorVersion,
         petCount: written,
-        objectCount: objectWritten
+        objectCount: objectWritten,
+        objectDetectorVersion: "motif-raw-v2"
       }),
       jobId
     );
+
+    // Jede neue Rohdetektion macht die bisherige Ensemble-Fusion ungültig.
+    db.prepare(`
+      UPDATE analysis_jobs
+      SET
+        status='PENDING',
+        attempts=0,
+        input_sha256=?,
+        result_json=NULL,
+        error_message=NULL,
+        started_at=NULL,
+        finished_at=NULL,
+        updated_at=CURRENT_TIMESTAMP
+      WHERE media_id=?
+        AND module='pet-fuse-ensemble-v1'
+        AND status<>'RUNNING'
+    `).run(inputSha256, mediaId);
 
     db.exec("COMMIT");
   } catch (error) {
@@ -3163,6 +4638,37 @@ function getPetDetectionsForFusion(
   }));
 }
 
+function getObjectDetectionsForFusion(
+  mediaId: number,
+  inputSha256: string
+) {
+  return db.prepare(`
+    SELECT
+      detector_version,
+      class_id,
+      label,
+      x,
+      y,
+      width,
+      height,
+      score
+    FROM object_detections
+    WHERE media_id=?
+      AND input_sha256=?
+      AND detector_version IN ('NanoDet 2022nov', 'YOLOX-S 2022nov')
+    ORDER BY detector_version, detection_index
+  `).all(mediaId, inputSha256).map((row) => ({
+    detector: String(row.detector_version),
+    classId: Number(row.class_id),
+    label: String(row.label),
+    x: Number(row.x),
+    y: Number(row.y),
+    width: Number(row.width),
+    height: Number(row.height),
+    score: Number(row.score)
+  }));
+}
+
 function completePetFusionJob(jobId: number, result: unknown) {
   if (!result || typeof result !== "object") {
     throw new Error("Haustierfusions-Ergebnis ist ungültig.");
@@ -3179,7 +4685,7 @@ function completePetFusionJob(jobId: number, result: unknown) {
   const mediaId = Number(job.media_id);
   const inputSha256 = String(job.input_sha256 ?? "");
 
-  const insert = db.prepare(`
+  const insertPet = db.prepare(`
     INSERT INTO pet_fused_detections(
       media_id,
       fusion_version,
@@ -3245,7 +4751,7 @@ function completePetFusionJob(jobId: number, result: unknown) {
         continue;
       }
 
-      insert.run(
+      insertPet.run(
         mediaId,
         fusionVersion,
         written,
@@ -3286,7 +4792,182 @@ function completePetFusionJob(jobId: number, result: unknown) {
         updated_at=CURRENT_TIMESTAMP
       WHERE id=?
     `).run(
-      JSON.stringify({ fusion: fusionVersion, petCount: written }),
+      JSON.stringify({
+        fusion: fusionVersion,
+        petFusionVersion: fusionVersion,
+        petCount: written
+      }),
+      jobId
+    );
+
+    db.prepare(`
+      UPDATE analysis_jobs
+      SET
+        status='PENDING',
+        attempts=0,
+        input_sha256=?,
+        result_json=NULL,
+        error_message=NULL,
+        started_at=NULL,
+        finished_at=NULL,
+        updated_at=CURRENT_TIMESTAMP
+      WHERE media_id=?
+        AND module='pet-embed-dogreid-v1'
+        AND status<>'RUNNING'
+    `).run(inputSha256, mediaId);
+
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+
+  return {
+    completed: true,
+    petCount: written
+  };
+}
+
+function completeCatalogSemanticJob(jobId: number, result: unknown) {
+  if (!result || typeof result !== "object") {
+    throw new Error("Qwen-4B-Kataloganalyse ist ungültig.");
+  }
+
+  const value = result as Record<string, unknown>;
+  const semantic =
+    value.semantic && typeof value.semantic === "object"
+      ? value.semantic as Record<string, unknown>
+      : null;
+
+  if (!semantic) {
+    throw new Error("Qwen-4B-Kataloganalyse enthält keine Semantikdaten.");
+  }
+
+  const cleanText = (raw: unknown, max = 1000): string =>
+    typeof raw === "string"
+      ? raw.trim().replace(/\s+/g, " ").slice(0, max)
+      : "";
+
+  const cleanList = (raw: unknown, limit = 80): string[] => {
+    if (!Array.isArray(raw)) return [];
+    const values: string[] = [];
+    const seen = new Set<string>();
+
+    for (const entry of raw) {
+      const text = cleanText(entry, 160);
+      const key = text.toLocaleLowerCase("de-DE");
+      if (!text || seen.has(key)) continue;
+      seen.add(key);
+      values.push(text);
+      if (values.length >= limit) break;
+    }
+    return values;
+  };
+
+  const modelVersion = cleanText(value.model, 240) || "Qwen3-VL 4B Instruct Q4_K_M + Vision Q8_0";
+  const profileVersion = cleanText(value.profileVersion, 160) || "qwen3vl4b-catalog-whole-plus-4-v1";
+  const description = cleanText(semantic.description, 1200);
+  const subjects = cleanList(semantic.subjects, 60);
+  const actions = cleanList(semantic.actions, 50);
+  const scenes = cleanList(semantic.scenes, 40);
+  const visibleText = cleanList(semantic.visibleText, 80);
+  const tags = cleanList(semantic.tags, 100);
+  const concepts = cleanList(semantic.concepts, 60);
+  const repaired = Boolean(semantic.repaired);
+  const regions = Array.isArray(value.regions) ? value.regions.slice(0, 5) : [];
+  const timings =
+    value.timings && typeof value.timings === "object"
+      ? value.timings
+      : {};
+  const regionCount = Math.max(
+    0,
+    Math.min(5, Math.trunc(Number(value.regionCount) || regions.length))
+  );
+
+  const job = jobForModule(jobId, "catalog-semantic-qwen3vl4b-v3");
+  const mediaId = Number(job.media_id);
+  const inputSha256 = String(job.input_sha256 ?? "");
+
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    db.prepare(`
+      INSERT INTO media_semantic_annotations(
+        media_id,
+        model_version,
+        input_sha256,
+        profile_version,
+        description,
+        subjects_json,
+        actions_json,
+        scenes_json,
+        visible_text_json,
+        tags_json,
+        concepts_json,
+        repaired,
+        region_count,
+        regions_json,
+        timings_json,
+        updated_at
+      )
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)
+      ON CONFLICT(media_id) DO UPDATE SET
+        model_version=excluded.model_version,
+        input_sha256=excluded.input_sha256,
+        profile_version=excluded.profile_version,
+        description=excluded.description,
+        subjects_json=excluded.subjects_json,
+        actions_json=excluded.actions_json,
+        scenes_json=excluded.scenes_json,
+        visible_text_json=excluded.visible_text_json,
+        tags_json=excluded.tags_json,
+        concepts_json=excluded.concepts_json,
+        repaired=excluded.repaired,
+        region_count=excluded.region_count,
+        regions_json=excluded.regions_json,
+        timings_json=excluded.timings_json,
+        updated_at=CURRENT_TIMESTAMP
+    `).run(
+      mediaId,
+      modelVersion,
+      inputSha256,
+      profileVersion,
+      description,
+      JSON.stringify(subjects),
+      JSON.stringify(actions),
+      JSON.stringify(scenes),
+      JSON.stringify(visibleText),
+      JSON.stringify(tags),
+      JSON.stringify(concepts),
+      repaired ? 1 : 0,
+      regionCount,
+      JSON.stringify(regions),
+      JSON.stringify(timings)
+    );
+
+    db.prepare(`
+      UPDATE analysis_jobs
+      SET
+        status='DONE',
+        result_json=?,
+        error_message=NULL,
+        finished_at=CURRENT_TIMESTAMP,
+        updated_at=CURRENT_TIMESTAMP
+      WHERE id=?
+        AND status='RUNNING'
+    `).run(
+      JSON.stringify({
+        model: modelVersion,
+        profileVersion,
+        regionCount,
+        description,
+        subjects,
+        actions,
+        scenes,
+        visibleText,
+        tags,
+        concepts,
+        repaired
+      }),
       jobId
     );
 
@@ -3296,7 +4977,157 @@ function completePetFusionJob(jobId: number, result: unknown) {
     throw error;
   }
 
-  return { completed: true, petCount: written };
+  return {
+    completed: true,
+    model: modelVersion,
+    profileVersion,
+    regionCount,
+    subjects: subjects.length,
+    tags: tags.length,
+    concepts: concepts.length,
+    repaired
+  };
+}
+
+
+function completeVerifiedObjectDetectionJob(jobId: number, result: unknown) {
+  if (!result || typeof result !== "object") {
+    throw new Error("Verifiziertes Motiverkennungs-Ergebnis ist ungültig.");
+  }
+
+  const value = result as Record<string, unknown>;
+  const rawObjects = Array.isArray(value.objects) ? value.objects : [];
+  const detectorVersion =
+    typeof value.detector === "string" && value.detector.trim()
+      ? value.detector.trim()
+      : "Qwen3-VL-8B-Thinking GGUF Q8_0 + mmproj F16 structured non-thinking v3";
+
+  const candidateCount = Math.max(0, Math.trunc(Number(value.candidateCount) || 0));
+  const rejectedCount = Math.max(0, Math.trunc(Number(value.rejectedCount) || 0));
+
+  const job = jobForModule(jobId, "object-detect-qwen3vl-gguf-v2");
+  const mediaId = Number(job.media_id);
+  const inputSha256 = String(job.input_sha256 ?? "");
+
+  const insert = db.prepare(`
+    INSERT INTO object_fused_detections(
+      media_id,
+      fusion_version,
+      detection_index,
+      input_sha256,
+      class_id,
+      label,
+      x,
+      y,
+      width,
+      height,
+      score,
+      agreement_count,
+      sources_json,
+      updated_at
+    )
+    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)
+    ON CONFLICT(media_id, fusion_version, detection_index) DO UPDATE SET
+      input_sha256=excluded.input_sha256,
+      class_id=excluded.class_id,
+      label=excluded.label,
+      x=excluded.x,
+      y=excluded.y,
+      width=excluded.width,
+      height=excluded.height,
+      score=excluded.score,
+      agreement_count=excluded.agreement_count,
+      sources_json=excluded.sources_json,
+      updated_at=CURRENT_TIMESTAMP
+  `);
+
+  let written = 0;
+
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    // Alte NanoDet/YOLOX-Motivfusion oder eine ältere Prüfgeneration darf nach
+    // erfolgreicher Präzisionsanalyse nicht mehr für Suche/Anzeige sichtbar sein.
+    db.prepare(`
+      DELETE FROM object_fused_detections
+      WHERE media_id=?
+    `).run(mediaId);
+
+    for (const rawObject of rawObjects) {
+      if (!rawObject || typeof rawObject !== "object") continue;
+
+      const item = rawObject as Record<string, unknown>;
+      const classId = Number(item.classId);
+      const label = typeof item.label === "string" ? item.label.trim() : "";
+      const x = Number(item.x);
+      const y = Number(item.y);
+      const width = Number(item.width);
+      const height = Number(item.height);
+      const score = Number(item.score);
+      const agreementCount = Math.max(1, Math.trunc(Number(item.agreementCount) || 3));
+      const sources = Array.isArray(item.sources)
+        ? item.sources.filter((source) => typeof source === "string")
+        : [];
+
+      if (
+        !Number.isInteger(classId) ||
+        !label ||
+        ![x, y, width, height, score].every(Number.isFinite) ||
+        width <= 0 ||
+        height <= 0
+      ) {
+        continue;
+      }
+
+      insert.run(
+        mediaId,
+        detectorVersion,
+        written,
+        inputSha256,
+        classId,
+        label,
+        x,
+        y,
+        width,
+        height,
+        score,
+        agreementCount,
+        JSON.stringify(sources)
+      );
+      written += 1;
+    }
+
+    db.prepare(`
+      UPDATE analysis_jobs
+      SET
+        status='DONE',
+        result_json=?,
+        error_message=NULL,
+        finished_at=CURRENT_TIMESTAMP,
+        updated_at=CURRENT_TIMESTAMP
+      WHERE id=?
+    `).run(
+      JSON.stringify({
+        detector: detectorVersion,
+        candidateCount,
+        verifiedCount: written,
+        rejectedCount,
+        verificationVersion: "qwen3vl-gguf-object-v3"
+      }),
+      jobId
+    );
+
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+
+  return {
+    completed: true,
+    candidateCount,
+    verifiedCount: written,
+    rejectedCount
+  };
 }
 
 function getPetDetectionsForEmbedding(
@@ -3426,6 +5257,97 @@ function completePetEmbeddingJob(jobId: number, result: unknown) {
   }
 
   return { completed: true, embeddingCount: written };
+}
+
+function completeSemanticEmbeddingJob(jobId: number, result: unknown) {
+  if (!result || typeof result !== "object") {
+    throw new Error("Semantik-Ergebnis ist ungültig.");
+  }
+
+  const value = result as Record<string, unknown>;
+  const modelVersion =
+    typeof value.model === "string" && value.model.trim()
+      ? value.model.trim()
+      : "SigLIP2 unbekannt";
+  const dimension = Math.trunc(Number(value.dimension));
+  const maxNumPatches = Math.trunc(Number(value.maxNumPatches));
+  const precision =
+    typeof value.precision === "string" && value.precision.trim()
+      ? value.precision.trim()
+      : "float32";
+  const vector = Array.isArray(value.vector) ? value.vector : [];
+
+  if (
+    dimension <= 0 ||
+    dimension !== vector.length ||
+    maxNumPatches <= 0
+  ) {
+    throw new Error("Semantik-Vektor oder Modellparameter sind ungültig.");
+  }
+
+  const blob = embeddingToBlob(vector);
+  const job = jobForModule(jobId, "semantic-embed-siglip2-v1");
+  const mediaId = Number(job.media_id);
+  const inputSha256 = String(job.input_sha256 ?? "");
+
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    db.prepare(`
+      INSERT INTO semantic_embeddings(
+        media_id,
+        model_version,
+        input_sha256,
+        dimension,
+        vector_blob,
+        max_num_patches,
+        precision,
+        updated_at
+      )
+      VALUES(?,?,?,?,?,?,?,CURRENT_TIMESTAMP)
+      ON CONFLICT(media_id) DO UPDATE SET
+        model_version=excluded.model_version,
+        input_sha256=excluded.input_sha256,
+        dimension=excluded.dimension,
+        vector_blob=excluded.vector_blob,
+        max_num_patches=excluded.max_num_patches,
+        precision=excluded.precision,
+        updated_at=CURRENT_TIMESTAMP
+    `).run(
+      mediaId,
+      modelVersion,
+      inputSha256,
+      dimension,
+      blob,
+      maxNumPatches,
+      precision
+    );
+
+    db.prepare(`
+      UPDATE analysis_jobs
+      SET
+        status='DONE',
+        result_json=?,
+        error_message=NULL,
+        finished_at=CURRENT_TIMESTAMP,
+        updated_at=CURRENT_TIMESTAMP
+      WHERE id=?
+    `).run(
+      JSON.stringify({
+        model: modelVersion,
+        dimension,
+        maxNumPatches,
+        precision
+      }),
+      jobId
+    );
+
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+
+  return { completed: true, dimension, model: modelVersion };
 }
 
 function getPetEmbeddingsForClustering(
@@ -5798,6 +7720,413 @@ async function restoreMedia(mediaId: number): Promise<RestoreResult> {
   };
 }
 
+function getMediaDetails(mediaId: number) {
+  const media = db.prepare(`
+    SELECT
+      m.id,
+      m.source_id,
+      m.relative_path,
+      m.absolute_path,
+      m.extension,
+      m.size_bytes,
+      m.mtime_ms,
+      m.sha256,
+      m.availability,
+      m.device_id,
+      m.inode,
+      m.first_seen_at,
+      m.last_seen_at,
+      m.last_changed_at,
+      m.last_moved_at,
+      m.recycle_path,
+      (
+        SELECT COUNT(*) - 1
+        FROM media_items d
+        WHERE d.source_id=m.source_id
+          AND d.sha256=m.sha256
+          AND d.size_bytes=m.size_bytes
+          AND d.availability='AVAILABLE'
+      ) AS duplicate_count
+    FROM media_items m
+    WHERE m.id=?
+  `).get(mediaId);
+
+  if (!media) return null;
+
+  const currentSha = String(media.sha256);
+
+  const metadata = db.prepare(`
+    SELECT
+      width,
+      height,
+      format,
+      color_mode,
+      orientation,
+      captured_at,
+      camera_make,
+      camera_model,
+      lens_model,
+      gps_latitude,
+      gps_longitude,
+      updated_at
+    FROM media_image_metadata
+    WHERE media_id=?
+      AND input_sha256=?
+  `).get(mediaId, currentSha);
+
+  const faceRows = db.prepare(`
+    SELECT
+      fd.id,
+      fd.detector_version,
+      fd.score,
+      fd.x,
+      fd.y,
+      fd.width,
+      fd.height,
+      fe.model_version AS embedding_model,
+      p.id AS person_id,
+      p.name AS person_name,
+      pfa.assignment_source,
+      pfa.confidence AS assignment_confidence,
+      (
+        SELECT pcf.candidate_id
+        FROM person_candidate_faces pcf
+        WHERE pcf.face_detection_id=fd.id
+        ORDER BY pcf.similarity DESC
+        LIMIT 1
+      ) AS candidate_id,
+      (
+        SELECT pcf.similarity
+        FROM person_candidate_faces pcf
+        WHERE pcf.face_detection_id=fd.id
+        ORDER BY pcf.similarity DESC
+        LIMIT 1
+      ) AS candidate_similarity
+    FROM face_detections fd
+    LEFT JOIN face_embeddings fe
+      ON fe.face_detection_id=fd.id
+      AND fe.input_sha256=?
+    LEFT JOIN person_face_assignments pfa
+      ON pfa.face_detection_id=fd.id
+    LEFT JOIN persons p
+      ON p.id=pfa.person_id
+    WHERE fd.media_id=?
+      AND fd.input_sha256=?
+    ORDER BY fd.detection_index, fd.id
+  `).all(currentSha, mediaId, currentSha);
+
+  const petRows = db.prepare(`
+    SELECT
+      pd.id,
+      pd.pet_class,
+      pd.score,
+      pd.x,
+      pd.y,
+      pd.width,
+      pd.height,
+      pd.fusion_version,
+      pd.agreement_count,
+      pd.sources_json,
+      pe.model_version AS embedding_model,
+      p.id AS pet_id,
+      p.name AS pet_name,
+      pa.assignment_source,
+      pa.confidence AS assignment_confidence,
+      (
+        SELECT pci.candidate_id
+        FROM pet_candidate_items pci
+        WHERE pci.pet_detection_id=pd.id
+        ORDER BY pci.similarity DESC
+        LIMIT 1
+      ) AS candidate_id,
+      (
+        SELECT pci.similarity
+        FROM pet_candidate_items pci
+        WHERE pci.pet_detection_id=pd.id
+        ORDER BY pci.similarity DESC
+        LIMIT 1
+      ) AS candidate_similarity
+    FROM pet_fused_detections pd
+    LEFT JOIN pet_embeddings pe
+      ON pe.pet_detection_id=pd.id
+      AND pe.input_sha256=?
+    LEFT JOIN pet_assignments pa
+      ON pa.pet_detection_id=pd.id
+    LEFT JOIN pets p
+      ON p.id=pa.pet_id
+    WHERE pd.media_id=?
+      AND pd.input_sha256=?
+    ORDER BY pd.detection_index, pd.id
+  `).all(currentSha, mediaId, currentSha);
+
+  const fusedObjects = db.prepare(`
+    SELECT
+      label,
+      score,
+      x,
+      y,
+      width,
+      height,
+      fusion_version AS version,
+      agreement_count,
+      sources_json
+    FROM object_fused_detections
+    WHERE media_id=?
+      AND input_sha256=?
+    ORDER BY detection_index, id
+  `).all(mediaId, currentSha);
+
+  const rawObjects = db.prepare(`
+    SELECT
+      label,
+      score,
+      x,
+      y,
+      width,
+      height,
+      detector_version AS version
+    FROM object_detections
+    WHERE media_id=?
+      AND input_sha256=?
+    ORDER BY detector_version, detection_index, id
+  `).all(mediaId, currentSha);
+
+  const embedding = db.prepare(`
+    SELECT
+      model_version,
+      dimension,
+      max_num_patches,
+      precision,
+      updated_at
+    FROM semantic_embeddings
+    WHERE media_id=?
+      AND input_sha256=?
+  `).get(mediaId, currentSha);
+
+  const semantic = db.prepare(`
+    SELECT
+      model_version,
+      profile_version,
+      description,
+      subjects_json,
+      actions_json,
+      scenes_json,
+      visible_text_json,
+      tags_json,
+      concepts_json,
+      repaired,
+      region_count,
+      regions_json,
+      timings_json,
+      updated_at
+    FROM media_semantic_annotations
+    WHERE media_id=?
+      AND input_sha256=?
+  `).get(mediaId, currentSha);
+
+  const jobs = db.prepare(`
+    SELECT
+      module,
+      status,
+      attempts,
+      result_json,
+      error_message,
+      started_at,
+      finished_at,
+      updated_at
+    FROM analysis_jobs
+    WHERE media_id=?
+    ORDER BY id
+  `).all(mediaId);
+
+  const jsonArray = (value: unknown): unknown[] => {
+    if (typeof value !== "string" || !value.trim()) return [];
+    try {
+      const parsed = JSON.parse(value);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  };
+
+  const jsonObject = (value: unknown): Record<string, unknown> => {
+    if (typeof value !== "string" || !value.trim()) return {};
+    try {
+      const parsed = JSON.parse(value);
+      return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+        ? parsed as Record<string, unknown>
+        : {};
+    } catch {
+      return {};
+    }
+  };
+
+  const stringArray = (value: unknown): string[] =>
+    jsonArray(value).filter((entry): entry is string => typeof entry === "string");
+
+  return {
+    mediaId: Number(media.id),
+    sourceId: Number(media.source_id),
+    relativePath: String(media.relative_path),
+    absolutePath: String(media.absolute_path),
+    extension: String(media.extension),
+    sizeBytes: Number(media.size_bytes),
+    mtimeMs: Number(media.mtime_ms),
+    sha256: currentSha,
+    availability: String(media.availability),
+    deviceId: media.device_id ? String(media.device_id) : null,
+    inode: media.inode ? String(media.inode) : null,
+    firstSeenAt: String(media.first_seen_at),
+    lastSeenAt: String(media.last_seen_at),
+    lastChangedAt: String(media.last_changed_at),
+    lastMovedAt: media.last_moved_at ? String(media.last_moved_at) : null,
+    recyclePath: media.recycle_path ? String(media.recycle_path) : null,
+    duplicateCount: Math.max(0, Number(media.duplicate_count ?? 0)),
+    technicalProbe: (() => {
+      const row = jobs.find((job) => String(job.module) === "file-probe-v1");
+      return row ? jsonObject(row.result_json) : null;
+    })(),
+    imageMetadata: metadata
+      ? {
+          width: Number(metadata.width),
+          height: Number(metadata.height),
+          format: metadata.format ? String(metadata.format) : null,
+          colorMode: metadata.color_mode ? String(metadata.color_mode) : null,
+          orientation: metadata.orientation === null || metadata.orientation === undefined
+            ? null
+            : Number(metadata.orientation),
+          capturedAt: metadata.captured_at ? String(metadata.captured_at) : null,
+          cameraMake: metadata.camera_make ? String(metadata.camera_make) : null,
+          cameraModel: metadata.camera_model ? String(metadata.camera_model) : null,
+          lensModel: metadata.lens_model ? String(metadata.lens_model) : null,
+          gpsLatitude: metadata.gps_latitude === null || metadata.gps_latitude === undefined
+            ? null
+            : Number(metadata.gps_latitude),
+          gpsLongitude: metadata.gps_longitude === null || metadata.gps_longitude === undefined
+            ? null
+            : Number(metadata.gps_longitude),
+          updatedAt: String(metadata.updated_at)
+        }
+      : null,
+    faces: faceRows.map((row) => ({
+      id: Number(row.id),
+      detectorVersion: String(row.detector_version),
+      score: Number(row.score),
+      x: Number(row.x),
+      y: Number(row.y),
+      width: Number(row.width),
+      height: Number(row.height),
+      embeddingReady: Boolean(row.embedding_model),
+      embeddingModel: row.embedding_model ? String(row.embedding_model) : null,
+      personId: row.person_id === null || row.person_id === undefined ? null : Number(row.person_id),
+      personName: row.person_name ? String(row.person_name) : null,
+      assignmentSource: row.assignment_source ? String(row.assignment_source) : null,
+      assignmentConfidence:
+        row.assignment_confidence === null || row.assignment_confidence === undefined
+          ? null
+          : Number(row.assignment_confidence),
+      candidateId: row.candidate_id === null || row.candidate_id === undefined
+        ? null
+        : Number(row.candidate_id),
+      candidateSimilarity:
+        row.candidate_similarity === null || row.candidate_similarity === undefined
+          ? null
+          : Number(row.candidate_similarity)
+    })),
+    pets: petRows.map((row) => ({
+      id: Number(row.id),
+      petClass: String(row.pet_class) === "cat" ? "cat" : "dog",
+      score: Number(row.score),
+      x: Number(row.x),
+      y: Number(row.y),
+      width: Number(row.width),
+      height: Number(row.height),
+      fusionVersion: String(row.fusion_version),
+      agreementCount: Number(row.agreement_count),
+      sources: stringArray(row.sources_json),
+      embeddingReady: Boolean(row.embedding_model),
+      embeddingModel: row.embedding_model ? String(row.embedding_model) : null,
+      petId: row.pet_id === null || row.pet_id === undefined ? null : Number(row.pet_id),
+      petName: row.pet_name ? String(row.pet_name) : null,
+      assignmentSource: row.assignment_source ? String(row.assignment_source) : null,
+      assignmentConfidence:
+        row.assignment_confidence === null || row.assignment_confidence === undefined
+          ? null
+          : Number(row.assignment_confidence),
+      candidateId: row.candidate_id === null || row.candidate_id === undefined
+        ? null
+        : Number(row.candidate_id),
+      candidateSimilarity:
+        row.candidate_similarity === null || row.candidate_similarity === undefined
+          ? null
+          : Number(row.candidate_similarity)
+    })),
+    objects: [
+      ...fusedObjects.map((row) => ({
+        label: String(row.label),
+        score: Number(row.score),
+        x: Number(row.x),
+        y: Number(row.y),
+        width: Number(row.width),
+        height: Number(row.height),
+        version: String(row.version),
+        agreementCount: Number(row.agreement_count),
+        sources: stringArray(row.sources_json),
+        raw: false
+      })),
+      ...rawObjects.map((row) => ({
+        label: String(row.label),
+        score: Number(row.score),
+        x: Number(row.x),
+        y: Number(row.y),
+        width: Number(row.width),
+        height: Number(row.height),
+        version: String(row.version),
+        agreementCount: null,
+        sources: [],
+        raw: true
+      }))
+    ],
+    semanticEmbedding: embedding
+      ? {
+          model: String(embedding.model_version),
+          dimension: Number(embedding.dimension),
+          maxNumPatches: Number(embedding.max_num_patches),
+          precision: String(embedding.precision),
+          updatedAt: String(embedding.updated_at)
+        }
+      : null,
+    semantic: semantic
+      ? {
+          model: String(semantic.model_version),
+          profileVersion: String(semantic.profile_version),
+          description: String(semantic.description ?? ""),
+          subjects: stringArray(semantic.subjects_json),
+          actions: stringArray(semantic.actions_json),
+          scenes: stringArray(semantic.scenes_json),
+          visibleText: stringArray(semantic.visible_text_json),
+          tags: stringArray(semantic.tags_json),
+          concepts: stringArray(semantic.concepts_json),
+          repaired: Boolean(semantic.repaired),
+          regionCount: Number(semantic.region_count ?? 0),
+          regions: jsonArray(semantic.regions_json),
+          timings: jsonObject(semantic.timings_json),
+          updatedAt: String(semantic.updated_at)
+        }
+      : null,
+    analysisJobs: jobs.map((row) => ({
+      module: String(row.module),
+      status: String(row.status),
+      attempts: Number(row.attempts ?? 0),
+      errorMessage: row.error_message ? String(row.error_message) : null,
+      startedAt: row.started_at ? String(row.started_at) : null,
+      finishedAt: row.finished_at ? String(row.finished_at) : null,
+      updatedAt: String(row.updated_at)
+    }))
+  };
+}
+
+
 function getMediaPreviewInfo(mediaId: number) {
   const row = db.prepare(`
     SELECT id, absolute_path, sha256
@@ -5841,8 +8170,13 @@ function resetCatalog(): { reset: true } {
 
   db.exec("BEGIN IMMEDIATE");
   try {
+    // Bewusst vollständig: Nach einem Reset sollen weder alte KI-Ergebnisse
+    // noch Kandidaten, Suchvektoren oder alte IDs in der neuen Datenbank
+    // weiterleben. Die eigentlichen Bild-/Videodateien und Modellgewichte
+    // werden nicht verändert.
     db.exec(`
       DELETE FROM analysis_jobs;
+
       DELETE FROM person_candidate_faces;
       DELETE FROM person_candidates;
       DELETE FROM person_cluster_runs;
@@ -5850,6 +8184,7 @@ function resetCatalog(): { reset: true } {
       DELETE FROM person_face_exclusions;
       DELETE FROM person_face_assignments;
       DELETE FROM persons;
+
       DELETE FROM pet_candidate_items;
       DELETE FROM pet_candidates;
       DELETE FROM pet_cluster_runs;
@@ -5860,23 +8195,33 @@ function resetCatalog(): { reset: true } {
       DELETE FROM pet_embeddings;
       DELETE FROM pet_fused_detections;
       DELETE FROM pet_detections;
+
+      DELETE FROM object_fused_detections;
       DELETE FROM object_detections;
+      DELETE FROM media_semantic_annotations;
+      DELETE FROM semantic_embeddings;
       DELETE FROM face_embeddings;
       DELETE FROM face_detections;
+
       DELETE FROM media_image_metadata;
       DELETE FROM media_thumbnails;
       DELETE FROM media_items;
       DELETE FROM media_directories;
       DELETE FROM scans;
       DELETE FROM media_sources;
-      DELETE FROM sqlite_sequence
-      WHERE name IN ('analysis_jobs', 'person_candidate_faces', 'person_candidates', 'person_cluster_runs', 'person_face_assignments', 'persons', 'pet_candidate_items', 'pet_candidates', 'pet_cluster_runs', 'pet_cluster_exclusions', 'pet_assignment_exclusions', 'pet_assignments', 'pets', 'pet_embeddings', 'pet_fused_detections', 'pet_detections', 'object_detections', 'face_embeddings', 'face_detections', 'media_image_metadata', 'media_thumbnails', 'media_items', 'media_directories', 'scans', 'media_sources');
+
+      DELETE FROM sqlite_sequence;
     `);
     db.exec("COMMIT");
   } catch (error) {
     db.exec("ROLLBACK");
     throw error;
   }
+
+  // Freie Seiten und WAL-Reste ebenfalls entfernen, damit ein
+  // Entwicklungs-Reset wirklich mit einer kompakten Datenbank neu startet.
+  db.exec("PRAGMA wal_checkpoint(TRUNCATE);");
+  db.exec("VACUUM;");
 
   return { reset: true };
 }
@@ -5893,6 +8238,15 @@ async function dispatch(method: CatalogMethod, payload: Record<string, unknown> 
       return listMedia(
         asNumber(payload.sourceId, "sourceId"),
         payload.limit === undefined ? 500 : asNumber(payload.limit, "limit")
+      );
+    case "getSearchFacets":
+      return getSearchFacets(asNumber(payload.sourceId, "sourceId"));
+    case "searchMedia":
+      return listMedia(
+        asNumber(payload.sourceId, "sourceId"),
+        payload.limit === undefined ? 500 : asNumber(payload.limit, "limit"),
+        payload.filter as SearchFilter | undefined,
+        payload.semantic as SemanticTextEmbedding | null | undefined
       );
     case "listDuplicateGroups":
       return listDuplicateGroups(
@@ -5919,6 +8273,10 @@ async function dispatch(method: CatalogMethod, payload: Record<string, unknown> 
         payload.sourceId === undefined ? undefined : asNumber(payload.sourceId, "sourceId"),
         payload.limit === undefined ? 200 : asNumber(payload.limit, "limit")
       );
+    case "countAnalysisErrors":
+      return countAnalysisErrors(
+        payload.sourceId === undefined ? undefined : asNumber(payload.sourceId, "sourceId")
+      );
     case "retryAnalysisJob":
       return retryAnalysisJob(asNumber(payload.jobId, "jobId"));
     case "retryFailedAnalysisJobs":
@@ -5927,7 +8285,10 @@ async function dispatch(method: CatalogMethod, payload: Record<string, unknown> 
       );
     case "claimAnalysisJob":
       return claimAnalysisJob(
-        typeof payload.module === "string" ? payload.module : "file-probe-v1"
+        typeof payload.module === "string" ? payload.module : "file-probe-v1",
+        payload.mediaId === undefined
+          ? undefined
+          : asNumber(payload.mediaId, "mediaId")
       );
     case "completeAnalysisJob":
       return completeAnalysisJob(
@@ -5964,8 +8325,23 @@ async function dispatch(method: CatalogMethod, payload: Record<string, unknown> 
         asNumber(payload.mediaId, "mediaId"),
         typeof payload.inputSha256 === "string" ? payload.inputSha256 : ""
       );
+    case "getObjectDetectionsForFusion":
+      return getObjectDetectionsForFusion(
+        asNumber(payload.mediaId, "mediaId"),
+        typeof payload.inputSha256 === "string" ? payload.inputSha256 : ""
+      );
     case "completePetFusionJob":
       return completePetFusionJob(
+        asNumber(payload.jobId, "jobId"),
+        payload.result
+      );
+    case "completeVerifiedObjectDetectionJob":
+      return completeVerifiedObjectDetectionJob(
+        asNumber(payload.jobId, "jobId"),
+        payload.result
+      );
+    case "completeCatalogSemanticJob":
+      return completeCatalogSemanticJob(
         asNumber(payload.jobId, "jobId"),
         payload.result
       );
@@ -5976,6 +8352,11 @@ async function dispatch(method: CatalogMethod, payload: Record<string, unknown> 
       );
     case "completePetEmbeddingJob":
       return completePetEmbeddingJob(
+        asNumber(payload.jobId, "jobId"),
+        payload.result
+      );
+    case "completeSemanticEmbeddingJob":
+      return completeSemanticEmbeddingJob(
         asNumber(payload.jobId, "jobId"),
         payload.result
       );
@@ -6105,10 +8486,17 @@ async function dispatch(method: CatalogMethod, payload: Record<string, unknown> 
       return getThumbnailInfo(asNumber(payload.mediaId, "mediaId"));
     case "getMediaPreviewInfo":
       return getMediaPreviewInfo(asNumber(payload.mediaId, "mediaId"));
+    case "getMediaDetails":
+      return getMediaDetails(asNumber(payload.mediaId, "mediaId"));
     case "getMediaPath":
       return getMediaPath(asNumber(payload.mediaId, "mediaId"));
     case "scanSource":
       return scanSource(asNumber(payload.sourceId, "sourceId"));
+    case "reconcileSourceChanges":
+      return reconcileSourceChanges(
+        asNumber(payload.sourceId, "sourceId"),
+        payload.paths
+      );
     case "restoreMedia":
       return restoreMedia(asNumber(payload.mediaId, "mediaId"));
     case "resetCatalog":

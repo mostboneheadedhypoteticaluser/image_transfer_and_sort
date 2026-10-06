@@ -30,7 +30,8 @@ export class PersonService {
 
   async getOverview(
     sourceId: number,
-    forceRefresh = false
+    forceRefresh = false,
+    allowWhilePending = false
   ): Promise<PersonOverview> {
     const queue = await this.catalog.request<AnalysisQueueStats>(
       "getAnalysisQueueStats",
@@ -42,7 +43,10 @@ export class PersonService {
 
     const clusteringPending = queue.pending > 0 || queue.running > 0;
 
-    if (!clusteringPending && this.analysis.getStatus().state === "READY") {
+    if (
+      (!clusteringPending || allowWhilePending) &&
+      this.analysis.getStatus().state === "READY"
+    ) {
       const set = await this.catalog.request<FaceEmbeddingSet>(
         "getFaceEmbeddingsForClustering",
         {
@@ -87,7 +91,7 @@ export class PersonService {
     };
   }
 
-  async refreshAllSources(): Promise<void> {
+  async refreshAllSources(incremental = false): Promise<void> {
     const sources = await this.catalog.request<Array<{
       id: number;
       path: string;
@@ -96,7 +100,7 @@ export class PersonService {
 
     for (const source of sources) {
       if (!source.enabled) continue;
-      await this.getOverview(source.id);
+      await this.getOverview(source.id, incremental, incremental);
     }
   }
 

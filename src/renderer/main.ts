@@ -1,16 +1,24 @@
-import "./style.css";
 import type {
   AnalysisErrorRecord,
   AnalysisWorkerStatus,
+  CatalogStats,
+  CatalogWatchEvent,
+  CatalogWatchSnapshot,
+  QwenBenchmarkModel,
+  QwenBenchmarkProfile,
+  QwenBenchmarkStageResult,
   DuplicateGroup,
+  MediaDetails,
   MediaRecord,
   PersonOverview,
   PetOverview,
   PipelineStatus,
+  SearchFacets,
+  SearchFilter,
   SourceRecord
 } from "../shared/protocol";
 
-type CatalogView = "media" | "duplicates" | "people" | "pets" | "recycle";
+type CatalogView = "media" | "search" | "duplicates" | "people" | "pets" | "recycle";
 
 const sourceSelect = document.querySelector<HTMLSelectElement>("#sourceSelect")!;
 const addSourceButton = document.querySelector<HTMLButtonElement>("#addSource")!;
@@ -32,17 +40,22 @@ const confirmedPersons = document.querySelector<HTMLDivElement>("#confirmedPerso
 const personStatus = document.querySelector<HTMLParagraphElement>("#personStatus")!;
 const refreshPeopleButton = document.querySelector<HTMLButtonElement>("#refreshPeople")!;
 const mediaTab = document.querySelector<HTMLButtonElement>("#mediaTab")!;
+const searchTab = document.querySelector<HTMLButtonElement>("#searchTab")!;
 const duplicateTab = document.querySelector<HTMLButtonElement>("#duplicateTab")!;
 const peopleTab = document.querySelector<HTMLButtonElement>("#peopleTab")!;
 const petsTab = document.querySelector<HTMLButtonElement>("#petsTab")!;
 const recycleTab = document.querySelector<HTMLButtonElement>("#recycleTab")!;
 const mediaTabCount = document.querySelector<HTMLSpanElement>("#mediaTabCount")!;
+const searchTabCount = document.querySelector<HTMLSpanElement>("#searchTabCount")!;
 const duplicateTabCount = document.querySelector<HTMLSpanElement>("#duplicateTabCount")!;
 const peopleTabCount = document.querySelector<HTMLSpanElement>("#peopleTabCount")!;
 const petsTabCount = document.querySelector<HTMLSpanElement>("#petsTabCount")!;
 const recycleTabCount = document.querySelector<HTMLSpanElement>("#recycleTabCount")!;
 const progressText = document.querySelector<HTMLSpanElement>("#progressText")!;
 const progressBar = document.querySelector<HTMLDivElement>("#progressBar")!;
+const watchState = document.querySelector<HTMLSpanElement>("#watchState")!;
+const watchDetail = document.querySelector<HTMLElement>("#watchDetail")!;
+const watchHistory = document.querySelector<HTMLDivElement>("#watchHistory")!;
 const workerState = document.querySelector<HTMLSpanElement>("#workerState")!;
 const totalCount = document.querySelector<HTMLSpanElement>("#totalCount")!;
 const availableCount = document.querySelector<HTMLSpanElement>("#availableCount")!;
@@ -73,7 +86,30 @@ const petFusionStageState = document.querySelector<HTMLSpanElement>("#petFusionS
 const petFusionStageCounts = document.querySelector<HTMLElement>("#petFusionStageCounts")!;
 const petEmbeddingStageState = document.querySelector<HTMLSpanElement>("#petEmbeddingStageState")!;
 const petEmbeddingStageCounts = document.querySelector<HTMLElement>("#petEmbeddingStageCounts")!;
+const objectVerificationStageState = document.querySelector<HTMLSpanElement>("#objectVerificationStageState")!;
+const objectVerificationStageCounts = document.querySelector<HTMLElement>("#objectVerificationStageCounts")!;
+const semanticStageState = document.querySelector<HTMLSpanElement>("#semanticStageState")!;
+const semanticStageCounts = document.querySelector<HTMLElement>("#semanticStageCounts")!;
 const analysisErrorsButton = document.querySelector<HTMLButtonElement>("#analysisErrorsButton")!;
+const analysisDevLogButton = document.querySelector<HTMLButtonElement>("#analysisDevLogButton")!;
+const analysisCopyDevLogButton = document.querySelector<HTMLButtonElement>("#analysisCopyDevLogButton")!;
+const qwenAutomaticButton = document.querySelector<HTMLButtonElement>("#qwenAutomaticButton")!;
+const qwenBenchmarkButton = document.querySelector<HTMLButtonElement>("#qwenBenchmarkButton")!;
+const qwenBenchmarkDialog = document.querySelector<HTMLDialogElement>("#qwenBenchmarkDialog")!;
+const closeQwenBenchmarkButton = document.querySelector<HTMLButtonElement>("#closeQwenBenchmark")!;
+const pickQwenBenchmarkImageButton = document.querySelector<HTMLButtonElement>("#pickQwenBenchmarkImage")!;
+const runQwenBenchmarkButton = document.querySelector<HTMLButtonElement>("#runQwenBenchmark")!;
+const copyQwenBenchmarkButton = document.querySelector<HTMLButtonElement>("#copyQwenBenchmark")!;
+const qwenBenchmarkFilePath = document.querySelector<HTMLElement>("#qwenBenchmarkFilePath")!;
+const qwenBenchmarkLive = document.querySelector<HTMLDivElement>("#qwenBenchmarkLive")!;
+const qwenBenchmarkResults = document.querySelector<HTMLDivElement>("#qwenBenchmarkResults")!;
+const qwenBenchmarkSearchProbe = document.querySelector<HTMLInputElement>("#qwenBenchmarkSearchProbe")!;
+const qwenBenchmarkModelInputs = Array.from(
+  document.querySelectorAll<HTMLInputElement>('input[name="qwenBenchmarkModel"]')
+);
+const qwenBenchmarkProfileInputs = Array.from(
+  document.querySelectorAll<HTMLInputElement>('input[name="qwenBenchmarkProfile"]')
+);
 const analysisErrorCount = document.querySelector<HTMLSpanElement>("#analysisErrorCount")!;
 const analysisErrorDialog = document.querySelector<HTMLDialogElement>("#analysisErrorDialog")!;
 const closeAnalysisErrorsButton = document.querySelector<HTMLButtonElement>("#closeAnalysisErrors")!;
@@ -85,6 +121,18 @@ const imagePreviewDialog = document.querySelector<HTMLDialogElement>("#imagePrev
 const closeImagePreviewButton = document.querySelector<HTMLButtonElement>("#closeImagePreview")!;
 const imagePreviewImage = document.querySelector<HTMLImageElement>("#imagePreviewImage")!;
 const imagePreviewCaption = document.querySelector<HTMLDivElement>("#imagePreviewCaption")!;
+const imagePreviewDetails = document.querySelector<HTMLDivElement>("#imagePreviewDetails")!;
+const searchPanel = document.querySelector<HTMLElement>("#searchPanel")!;
+const searchPersons = document.querySelector<HTMLDivElement>("#searchPersons")!;
+const searchPets = document.querySelector<HTMLDivElement>("#searchPets")!;
+const searchObjects = document.querySelector<HTMLDivElement>("#searchObjects")!;
+const searchSemanticQuery = document.querySelector<HTMLInputElement>("#searchSemanticQuery")!;
+const searchSemanticMinProbability = document.querySelector<HTMLInputElement>("#searchSemanticMinProbability")!;
+const searchMinDogs = document.querySelector<HTMLInputElement>("#searchMinDogs")!;
+const searchMinCats = document.querySelector<HTMLInputElement>("#searchMinCats")!;
+const runSearchButton = document.querySelector<HTMLButtonElement>("#runSearch")!;
+const resetSearchButton = document.querySelector<HTMLButtonElement>("#resetSearch")!;
+const searchSummary = document.querySelector<HTMLSpanElement>("#searchSummary")!;
 
 let sources: SourceRecord[] = [];
 let currentView: CatalogView = "media";
@@ -98,9 +146,441 @@ let lastFaceEmbeddingDone = -1;
 let lastPetDone = -1;
 let lastPetFusionDone = -1;
 let lastPetEmbeddingDone = -1;
+let lastObjectVerificationDone = -1;
+let lastSemanticDone = -1;
+let lastPipelineIssueTotal = -1;
 let analysisRefreshTimer: number | null = null;
+let sourcePipelineRefreshTimer: number | null = null;
+let searchFacetsSourceId: number | null = null;
+let latestAnalysisStatus: AnalysisWorkerStatus | null = null;
+let qwenBenchmarkSelectedPath: string | null = null;
+let qwenBenchmarkRunning = false;
+let qwenBenchmarkModelInRun: QwenBenchmarkModel = "minicpm";
+let qwenBenchmarkStages: QwenBenchmarkStageResult[] = [];
+let qwenBenchmarkProfilesInRun: QwenBenchmarkProfile[] = [];
+let qwenBenchmarkProgressCurrent: {
+  current: number | null;
+  total: number | null;
+  message: string;
+} | null = null;
+let qwenBenchmarkRunError: string | null = null;
+let automaticQwenEnabled = false;
+let catalogWatchSnapshot: CatalogWatchSnapshot = {
+  sources: [],
+  history: []
+};
+
+function renderAutomaticQwenState(enabled: boolean): void {
+  automaticQwenEnabled = enabled;
+  qwenAutomaticButton.disabled = enabled;
+  qwenAutomaticButton.textContent = enabled
+    ? "Qwen 4B Kataloganalyse aktiv"
+    : "Qwen 4B Kataloganalyse starten";
+  qwenAutomaticButton.title = enabled
+    ? "Qwen3-VL 4B läuft automatisch als letzte Katalogstufe mit Gesamtbild plus vier Teilbildern."
+    : "Qwen3-VL 4B kann manuell wieder für die automatische Kataloganalyse aktiviert werden.";
+}
+
+function benchmarkModelLabel(model: QwenBenchmarkModel): string {
+  if (model === "qwen3vl4b") return "Qwen3-VL 4B Instruct Q4_K_M";
+  if (model === "qwen3vl2b") return "Qwen3-VL 2B Instruct Q4_K_M";
+  return "MiniCPM-V 4.6 Q4_K_M";
+}
+
+const benchmarkSearchStopWords = new Set([
+  "am", "an", "auf", "bei", "beim", "das", "dem", "den", "der", "die", "ein",
+  "eine", "einem", "einen", "einer", "im", "in", "ist", "mit", "und", "vom",
+  "von", "zu", "zum", "zur"
+]);
+
+function normalizeBenchmarkSearchText(value: string): string {
+  return value
+    .toLocaleLowerCase("de-DE")
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/ß/g, "ss")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function benchmarkSearchProbeResult(stage: QwenBenchmarkStageResult): {
+  matched: number;
+  total: number;
+  details: string[];
+} | null {
+  const query = normalizeBenchmarkSearchText(qwenBenchmarkSearchProbe.value);
+  if (!query) return null;
+
+  const queryTokens = [...new Set(
+    query
+      .split(/\s+/)
+      .filter((token) => token.length >= 2 && !benchmarkSearchStopWords.has(token))
+  )];
+  if (queryTokens.length === 0) return null;
+
+  const fields: Array<[string, string[]]> = [
+    ["Beschreibung", stage.semantic.description ? [stage.semantic.description] : []],
+    ["Motive", stage.semantic.subjects],
+    ["Handlungen", stage.semantic.actions],
+    ["Szene", stage.semantic.scenes],
+    ["Suchbegriffe", stage.semantic.tags],
+    ["Konzepte", stage.semantic.concepts]
+  ];
+
+  const matchedTokens = new Set<string>();
+  const details: string[] = [];
+
+  for (const [label, values] of fields) {
+    const hits: string[] = [];
+    for (const value of values) {
+      const normalized = normalizeBenchmarkSearchText(value);
+      if (!normalized) continue;
+      const words = normalized.split(/\s+/);
+
+      const matches = queryTokens.filter((queryToken) =>
+        words.some((word) =>
+          word === queryToken ||
+          (queryToken.length >= 5 && word.startsWith(queryToken)) ||
+          (word.length >= 5 && queryToken.startsWith(word))
+        )
+      );
+
+      if (matches.length > 0) {
+        matches.forEach((token) => matchedTokens.add(token));
+        hits.push(value);
+      }
+    }
+
+    if (hits.length > 0) {
+      details.push(label + ": " + [...new Set(hits)].slice(0, 4).join(", "));
+    }
+  }
+
+  return {
+    matched: matchedTokens.size,
+    total: queryTokens.length,
+    details
+  };
+}
+
+function benchmarkDuration(ms: number): string {
+  const totalSeconds = Math.max(0, Math.round(ms / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+
+  if (hours > 0) {
+    return hours.toLocaleString("de-DE") + ":" +
+      minutes.toString().padStart(2, "0") + ":" +
+      seconds.toString().padStart(2, "0") + " h";
+  }
+  if (minutes > 0) {
+    return minutes.toLocaleString("de-DE") + ":" +
+      seconds.toString().padStart(2, "0") + " min";
+  }
+  return seconds.toLocaleString("de-DE") + " s";
+}
+
+function benchmarkObjectSummary(stage: QwenBenchmarkStageResult): string {
+  const parts: string[] = [];
+  if (stage.semantic.description) parts.push(stage.semantic.description);
+  if (stage.semantic.subjects.length > 0) {
+    parts.push("Motive: " + stage.semantic.subjects.join(", "));
+  }
+  if (stage.semantic.actions.length > 0) {
+    parts.push("Handlung: " + stage.semantic.actions.join(", "));
+  }
+  if (stage.semantic.scenes.length > 0) {
+    parts.push("Szene: " + stage.semantic.scenes.join(", "));
+  }
+  if (stage.semantic.tags.length > 0) {
+    parts.push("Tags: " + stage.semantic.tags.join(", "));
+  }
+  if (stage.semantic.concepts.length > 0) {
+    parts.push("Konzepte: " + stage.semantic.concepts.join(", "));
+  }
+  return parts.length > 0 ? parts.join(" · ") : "Kein semantischer Inhalt erkannt.";
+}
+
+function benchmarkProfileInfo(
+  profile: QwenBenchmarkProfile
+): { label: string; calls: number } {
+  switch (profile) {
+    case "whole":
+      return { label: "1 · Nur Gesamtbild", calls: 1 };
+    case "tiles4":
+      return { label: "2 · Gesamtbild + 4 Kacheln", calls: 5 };
+    case "tiles9":
+      return { label: "3 · Gesamtbild + 9 Kacheln", calls: 10 };
+    case "tiles16":
+      return { label: "4 · Gesamtbild + 16 Kacheln", calls: 17 };
+  }
+}
+
+function benchmarkProfileOrder(profile: QwenBenchmarkProfile): number {
+  return ["whole", "tiles4", "tiles9", "tiles16"].indexOf(profile);
+}
+
+function renderQwenBenchmarkResults(): void {
+  qwenBenchmarkResults.replaceChildren();
+
+  const requested = qwenBenchmarkProfilesInRun.length > 0
+    ? [...qwenBenchmarkProfilesInRun]
+    : qwenBenchmarkStages.map((stage) => stage.profile);
+
+  requested.sort(
+    (left, right) => benchmarkProfileOrder(left) - benchmarkProfileOrder(right)
+  );
+
+  if (requested.length === 0) {
+    const empty = document.createElement("p");
+    empty.className = "qwen-benchmark-empty";
+    empty.textContent = "Noch keine Testergebnisse.";
+    qwenBenchmarkResults.appendChild(empty);
+    copyQwenBenchmarkButton.disabled = true;
+    return;
+  }
+
+  const firstIncomplete = requested.find(
+    (profile) => !qwenBenchmarkStages.some((stage) => stage.profile === profile)
+  );
+
+  for (const profile of requested) {
+    const result = qwenBenchmarkStages.find((stage) => stage.profile === profile);
+    const card = document.createElement("article");
+    card.className = "qwen-benchmark-result";
+    card.dataset.profile = profile;
+
+    if (!result) {
+      const info = benchmarkProfileInfo(profile);
+      const isActive = qwenBenchmarkRunning && firstIncomplete === profile;
+      const hasError = qwenBenchmarkRunError !== null && firstIncomplete === profile;
+
+      card.classList.add(
+        hasError ? "error" : isActive ? "running" : "waiting"
+      );
+
+      const header = document.createElement("div");
+      header.className = "qwen-benchmark-result-header";
+      const title = document.createElement("h3");
+      title.textContent = info.label;
+      const state = document.createElement("strong");
+      state.textContent = hasError ? "Fehler" : isActive ? "Läuft" : "Wartet";
+      header.append(title, state);
+
+      const progress = document.createElement("p");
+      const progressState = qwenBenchmarkProgressCurrent;
+      if (hasError) {
+        progress.textContent = qwenBenchmarkRunError ?? "Unbekannter Fehler.";
+      } else if (
+        isActive &&
+        progressState !== null &&
+        progressState.current !== null &&
+        progressState.total !== null
+      ) {
+        progress.textContent =
+          "Bildbereich " +
+          progressState.current.toLocaleString("de-DE") +
+          "/" +
+          progressState.total.toLocaleString("de-DE") +
+          " · " +
+          progressState.message;
+      } else if (isActive) {
+        progress.textContent =
+          "Stufe wird vorbereitet. " +
+          info.calls.toLocaleString("de-DE") +
+          (info.calls === 1 ? " Modellaufruf." : " Modellaufrufe.");
+      } else {
+        progress.textContent =
+          "Startet nach der vorherigen Stufe · " +
+          info.calls.toLocaleString("de-DE") +
+          (info.calls === 1 ? " Modellaufruf." : " Modellaufrufe.");
+      }
+
+      const note = document.createElement("small");
+      note.className = "qwen-benchmark-stage-note";
+      note.textContent =
+        "Das Endergebnis dieser Stufe erscheint, sobald alle zugehörigen Bildbereiche ausgewertet sind.";
+
+      card.append(header, progress, note);
+      qwenBenchmarkResults.appendChild(card);
+      continue;
+    }
+
+    card.classList.add("done");
+
+    const header = document.createElement("div");
+    header.className = "qwen-benchmark-result-header";
+    const title = document.createElement("h3");
+    title.textContent = result.label;
+    const total = document.createElement("strong");
+    total.textContent = benchmarkDuration(result.timings.totalMs);
+    header.append(title, total);
+
+    const metrics = document.createElement("div");
+    metrics.className = "qwen-benchmark-metrics";
+
+    const metricValues: Array<[string, string]> = [
+      ["Modell bereit", benchmarkDuration(result.timings.modelReadyMs)],
+      ["Bildanalyse", benchmarkDuration(result.timings.discoveryMs)],
+      ["Bildbereiche", result.regionCount.toLocaleString("de-DE")],
+      ["Motive", result.semantic.subjects.length.toLocaleString("de-DE")],
+      ["Suchbegriffe", result.semantic.tags.length.toLocaleString("de-DE")],
+      ["Konzepte", result.semantic.concepts.length.toLocaleString("de-DE")],
+      ["Textfunde", result.semantic.visibleText.length.toLocaleString("de-DE")],
+      ["JSON", result.semantic.repaired ? "repariert" : "direkt"]
+    ];
+
+    for (const [label, value] of metricValues) {
+      const item = document.createElement("div");
+      item.className = "qwen-benchmark-metric";
+      const small = document.createElement("small");
+      small.textContent = label;
+      const strong = document.createElement("strong");
+      strong.textContent = value;
+      item.append(small, strong);
+      metrics.appendChild(item);
+    }
+
+    const summary = document.createElement("p");
+    summary.textContent = benchmarkObjectSummary(result);
+
+    const repairedNote = document.createElement("small");
+    repairedNote.className = "qwen-benchmark-stage-note";
+    repairedNote.textContent = result.semantic.repaired
+      ? "Die Modellantwort war formal unvollständig. Vollständig gelieferte Felder wurden automatisch übernommen."
+      : "";
+
+    const probeResult = benchmarkSearchProbeResult(result);
+    const probeNote = document.createElement("div");
+    probeNote.className = "qwen-benchmark-probe-result";
+    if (probeResult) {
+      const ratio = probeResult.total > 0 ? probeResult.matched / probeResult.total : 0;
+      probeNote.classList.add(
+        ratio >= 0.99 ? "strong" : ratio >= 0.5 ? "partial" : "weak"
+      );
+      probeNote.textContent =
+        "Suchprobe: " +
+        probeResult.matched.toLocaleString("de-DE") +
+        "/" +
+        probeResult.total.toLocaleString("de-DE") +
+        " relevante Begriffe gefunden" +
+        (probeResult.details.length > 0
+          ? " · " + probeResult.details.join(" · ")
+          : "");
+    }
+
+    const details = document.createElement("details");
+    const detailsSummary = document.createElement("summary");
+    detailsSummary.textContent = "Rohdaten anzeigen";
+    const pre = document.createElement("pre");
+    pre.textContent = JSON.stringify(result, null, 2);
+    details.append(detailsSummary, pre);
+
+    card.append(header, metrics, summary);
+    if (probeResult) card.appendChild(probeNote);
+    if (result.semantic.repaired) card.appendChild(repairedNote);
+    card.appendChild(details);
+    qwenBenchmarkResults.appendChild(card);
+  }
+
+  copyQwenBenchmarkButton.disabled = qwenBenchmarkStages.length === 0;
+}
+
+function renderQwenBenchmarkStage(stage: QwenBenchmarkStageResult): void {
+  const existingIndex = qwenBenchmarkStages.findIndex(
+    (item) => item.profile === stage.profile
+  );
+  if (existingIndex >= 0) {
+    qwenBenchmarkStages[existingIndex] = stage;
+  } else {
+    qwenBenchmarkStages.push(stage);
+  }
+
+  qwenBenchmarkStages.sort(
+    (left, right) =>
+      benchmarkProfileOrder(left.profile) - benchmarkProfileOrder(right.profile)
+  );
+
+  qwenBenchmarkProgressCurrent = null;
+  renderQwenBenchmarkResults();
+}
+
+function renderQwenBenchmarkProgress(status: AnalysisWorkerStatus): void {
+  if (!qwenBenchmarkRunning) return;
+
+  const progress = status.progress;
+  const expectedKind =
+    qwenBenchmarkModelInRun === "qwen3vl4b"
+      ? "qwen3vl4b"
+      : qwenBenchmarkModelInRun === "qwen3vl2b"
+        ? "qwen3vl2b"
+        : "minicpm";
+  if (progress?.kind === expectedKind && progress.message) {
+    qwenBenchmarkLive.textContent = progress.message;
+    qwenBenchmarkProgressCurrent = {
+      current: progress.current,
+      total: progress.total,
+      message: progress.message
+    };
+    renderQwenBenchmarkResults();
+  } else if (status.message) {
+    qwenBenchmarkLive.textContent = status.message;
+  }
+}
+
+function qwenBenchmarkCopyText(): string {
+  const probeQuery = qwenBenchmarkSearchProbe.value.trim();
+  const lines = [
+    benchmarkModelLabel(qwenBenchmarkModelInRun) + " · Einzelbild-Benchmark",
+    "Datei: " + (qwenBenchmarkSelectedPath ?? "—"),
+    ...(probeQuery ? ["Suchprobe: " + probeQuery] : []),
+    ""
+  ];
+
+  for (const stage of qwenBenchmarkStages) {
+    lines.push(
+      stage.label,
+      stage.description,
+      "Modell: " + stage.model,
+      "Gesamt: " + benchmarkDuration(stage.timings.totalMs),
+      "Modell bereit: " + benchmarkDuration(stage.timings.modelReadyMs),
+      "Bildanalyse: " + benchmarkDuration(stage.timings.discoveryMs),
+      "Bildbereiche: " + stage.regionCount.toLocaleString("de-DE"),
+      "Beschreibung: " + (stage.semantic.description || "—"),
+      "Motive: " + (stage.semantic.subjects.join(", ") || "—"),
+      "Handlungen: " + (stage.semantic.actions.join(", ") || "—"),
+      "Szene: " + (stage.semantic.scenes.join(", ") || "—"),
+      "Sichtbarer Text: " + (stage.semantic.visibleText.join(" | ") || "—"),
+      "Suchbegriffe: " + (stage.semantic.tags.join(", ") || "—"),
+      "Abgeleitete Konzepte: " + (stage.semantic.concepts.join(", ") || "—"),
+      ...(probeQuery && benchmarkSearchProbeResult(stage)
+        ? [
+            "Suchprobe-Treffer: " +
+            benchmarkSearchProbeResult(stage)!.matched.toLocaleString("de-DE") +
+            "/" +
+            benchmarkSearchProbeResult(stage)!.total.toLocaleString("de-DE")
+          ]
+        : []),
+      ""
+    );
+  }
+
+  return lines.join("\n").trim();
+}
+
+function renderQwenLiveProgress(): void {
+  const progress = latestAnalysisStatus?.progress;
+  if (!progress || progress.kind !== "qwen3vl") return;
+
+  objectVerificationStageState.className = "stage-state running";
+  objectVerificationStageState.textContent = "Läuft";
+  objectVerificationStageCounts.textContent =
+    progress.message.replace(/^Qwen3-VL:\s*/, "");
+}
 
 function renderAnalysisStatus(status: AnalysisWorkerStatus): void {
+  latestAnalysisStatus = status;
   analysisWorkerState.className = "analysis-state";
 
   switch (status.state) {
@@ -131,6 +611,23 @@ function renderAnalysisStatus(status: AnalysisWorkerStatus): void {
   analysisQueue.textContent = status.queuedJobs.toLocaleString("de-DE");
   analysisActive.textContent = status.activeJobs.toLocaleString("de-DE");
   analysisMessage.textContent = status.message;
+
+  if (status.progress?.kind === "qwen3vl") {
+    const progress = status.progress;
+    if (
+      progress.current !== null &&
+      progress.total !== null &&
+      progress.total > 0
+    ) {
+      analysisWorkerState.textContent =
+        `Qwen ${progress.current.toLocaleString("de-DE")}/` +
+        progress.total.toLocaleString("de-DE");
+    } else {
+      analysisWorkerState.textContent = "Qwen läuft";
+    }
+  }
+
+  renderQwenLiveProgress();
 }
 
 function stageText(stats: PipelineStatus["technical"]): {
@@ -162,6 +659,27 @@ function renderStage(
     `${stats.unavailable.toLocaleString("de-DE")} fehlen`;
 }
 
+async function refreshSelectedPipelineStatus(): Promise<void> {
+  const sourceId = selectedSourceId();
+  const status = await window.imageSorter.analysis.getPipelineStatus(
+    sourceId ?? undefined
+  );
+  renderPipelineStatus(status);
+}
+
+function scheduleSelectedPipelineRefresh(): void {
+  if (sourcePipelineRefreshTimer !== null) {
+    window.clearTimeout(sourcePipelineRefreshTimer);
+  }
+
+  sourcePipelineRefreshTimer = window.setTimeout(() => {
+    sourcePipelineRefreshTimer = null;
+    void refreshSelectedPipelineStatus().catch(() => {
+      // Die Katalogansicht bleibt auch bei einem kurzzeitigen Statusfehler bedienbar.
+    });
+  }, 250);
+}
+
 function renderPipelineStatus(status: PipelineStatus): void {
   renderStage(technicalStageState, technicalStageCounts, status.technical);
   renderStage(thumbnailStageState, thumbnailStageCounts, status.thumbnails);
@@ -179,6 +697,20 @@ function renderPipelineStatus(status: PipelineStatus): void {
     petEmbeddingStageCounts,
     status.petEmbeddings
   );
+  renderStage(
+    objectVerificationStageState,
+    objectVerificationStageCounts,
+    status.objectVerification
+  );
+  renderStage(
+    semanticStageState,
+    semanticStageCounts,
+    status.semanticEmbeddings
+  );
+
+  // Ein Pipeline-Refresh darf den feineren Live-Status einer laufenden
+  // Qwen-Anfrage nicht mit den groben Job-Zählern überschreiben.
+  renderQwenLiveProgress();
 
   const visualDataChanged =
     status.thumbnails.done !== lastThumbnailDone ||
@@ -187,7 +719,9 @@ function renderPipelineStatus(status: PipelineStatus): void {
     status.faceEmbeddings.done !== lastFaceEmbeddingDone ||
     status.petDetection.done !== lastPetDone ||
     status.petFusion.done !== lastPetFusionDone ||
-    status.petEmbeddings.done !== lastPetEmbeddingDone;
+    status.petEmbeddings.done !== lastPetEmbeddingDone ||
+    status.objectVerification.done !== lastObjectVerificationDone ||
+    status.semanticEmbeddings.done !== lastSemanticDone;
 
   lastThumbnailDone = status.thumbnails.done;
   lastMetadataDone = status.imageMetadata.done;
@@ -196,6 +730,8 @@ function renderPipelineStatus(status: PipelineStatus): void {
   lastPetDone = status.petDetection.done;
   lastPetFusionDone = status.petFusion.done;
   lastPetEmbeddingDone = status.petEmbeddings.done;
+  lastObjectVerificationDone = status.objectVerification.done;
+  lastSemanticDone = status.semanticEmbeddings.done;
 
   const stages = [
     status.technical,
@@ -205,7 +741,9 @@ function renderPipelineStatus(status: PipelineStatus): void {
     status.faceEmbeddings,
     status.petDetection,
     status.petFusion,
-    status.petEmbeddings
+    status.petEmbeddings,
+    status.objectVerification,
+    status.semanticEmbeddings
   ];
 
   const totalIssues = stages.reduce(
@@ -213,8 +751,10 @@ function renderPipelineStatus(status: PipelineStatus): void {
     0
   );
 
-  analysisErrorCount.textContent = totalIssues.toLocaleString("de-DE");
-  analysisErrorsButton.hidden = totalIssues === 0;
+  if (totalIssues !== lastPipelineIssueTotal) {
+    lastPipelineIssueTotal = totalIssues;
+    void refreshAnalysisErrorCount();
+  }
 
   if (!visualDataChanged) return;
 
@@ -228,7 +768,10 @@ function renderPipelineStatus(status: PipelineStatus): void {
     // Die Medienliste darf während laufender Analyse automatisch aktualisiert
     // werden. Die Personenansicht enthält jedoch Eingabefelder; ein komplettes
     // Re-Rendern würde dort den Fokus/Cursor beim Tippen zerstören.
-    if (currentView === "media" && selectedSourceId() !== null) {
+    if (
+      (currentView === "media" || currentView === "search") &&
+      selectedSourceId() !== null
+    ) {
       void runSafely(refreshCatalog);
     }
   }, 500);
@@ -251,6 +794,397 @@ function fullPreviewUrl(mediaId: number): string {
   return `image-sorter-preview://media/${mediaId}`;
 }
 
+function detailText(value: unknown, fallback = "—"): string {
+  if (value === null || value === undefined || value === "") return fallback;
+  return String(value);
+}
+
+function detailPercent(value: number | null): string {
+  return value === null || !Number.isFinite(value)
+    ? "—"
+    : Math.round(value * 100).toLocaleString("de-DE") + " %";
+}
+
+function detailTimestamp(value: string | null): string {
+  return value ? value.replace("T", " ") : "—";
+}
+
+function appendDetailSection(
+  title: string,
+  content: HTMLElement
+): void {
+  const section = document.createElement("section");
+  section.className = "image-detail-section";
+  const heading = document.createElement("h3");
+  heading.textContent = title;
+  const body = document.createElement("div");
+  body.className = "image-detail-section-body";
+  body.appendChild(content);
+  section.append(heading, body);
+  imagePreviewDetails.appendChild(section);
+}
+
+function detailGrid(rows: Array<[string, unknown]>): HTMLDListElement {
+  const dl = document.createElement("dl");
+  dl.className = "image-detail-grid";
+  for (const [label, value] of rows) {
+    const dt = document.createElement("dt");
+    dt.textContent = label;
+    const dd = document.createElement("dd");
+    dd.textContent = detailText(value);
+    dl.append(dt, dd);
+  }
+  return dl;
+}
+
+function detailChips(values: string[]): HTMLElement {
+  const wrapper = document.createElement("div");
+  wrapper.className = "image-detail-chips";
+  if (values.length === 0) {
+    const empty = document.createElement("span");
+    empty.className = "image-preview-detail-empty";
+    empty.textContent = "—";
+    wrapper.appendChild(empty);
+    return wrapper;
+  }
+  for (const value of values) {
+    const chip = document.createElement("span");
+    chip.className = "image-detail-chip";
+    chip.textContent = value;
+    wrapper.appendChild(chip);
+  }
+  return wrapper;
+}
+
+function renderImagePreviewDetails(details: MediaDetails): void {
+  imagePreviewDetails.replaceChildren();
+
+  const fileRows: Array<[string, unknown]> = [
+    ["Datei", details.relativePath],
+    ["Vollständiger Pfad", details.absolutePath],
+    ["Dateityp", details.extension],
+    ["Größe", formatBytes(details.sizeBytes)],
+    ["Status", details.availability],
+    ["SHA-256", details.sha256],
+    ["Datei geändert", new Date(details.mtimeMs).toLocaleString("de-DE")],
+    ["Erstmals gesehen", detailTimestamp(details.firstSeenAt)],
+    ["Zuletzt gesehen", detailTimestamp(details.lastSeenAt)],
+    ["Inhalt geändert", detailTimestamp(details.lastChangedAt)],
+    ["Verschoben", detailTimestamp(details.lastMovedAt)],
+    ["Dubletten", details.duplicateCount],
+    ["Geräte-ID", details.deviceId],
+    ["Inode", details.inode],
+    ["Papierkorbpfad", details.recyclePath]
+  ];
+  appendDetailSection("Datei", detailGrid(fileRows));
+
+  const technicalRows: Array<[string, unknown]> = [];
+  if (details.technicalProbe) {
+    const probeLabels: Record<string, string> = {
+      exists: "Datei erreichbar",
+      sizeBytes: "Prüfgröße",
+      mtimeNs: "mtime ns",
+      mimeType: "MIME-Typ",
+      extension: "Prüf-Endung",
+      expectedSha256: "Erwarteter SHA-256"
+    };
+    for (const [key, value] of Object.entries(details.technicalProbe)) {
+      if (key === "module" || key === "path") continue;
+      technicalRows.push([
+        probeLabels[key] ?? key,
+        key === "sizeBytes" && typeof value === "number" ? formatBytes(value) : value
+      ]);
+    }
+  }
+
+  if (details.imageMetadata) {
+    const meta = details.imageMetadata;
+    technicalRows.push(
+      ["Abmessungen", meta.width + " × " + meta.height + " px"],
+      ["Format", meta.format],
+      ["Farbmodus", meta.colorMode],
+      ["EXIF-Ausrichtung", meta.orientation],
+      ["Aufnahmezeit", detailTimestamp(meta.capturedAt)],
+      ["Kamerahersteller", meta.cameraMake],
+      ["Kameramodell", meta.cameraModel],
+      ["Objektiv", meta.lensModel],
+      [
+        "GPS",
+        meta.gpsLatitude !== null && meta.gpsLongitude !== null
+          ? meta.gpsLatitude.toFixed(6) + ", " + meta.gpsLongitude.toFixed(6)
+          : null
+      ],
+      ["Metadaten aktualisiert", detailTimestamp(meta.updatedAt)]
+    );
+  }
+  appendDetailSection(
+    "Technische Daten / EXIF",
+    technicalRows.length > 0
+      ? detailGrid(technicalRows)
+      : Object.assign(document.createElement("div"), {
+          className: "image-preview-detail-empty",
+          textContent: "Noch keine technischen Bildmetadaten vorhanden."
+        })
+  );
+
+  const faceList = document.createElement("div");
+  faceList.className = "image-detail-list";
+  if (details.faces.length === 0) {
+    faceList.textContent = "Keine Gesichter erkannt.";
+    faceList.classList.add("image-preview-detail-empty");
+  } else {
+    for (const face of details.faces) {
+      const item = document.createElement("div");
+      item.className = "image-detail-item image-detail-crop-row";
+      const crop = document.createElement("img");
+      crop.className = "image-detail-crop";
+      crop.src = faceCropUrl(face.id);
+      crop.alt = "";
+
+      const text = document.createElement("div");
+      const title = document.createElement("strong");
+      title.textContent = face.personName
+        ? "Person: " + face.personName
+        : face.candidateId !== null
+          ? "Personenkandidat #" + face.candidateId
+          : "Person noch nicht zugeordnet";
+
+      const meta = document.createElement("small");
+      const parts = [
+        "Erkennung " + detailPercent(face.score),
+        face.embeddingReady
+          ? "Gesichtsmerkmale: " + (face.embeddingModel ?? "bereit")
+          : "Gesichtsmerkmale noch nicht vorhanden",
+        face.assignmentSource ? "Zuordnung: " + face.assignmentSource : null,
+        face.assignmentConfidence !== null
+          ? "Zuordnung " + detailPercent(face.assignmentConfidence)
+          : null,
+        face.candidateSimilarity !== null
+          ? "Kandidat-Ähnlichkeit " + detailPercent(face.candidateSimilarity)
+          : null,
+        face.detectorVersion
+      ].filter(Boolean);
+      meta.textContent = parts.join(" · ");
+      text.append(title, meta);
+      item.append(crop, text);
+      faceList.appendChild(item);
+    }
+  }
+  appendDetailSection(
+    "Personen / Gesichter (" + details.faces.length.toLocaleString("de-DE") + ")",
+    faceList
+  );
+
+  const petList = document.createElement("div");
+  petList.className = "image-detail-list";
+  if (details.pets.length === 0) {
+    petList.textContent = "Keine Haustiere erkannt.";
+    petList.classList.add("image-preview-detail-empty");
+  } else {
+    for (const pet of details.pets) {
+      const item = document.createElement("div");
+      item.className = "image-detail-item image-detail-crop-row";
+      const crop = document.createElement("img");
+      crop.className = "image-detail-crop";
+      crop.src = petCropUrl(pet.id);
+      crop.alt = "";
+
+      const text = document.createElement("div");
+      const title = document.createElement("strong");
+      const species = pet.petClass === "cat" ? "Katze" : "Hund";
+      title.textContent = pet.petName
+        ? species + ": " + pet.petName
+        : pet.candidateId !== null
+          ? species + " · Kandidat #" + pet.candidateId
+          : species + " noch nicht zugeordnet";
+
+      const meta = document.createElement("small");
+      meta.textContent = [
+        "Erkennung " + detailPercent(pet.score),
+        "Modelle " + pet.agreementCount,
+        pet.sources.length > 0 ? pet.sources.join(" + ") : null,
+        pet.embeddingReady
+          ? "Merkmale: " + (pet.embeddingModel ?? "bereit")
+          : "Merkmale noch nicht vorhanden",
+        pet.assignmentSource ? "Zuordnung: " + pet.assignmentSource : null,
+        pet.assignmentConfidence !== null
+          ? "Zuordnung " + detailPercent(pet.assignmentConfidence)
+          : null,
+        pet.candidateSimilarity !== null
+          ? "Kandidat-Ähnlichkeit " + detailPercent(pet.candidateSimilarity)
+          : null
+      ].filter(Boolean).join(" · ");
+      text.append(title, meta);
+      item.append(crop, text);
+      petList.appendChild(item);
+    }
+  }
+  appendDetailSection(
+    "Haustiere (" + details.pets.length.toLocaleString("de-DE") + ")",
+    petList
+  );
+
+  const objectList = document.createElement("div");
+  objectList.className = "image-detail-list";
+  if (details.objects.length === 0) {
+    objectList.textContent = "Keine allgemeinen Motive gespeichert.";
+    objectList.classList.add("image-preview-detail-empty");
+  } else {
+    for (const object of details.objects) {
+      const item = document.createElement("div");
+      item.className = "image-detail-item";
+      const title = document.createElement("strong");
+      title.textContent =
+        (MOTIF_LABELS_DE[object.label] ?? object.label) +
+        (object.raw ? " · Rohdetektion" : " · fusioniert");
+      const meta = document.createElement("small");
+      meta.textContent = [
+        "Score " + detailPercent(object.score),
+        object.agreementCount !== null ? "Übereinstimmung " + object.agreementCount : null,
+        object.sources.length > 0 ? object.sources.join(" + ") : null,
+        object.version
+      ].filter(Boolean).join(" · ");
+      item.append(title, meta);
+      objectList.appendChild(item);
+    }
+  }
+  appendDetailSection(
+    "Motive / Objekte (" + details.objects.length.toLocaleString("de-DE") + ")",
+    objectList
+  );
+
+  const semanticBody = document.createElement("div");
+  if (details.semantic) {
+    const semantic = details.semantic;
+    const description = document.createElement("p");
+    description.className = "image-detail-semantic-description";
+    description.textContent = semantic.description || "Keine Beschreibung.";
+    semanticBody.appendChild(description);
+
+    for (const [label, values] of [
+      ["Motive", semantic.subjects],
+      ["Handlungen", semantic.actions],
+      ["Szene", semantic.scenes],
+      ["Sichtbarer Text", semantic.visibleText],
+      ["Suchbegriffe", semantic.tags],
+      ["Konzepte", semantic.concepts]
+    ] as Array<[string, string[]]>) {
+      const heading = document.createElement("strong");
+      heading.textContent = label;
+      heading.style.display = "block";
+      heading.style.margin = "8px 0 5px";
+      heading.style.fontSize = "11px";
+      semanticBody.append(heading, detailChips(values));
+    }
+
+    semanticBody.appendChild(detailGrid([
+      ["Modell", semantic.model],
+      ["Profil", semantic.profileVersion],
+      ["Bereiche", semantic.regionCount],
+      ["JSON repariert", semantic.repaired ? "Ja" : "Nein"],
+      ["Aktualisiert", detailTimestamp(semantic.updatedAt)]
+    ]));
+
+    if (semantic.regions.length > 0) {
+      const regions = document.createElement("details");
+      regions.style.marginTop = "9px";
+      const summary = document.createElement("summary");
+      summary.textContent = "Einzelergebnisse der " + semantic.regions.length + " Bildbereiche";
+      const pre = document.createElement("pre");
+      pre.className = "analysis-error-message";
+      pre.textContent = JSON.stringify(semantic.regions, null, 2);
+      regions.append(summary, pre);
+      semanticBody.appendChild(regions);
+    }
+
+    const timings = document.createElement("details");
+    timings.style.marginTop = "8px";
+    const timingSummary = document.createElement("summary");
+    timingSummary.textContent = "Qwen-Laufzeiten";
+    const timingPre = document.createElement("pre");
+    timingPre.className = "analysis-error-message";
+    timingPre.textContent = JSON.stringify(semantic.timings, null, 2);
+    timings.append(timingSummary, timingPre);
+    semanticBody.appendChild(timings);
+  } else {
+    semanticBody.className = "image-preview-detail-empty";
+    semanticBody.textContent = "Qwen-4B-Katalogsemantik noch nicht vorhanden.";
+  }
+  appendDetailSection("Qwen-4B-Semantik", semanticBody);
+
+  appendDetailSection(
+    "SigLIP2",
+    details.semanticEmbedding
+      ? detailGrid([
+          ["Modell", details.semanticEmbedding.model],
+          ["Dimensionen", details.semanticEmbedding.dimension],
+          ["Max. Patches", details.semanticEmbedding.maxNumPatches],
+          ["Präzision", details.semanticEmbedding.precision],
+          ["Aktualisiert", detailTimestamp(details.semanticEmbedding.updatedAt)]
+        ])
+      : Object.assign(document.createElement("div"), {
+          className: "image-preview-detail-empty",
+          textContent: "Noch kein SigLIP2-Vektor vorhanden."
+        })
+  );
+
+  const jobs = document.createElement("div");
+  if (details.analysisJobs.length === 0) {
+    jobs.className = "image-preview-detail-empty";
+    jobs.textContent = "Keine Analysejobs vorhanden.";
+  } else {
+    for (const job of details.analysisJobs) {
+      const row = document.createElement("div");
+      row.className = "image-detail-job";
+      const module = document.createElement("code");
+      module.textContent = job.module;
+      const status = document.createElement("span");
+      status.className = "image-detail-job-status " + job.status;
+      status.textContent = job.status;
+      const meta = document.createElement("small");
+      meta.textContent =
+        "Versuche: " + job.attempts.toLocaleString("de-DE") +
+        (job.finishedAt ? " · fertig " + detailTimestamp(job.finishedAt) : "") +
+        (job.errorMessage ? " · " + job.errorMessage : "");
+      meta.style.gridColumn = "1 / -1";
+      row.append(module, status, meta);
+      jobs.appendChild(row);
+    }
+  }
+  appendDetailSection("Analyse-Pipeline", jobs);
+}
+
+async function loadImagePreviewDetails(mediaId: number): Promise<void> {
+  imagePreviewDetails.replaceChildren();
+  const loading = document.createElement("div");
+  loading.className = "image-preview-detail-loading";
+  loading.textContent = "Daten werden geladen …";
+  imagePreviewDetails.appendChild(loading);
+
+  try {
+    const details = await window.imageSorter.catalog.getMediaDetails(mediaId);
+    if (!imagePreviewDialog.open) return;
+    if (!details) {
+      imagePreviewDetails.replaceChildren();
+      const empty = document.createElement("div");
+      empty.className = "image-preview-detail-empty";
+      empty.textContent = "Für dieses Medium wurden keine Detaildaten gefunden.";
+      imagePreviewDetails.appendChild(empty);
+      return;
+    }
+    renderImagePreviewDetails(details);
+  } catch (error) {
+    if (!imagePreviewDialog.open) return;
+    imagePreviewDetails.replaceChildren();
+    const message = document.createElement("div");
+    message.className = "image-preview-detail-error";
+    message.textContent =
+      "Detaildaten konnten nicht geladen werden: " +
+      (error instanceof Error ? error.message : String(error));
+    imagePreviewDetails.appendChild(message);
+  }
+}
+
 function openImagePreview(mediaId: number, caption: string): void {
   imagePreviewImage.src = fullPreviewUrl(mediaId);
   imagePreviewImage.alt = caption;
@@ -259,6 +1193,8 @@ function openImagePreview(mediaId: number, caption: string): void {
   if (!imagePreviewDialog.open) {
     imagePreviewDialog.showModal();
   }
+
+  void loadImagePreviewDetails(mediaId);
 }
 
 function makePreviewable(
@@ -311,6 +1247,200 @@ function isEditingPetView(): boolean {
   );
 }
 
+function updateCatalogWatchSnapshot(event: CatalogWatchEvent): void {
+  catalogWatchSnapshot.history = [
+    event,
+    ...catalogWatchSnapshot.history.filter(
+      (item) =>
+        !(
+          item.sourceId === event.sourceId &&
+          item.occurredAt === event.occurredAt &&
+          item.kind === event.kind &&
+          item.message === event.message
+        )
+    )
+  ].slice(0, 50);
+
+  const existingIndex = catalogWatchSnapshot.sources.findIndex(
+    (source) => source.sourceId === event.sourceId
+  );
+  const existing = existingIndex >= 0
+    ? catalogWatchSnapshot.sources[existingIndex]
+    : {
+        sourceId: event.sourceId,
+        sourcePath: event.sourcePath,
+        state: "WATCHING" as const,
+        recursive: true,
+        lastEventAt: null,
+        lastScanAt: null
+      };
+
+  const next = {
+    ...existing,
+    sourcePath: event.sourcePath || existing.sourcePath,
+    lastEventAt: event.occurredAt,
+    state:
+      event.kind === "SCAN_STARTED"
+        ? "SCANNING" as const
+        : event.kind === "ERROR"
+          ? "ERROR" as const
+          : event.kind === "FALLBACK"
+            ? "FALLBACK" as const
+            : event.kind === "WATCHING"
+              ? "WATCHING" as const
+              : event.kind === "SCAN_FINISHED"
+                ? (existing.recursive ? "WATCHING" as const : "FALLBACK" as const)
+                : existing.state,
+    recursive:
+      event.kind === "FALLBACK"
+        ? false
+        : event.kind === "WATCHING"
+          ? true
+          : existing.recursive,
+    lastScanAt:
+      event.kind === "SCAN_FINISHED"
+        ? event.occurredAt
+        : existing.lastScanAt
+  };
+
+  if (existingIndex >= 0) {
+    catalogWatchSnapshot.sources.splice(existingIndex, 1, next);
+  } else {
+    catalogWatchSnapshot.sources.push(next);
+  }
+}
+
+function renderCatalogWatchState(): void {
+  const sourceId = selectedSourceId();
+
+  if (sourceId === null) {
+    watchState.className = "watch-state waiting";
+    watchState.textContent = "Keine Quelle gewählt";
+    watchDetail.textContent =
+      "Nach dem Hinzufügen einer Quelle startet die Live-Überwachung automatisch.";
+    watchHistory.replaceChildren();
+    const empty = document.createElement("div");
+    empty.className = "watch-history-empty";
+    empty.textContent = "Noch keine Live-Änderungen erkannt.";
+    watchHistory.appendChild(empty);
+    return;
+  }
+
+  const source = catalogWatchSnapshot.sources.find(
+    (item) => item.sourceId === sourceId
+  );
+
+  if (!source) {
+    watchState.className = "watch-state waiting";
+    watchState.textContent = "Live-Überwachung wird vorbereitet …";
+    watchDetail.textContent =
+      "Neue, geänderte, verschobene und gelöschte Medien werden automatisch erkannt.";
+  } else {
+    watchState.className =
+      "watch-state " +
+      (source.state === "WATCHING"
+        ? "watching"
+        : source.state === "SCANNING"
+          ? "scanning"
+          : source.state === "FALLBACK"
+            ? "fallback"
+            : "error");
+
+    watchState.textContent =
+      source.state === "WATCHING"
+        ? "● Live-Überwachung aktiv"
+        : source.state === "SCANNING"
+          ? "↻ Automatischer Abgleich läuft"
+          : source.state === "FALLBACK"
+            ? "Live-Watcher eingeschränkt"
+            : "Live-Überwachung gestört";
+
+    watchDetail.textContent =
+      source.state === "WATCHING"
+        ? "Rekursiv überwacht · Sicherheitsabgleich alle 15 Minuten" +
+          (source.lastScanAt
+            ? " · letzter Auto-Abgleich " +
+              new Date(source.lastScanAt).toLocaleTimeString("de-DE")
+            : "")
+        : source.state === "SCANNING"
+          ? "Dateisystemänderungen werden mit dem Katalog abgeglichen …"
+          : source.state === "FALLBACK"
+            ? "Wurzelordner wird beobachtet · vollständiger Sicherheitsabgleich alle 15 Minuten"
+            : "Der 15-Minuten-Sicherheitsabgleich versucht die Quelle weiterhin erneut.";
+  }
+
+  watchHistory.replaceChildren();
+  const rows: Array<{
+    occurredAt: string;
+    kind: string;
+    className: string;
+    path: string;
+  }> = [];
+
+  for (const event of catalogWatchSnapshot.history) {
+    if (event.sourceId !== sourceId) continue;
+
+    if (event.kind === "SCAN_FINISHED" && event.scanResult) {
+      for (const change of event.scanResult.changes) {
+        const mapping = {
+          ADDED: ["NEU", "added"],
+          MOVED: ["VERSCHOBEN", "moved"],
+          CHANGED: ["GEÄNDERT", "changed"],
+          MISSING: ["GELÖSCHT", "missing"],
+          RECYCLE: ["PAPIERKORB", "recycle"],
+          RECYCLE_AMBIGUOUS: ["PAPIERKORB?", "recycle"]
+        } as const;
+        const [label, className] = mapping[change.kind];
+        rows.push({
+          occurredAt: event.occurredAt,
+          kind: label,
+          className,
+          path:
+            change.kind === "MOVED" && change.previousPath
+              ? change.previousPath + " → " + change.path
+              : change.path
+        });
+      }
+    } else if (event.kind === "ERROR" || event.kind === "FALLBACK") {
+      rows.push({
+        occurredAt: event.occurredAt,
+        kind: event.kind === "ERROR" ? "FEHLER" : "HINWEIS",
+        className: event.kind === "ERROR" ? "missing" : "changed",
+        path: event.message
+      });
+    }
+
+    if (rows.length >= 50) break;
+  }
+
+  if (rows.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "watch-history-empty";
+    empty.textContent = "Noch keine Dateiänderungen erkannt.";
+    watchHistory.appendChild(empty);
+    return;
+  }
+
+  for (const row of rows.slice(0, 50)) {
+    const entry = document.createElement("div");
+    entry.className = "watch-history-entry " + row.className;
+
+    const time = document.createElement("time");
+    time.textContent = new Date(row.occurredAt).toLocaleTimeString("de-DE");
+
+    const kind = document.createElement("span");
+    kind.className = "watch-history-kind";
+    kind.textContent = row.kind;
+
+    const filePath = document.createElement("span");
+    filePath.className = "watch-history-path";
+    filePath.textContent = row.path;
+
+    entry.append(time, kind, filePath);
+    watchHistory.appendChild(entry);
+  }
+}
+
 function selectedSourceId(): number | null {
   const value = sourceSelect.value;
   return value ? Number(value) : null;
@@ -340,15 +1470,254 @@ function statusFor(row: MediaRecord): { text: string; className: string } {
   return { text: "Fehlt", className: "badge missing" };
 }
 
+const MOTIF_LABELS_DE: Record<string, string> = {
+  person: "Person",
+  bicycle: "Fahrrad",
+  car: "Auto",
+  motorcycle: "Motorrad",
+  airplane: "Flugzeug",
+  bus: "Bus",
+  train: "Zug",
+  truck: "Lkw",
+  boat: "Boot",
+  "traffic light": "Ampel",
+  "fire hydrant": "Hydrant",
+  "stop sign": "Stoppschild",
+  "parking meter": "Parkscheinautomat",
+  bench: "Bank",
+  bird: "Vogel",
+  horse: "Pferd",
+  sheep: "Schaf",
+  cow: "Kuh",
+  elephant: "Elefant",
+  bear: "Bär",
+  zebra: "Zebra",
+  giraffe: "Giraffe",
+  backpack: "Rucksack",
+  umbrella: "Regenschirm",
+  handbag: "Handtasche",
+  tie: "Krawatte",
+  suitcase: "Koffer",
+  frisbee: "Frisbee",
+  skis: "Ski",
+  snowboard: "Snowboard",
+  "sports ball": "Ball",
+  kite: "Drachen",
+  "baseball bat": "Baseballschläger",
+  "baseball glove": "Baseballhandschuh",
+  skateboard: "Skateboard",
+  surfboard: "Surfbrett",
+  "tennis racket": "Tennisschläger",
+  bottle: "Flasche",
+  "wine glass": "Weinglas",
+  cup: "Tasse/Becher",
+  fork: "Gabel",
+  knife: "Messer",
+  spoon: "Löffel",
+  bowl: "Schüssel",
+  banana: "Banane",
+  apple: "Apfel",
+  sandwich: "Sandwich",
+  orange: "Orange",
+  broccoli: "Brokkoli",
+  carrot: "Karotte",
+  "hot dog": "Hotdog",
+  pizza: "Pizza",
+  donut: "Donut",
+  cake: "Kuchen",
+  chair: "Stuhl",
+  couch: "Sofa",
+  "potted plant": "Topfpflanze",
+  bed: "Bett",
+  "dining table": "Tisch",
+  toilet: "Toilette",
+  tv: "Fernseher",
+  laptop: "Laptop",
+  mouse: "Maus",
+  remote: "Fernbedienung",
+  keyboard: "Tastatur",
+  "cell phone": "Handy",
+  microwave: "Mikrowelle",
+  oven: "Backofen",
+  toaster: "Toaster",
+  sink: "Spüle",
+  refrigerator: "Kühlschrank",
+  book: "Buch",
+  clock: "Uhr",
+  vase: "Vase",
+  scissors: "Schere",
+  "teddy bear": "Teddybär",
+  "hair drier": "Haartrockner",
+  toothbrush: "Zahnbürste"
+};
+
+function checkedValues(container: HTMLElement): string[] {
+  return [...container.querySelectorAll<HTMLInputElement>('input[type="checkbox"]:checked')]
+    .map((input) => input.value);
+}
+
+function boundedCount(input: HTMLInputElement): number {
+  const value = Math.trunc(Number(input.value) || 0);
+  return Math.max(0, Math.min(20, value));
+}
+
+function currentSearchFilter(): SearchFilter {
+  return {
+    personIds: checkedValues(searchPersons)
+      .map(Number)
+      .filter((value) => Number.isInteger(value) && value > 0),
+    petIds: checkedValues(searchPets)
+      .map(Number)
+      .filter((value) => Number.isInteger(value) && value > 0),
+    objectLabels: checkedValues(searchObjects),
+    minDogs: boundedCount(searchMinDogs),
+    minCats: boundedCount(searchMinCats),
+    semanticQuery: searchSemanticQuery.value.trim(),
+    semanticMinProbability: Math.max(
+      0,
+      Math.min(0.99, (Number(searchSemanticMinProbability.value) || 0) / 100)
+    )
+  };
+}
+
+function searchCriterionCount(filter: SearchFilter): number {
+  return (
+    filter.personIds.length +
+    filter.petIds.length +
+    filter.objectLabels.length +
+    (filter.minDogs > 0 ? 1 : 0) +
+    (filter.minCats > 0 ? 1 : 0) +
+    (filter.semanticQuery ? 1 : 0)
+  );
+}
+
+function appendFacet(
+  container: HTMLElement,
+  value: string,
+  label: string,
+  mediaCount: number,
+  checked: boolean
+): void {
+  const wrapper = document.createElement("label");
+  wrapper.className = "search-facet";
+
+  const input = document.createElement("input");
+  input.type = "checkbox";
+  input.value = value;
+  input.checked = checked;
+
+  const text = document.createElement("span");
+  text.textContent = label;
+
+  const count = document.createElement("small");
+  count.textContent = mediaCount.toLocaleString("de-DE");
+
+  wrapper.append(input, text, count);
+  container.appendChild(wrapper);
+}
+
+function renderSearchFacets(facets: SearchFacets): void {
+  const selectedPersons = new Set(checkedValues(searchPersons));
+  const selectedPets = new Set(checkedValues(searchPets));
+  const selectedObjects = new Set(checkedValues(searchObjects));
+
+  searchPersons.replaceChildren();
+  searchPets.replaceChildren();
+  searchObjects.replaceChildren();
+
+  for (const person of facets.persons) {
+    appendFacet(
+      searchPersons,
+      String(person.id),
+      person.name,
+      person.mediaCount,
+      selectedPersons.has(String(person.id))
+    );
+  }
+
+  for (const pet of facets.pets) {
+    appendFacet(
+      searchPets,
+      String(pet.id),
+      pet.name + (pet.petClass === "dog" ? " · Hund" : " · Katze"),
+      pet.mediaCount,
+      selectedPets.has(String(pet.id))
+    );
+  }
+
+  for (const object of facets.objects) {
+    appendFacet(
+      searchObjects,
+      object.label,
+      MOTIF_LABELS_DE[object.label] ?? object.label,
+      object.mediaCount,
+      selectedObjects.has(object.label)
+    );
+  }
+
+  const addEmpty = (container: HTMLElement, text: string) => {
+    if (container.childElementCount > 0) return;
+    const empty = document.createElement("span");
+    empty.className = "search-facet-empty";
+    empty.textContent = text;
+    container.appendChild(empty);
+  };
+
+  addEmpty(searchPersons, "Noch keine bestätigten Personen.");
+  addEmpty(searchPets, "Noch keine bestätigten Haustiere.");
+  addEmpty(searchObjects, "Noch keine belastbaren Motive analysiert.");
+}
+
+async function loadSearchFacets(sourceId: number): Promise<void> {
+  const facets = await window.imageSorter.catalog.getSearchFacets(sourceId);
+  renderSearchFacets(facets);
+  searchFacetsSourceId = sourceId;
+}
+
+async function runCombinedSearch(sourceId: number): Promise<void> {
+  const filter = currentSearchFilter();
+  const rows = await window.imageSorter.catalog.searchMedia(sourceId, filter, 1000);
+  renderRows(rows, "Keine Medien entsprechen allen ausgewählten Kriterien.");
+
+  const criteria = searchCriterionCount(filter);
+  searchTabCount.textContent = rows.length.toLocaleString("de-DE");
+  searchSummary.textContent =
+    rows.length.toLocaleString("de-DE") + " " +
+    (rows.length === 1 ? "Treffer" : "Treffer") +
+    (criteria > 0
+      ? " · " + criteria.toLocaleString("de-DE") + " UND-" +
+        (criteria === 1 ? "Kriterium" : "Kriterien")
+      : " · keine Einschränkung") +
+    (filter.semanticQuery.trim()
+      ? " · Qwen-4B-Semantik + SigLIP2-Ranking"
+      : "");
+}
+
+function clearSearchControls(): void {
+  for (const input of [
+    ...searchPersons.querySelectorAll<HTMLInputElement>('input[type="checkbox"]'),
+    ...searchPets.querySelectorAll<HTMLInputElement>('input[type="checkbox"]'),
+    ...searchObjects.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')
+  ]) {
+    input.checked = false;
+  }
+  searchMinDogs.value = "0";
+  searchMinCats.value = "0";
+  searchSemanticQuery.value = "";
+  searchSemanticMinProbability.value = "65";
+}
+
 function setView(view: CatalogView): void {
   currentView = view;
 
   mediaTab.classList.toggle("active", view === "media");
+  searchTab.classList.toggle("active", view === "search");
   duplicateTab.classList.toggle("active", view === "duplicates");
   peopleTab.classList.toggle("active", view === "people");
   petsTab.classList.toggle("active", view === "pets");
   recycleTab.classList.toggle("active", view === "recycle");
 
+  searchPanel.hidden = view !== "search";
   duplicateView.hidden = view !== "duplicates";
   personView.hidden = view !== "people";
   petView.hidden = view !== "pets";
@@ -420,6 +1789,18 @@ function renderRows(rows: MediaRecord[], emptyText = "Noch keine Medien katalogi
       captured.className = "path-meta";
       captured.textContent = `Aufnahme: ${row.capturedAt.replace("T", " ")}`;
       pathCell.appendChild(captured);
+    }
+
+    const semanticReasons = row.semanticMatchReasons ?? [];
+    if (semanticReasons.length > 0) {
+      const reasons = document.createElement("small");
+      reasons.className = "semantic-match-reasons";
+      reasons.textContent = "Treffer: " + semanticReasons.join(" · ");
+      reasons.title =
+        (row.semanticDescription ? row.semanticDescription + "\n\n" : "") +
+        "Qwen-Konzepte: " +
+        ((row.semanticConcepts ?? []).join(", ") || "—");
+      pathCell.appendChild(reasons);
     }
 
     const typeCell = document.createElement("td");
@@ -512,8 +1893,62 @@ function renderRows(rows: MediaRecord[], emptyText = "Noch keine Medien katalogi
         "Motive: " + visible.join(" · ") +
         (motifLabels.length > visible.length ? " …" : "");
       motifBadge.title =
-        "YOLOX-S erkannte Objekte: " + motifLabels.join(", ");
+        "Vorhandene allgemeine Motiverkennung: " + motifLabels.join(", ");
       stateCell.appendChild(motifBadge);
+    }
+
+    if (row.availability === "AVAILABLE" && row.catalogSemanticReady) {
+      const catalogBadge = document.createElement("span");
+      catalogBadge.className = "badge semantic catalog-semantic";
+
+      if (row.combinedSemanticScore !== null) {
+        catalogBadge.textContent =
+          "Relevanz " +
+          Math.round(row.combinedSemanticScore * 100).toLocaleString("de-DE") +
+          " %";
+        const qwenScore =
+          row.catalogSemanticScore !== null
+            ? Math.round(row.catalogSemanticScore * 100).toLocaleString("de-DE") + " %"
+            : "—";
+        const siglipScore =
+          row.semanticScore !== null
+            ? Math.round(row.semanticScore * 100).toLocaleString("de-DE") + " %"
+            : "nicht verwendet";
+        catalogBadge.title =
+          "Hybrides Ranking · Qwen-4B-Text/Konzepte: " + qwenScore +
+          " · SigLIP2: " + siglipScore +
+          (row.semanticMatchReasons?.length
+            ? " · Treffergründe: " + row.semanticMatchReasons.join(" | ")
+            : "");
+      } else {
+        catalogBadge.textContent = "Qwen 4B Inhalt bereit";
+        catalogBadge.title =
+          row.catalogSemanticModel ??
+          "Qwen3-VL-4B-Katalogbeschreibung und Suchkonzepte vorhanden";
+      }
+
+      stateCell.appendChild(catalogBadge);
+    }
+
+    if (
+      row.availability === "AVAILABLE" &&
+      row.semanticReady &&
+      !row.catalogSemanticReady
+    ) {
+      const semanticBadge = document.createElement("span");
+      semanticBadge.className = "badge semantic";
+
+      if (row.semanticScore !== null) {
+        semanticBadge.textContent =
+          "SigLIP2 " + Math.round(row.semanticScore * 100).toLocaleString("de-DE") + " %";
+        semanticBadge.title =
+          "SigLIP2-Suchscore; Qwen-4B-Kataloganalyse für dieses Bild ist noch nicht fertig.";
+      } else {
+        semanticBadge.textContent = "SigLIP2 bereit";
+        semanticBadge.title = row.semanticModel ?? "SigLIP2-Semantikanalyse abgeschlossen";
+      }
+
+      stateCell.appendChild(semanticBadge);
     }
 
     const actionCell = document.createElement("td");
@@ -605,25 +2040,74 @@ function renderDuplicateGroups(groups: DuplicateGroup[]): void {
   duplicateGroups.appendChild(fragment);
 }
 
+function renderIdentityTabStats(stats: CatalogStats): void {
+  peopleTabCount.textContent =
+    stats.personCandidates.toLocaleString("de-DE") +
+    " Gr. · " +
+    stats.personCandidateFaces.toLocaleString("de-DE") +
+    " Ges.";
+  peopleTabCount.title =
+    stats.personCandidates.toLocaleString("de-DE") +
+    " unbestätigte Personengruppen · " +
+    stats.personCandidateFaces.toLocaleString("de-DE") +
+    " unbestätigte Gesichter · " +
+    stats.persons.toLocaleString("de-DE") +
+    " bestätigte Personen mit " +
+    stats.assignedPersonFaces.toLocaleString("de-DE") +
+    " zugeordneten Gesichtern";
+
+  petsTabCount.textContent =
+    stats.petCandidates.toLocaleString("de-DE") +
+    " Gr. · " +
+    stats.petCandidateDetections.toLocaleString("de-DE") +
+    " Hunde";
+  petsTabCount.title =
+    stats.petCandidates.toLocaleString("de-DE") +
+    " unbestätigte Hundegruppen · " +
+    stats.petCandidateDetections.toLocaleString("de-DE") +
+    " unbestätigte Hundefundstellen · " +
+    stats.pets.toLocaleString("de-DE") +
+    " bestätigte Haustiere mit " +
+    stats.assignedPetDetections.toLocaleString("de-DE") +
+    " zugeordneten Fundstellen";
+}
+
 function renderPersonOverview(overview: PersonOverview): void {
   personCandidates.replaceChildren();
   confirmedPersons.replaceChildren();
 
+  const candidateFaces = overview.candidates.reduce(
+    (sum, candidate) => sum + candidate.faceCount,
+    0
+  );
+  const assignedFaces = overview.persons.reduce(
+    (sum, person) => sum + person.faceCount,
+    0
+  );
+
   if (overview.clusteringPending) {
     personStatus.textContent =
-      "Gesichtsmerkmale werden noch im Hintergrund berechnet. " +
-      "Die Personenvorschläge werden danach neu gruppiert.";
+      overview.candidates.length.toLocaleString("de-DE") + " Gruppen mit " +
+      candidateFaces.toLocaleString("de-DE") +
+      " unbestätigten Gesichtern · " +
+      assignedFaces.toLocaleString("de-DE") +
+      " Gesichter bereits bestätigt. " +
+      "Neue SFace-Ergebnisse werden während der laufenden Analyse regelmäßig neu gruppiert.";
   } else if (overview.candidates.length > 0) {
     personStatus.textContent =
-      `${overview.candidates.length.toLocaleString("de-DE")} unbestätigte ` +
-      `${overview.candidates.length === 1 ? "Gruppe" : "Gruppen"} gefunden. ` +
-      "Erst deine Bestätigung erzeugt eine dauerhafte Person.";
+      overview.candidates.length.toLocaleString("de-DE") + " unbestätigte " +
+      (overview.candidates.length === 1 ? "Gruppe" : "Gruppen") + " mit " +
+      candidateFaces.toLocaleString("de-DE") + " Gesichtern gefunden. " +
+      assignedFaces.toLocaleString("de-DE") + " Gesichter sind bereits bestätigt.";
   } else {
     personStatus.textContent =
-      "Aktuell gibt es keine unbestätigten Personenvorschläge.";
+      "Aktuell gibt es keine unbestätigten Personenvorschläge. " +
+      assignedFaces.toLocaleString("de-DE") + " Gesichter sind bereits bestätigt.";
   }
 
-  peopleTabCount.textContent = overview.candidates.length.toLocaleString("de-DE");
+  peopleTabCount.textContent =
+    overview.candidates.length.toLocaleString("de-DE") +
+    " Gr. · " + candidateFaces.toLocaleString("de-DE") + " Ges.";
 
   if (overview.candidates.length === 0) {
     const empty = document.createElement("div");
@@ -693,8 +2177,7 @@ function renderPersonOverview(overview: PersonOverview): void {
               if (sourceId !== null) {
                 await loadPersonOverview(sourceId, true);
                 const stats = await window.imageSorter.catalog.getStats(sourceId);
-                peopleTabCount.textContent =
-                  stats.personCandidates.toLocaleString("de-DE");
+                renderIdentityTabStats(stats);
               }
 
               progressText.textContent =
@@ -1026,22 +2509,40 @@ function renderPetOverview(overview: PetOverview): void {
   petCandidates.replaceChildren();
   confirmedPets.replaceChildren();
 
+  const candidateDogs = overview.candidates.reduce(
+    (sum, candidate) => sum + candidate.detectionCount,
+    0
+  );
+  const assignedDogs = overview.pets.reduce(
+    (sum, pet) => sum + pet.detectionCount,
+    0
+  );
+
   if (overview.clusteringPending) {
     petStatus.textContent =
-      "Individuelle Hundemerkmale werden noch im Hintergrund berechnet. " +
-      "Die Hundegruppen entstehen automatisch, sobald diese Stufe fertig ist.";
+      overview.candidates.length.toLocaleString("de-DE") + " Gruppen mit " +
+      candidateDogs.toLocaleString("de-DE") +
+      " unbestätigten Hundefundstellen · " +
+      assignedDogs.toLocaleString("de-DE") +
+      " Fundstellen bereits einem Hund zugeordnet. " +
+      "Neue Dog-ReID-Ergebnisse werden während der laufenden Analyse regelmäßig neu gruppiert.";
   } else if (overview.candidates.length > 0) {
     petStatus.textContent =
       overview.candidates.length.toLocaleString("de-DE") + " " +
       (overview.candidates.length === 1 ? "Hundegruppe" : "Hundegruppen") +
-      " zur Bestätigung gefunden.";
+      " mit " + candidateDogs.toLocaleString("de-DE") +
+      " Fundstellen zur Bestätigung gefunden. " +
+      assignedDogs.toLocaleString("de-DE") + " Fundstellen sind bereits zugeordnet.";
   } else {
     petStatus.textContent =
       "Aktuell gibt es keine unbestätigten Hundegruppen. " +
-      "Gruppen benötigen mindestens zwei ausreichend ähnliche Fundstellen.";
+      assignedDogs.toLocaleString("de-DE") +
+      " Hundefundstellen sind bereits zugeordnet. Gruppen benötigen mindestens zwei ausreichend ähnliche Fundstellen.";
   }
 
-  petsTabCount.textContent = overview.candidates.length.toLocaleString("de-DE");
+  petsTabCount.textContent =
+    overview.candidates.length.toLocaleString("de-DE") +
+    " Gr. · " + candidateDogs.toLocaleString("de-DE") + " Hunde";
 
   if (overview.candidates.length === 0) {
     const empty = document.createElement("div");
@@ -1536,7 +3037,10 @@ const analysisModuleLabels: Record<string, string> = {
   "pet-detect-nanodet-v1": "Haustierdetektor NanoDet",
   "pet-detect-yolox-v1": "Haustierdetektor YOLOX-S",
   "pet-fuse-ensemble-v1": "Haustier-Ergebnisse fusionieren",
-  "pet-embed-dogreid-v1": "Individuelle Hundemerkmale"
+  "pet-embed-dogreid-v1": "Individuelle Hundemerkmale",
+  "catalog-semantic-qwen3vl4b-v3": "Kataloginhalt · Qwen3-VL 4B · Gesamtbild + 4 Teilbilder",
+  "object-detect-qwen3vl-gguf-v2": "Legacy · Qwen3-VL-8B",
+  "semantic-embed-siglip2-v1": "Semantikanalyse (SigLIP2 So400m NaFlex)"
 };
 
 function analysisModuleLabel(module: string): string {
@@ -1688,13 +3192,31 @@ function renderAnalysisErrors(errors: AnalysisErrorRecord[]): void {
   analysisErrorList.appendChild(fragment);
 }
 
+async function refreshAnalysisErrorCount(): Promise<number> {
+  const sourceId = selectedSourceId() ?? undefined;
+  const count = await window.imageSorter.analysis.countErrors(sourceId);
+  analysisErrorCount.textContent = count.toLocaleString("de-DE");
+  analysisErrorsButton.hidden = count === 0;
+  return count;
+}
+
 async function loadAnalysisErrors(): Promise<void> {
   const sourceId = selectedSourceId() ?? undefined;
-  const errors = await window.imageSorter.analysis.listErrors(sourceId, 300);
-  renderAnalysisErrors(errors);
+  const [errors, total] = await Promise.all([
+    window.imageSorter.analysis.listErrors(sourceId, 300),
+    window.imageSorter.analysis.countErrors(sourceId)
+  ]);
 
-  analysisErrorCount.textContent = errors.length.toLocaleString("de-DE");
-  analysisErrorsButton.hidden = errors.length === 0;
+  renderAnalysisErrors(errors);
+  analysisErrorSummary.textContent =
+    errors.length < total
+      ? errors.length.toLocaleString("de-DE") +
+        " von " + total.toLocaleString("de-DE") + " Fehlern angezeigt"
+      : total.toLocaleString("de-DE") + " " +
+        (total === 1 ? "Fehler" : "Fehler");
+
+  analysisErrorCount.textContent = total.toLocaleString("de-DE");
+  analysisErrorsButton.hidden = total === 0;
 }
 
 async function refreshCatalog(): Promise<void> {
@@ -1709,6 +3231,7 @@ async function refreshCatalog(): Promise<void> {
     recycleCount.textContent = "0";
     lastScan.textContent = "—";
     mediaTabCount.textContent = "0";
+    searchTabCount.textContent = "0";
     duplicateTabCount.textContent = "0";
     peopleTabCount.textContent = "0";
     petsTabCount.textContent = "0";
@@ -1729,6 +3252,7 @@ async function refreshCatalog(): Promise<void> {
   }
 
   const stats = await window.imageSorter.catalog.getStats(sourceId);
+  await refreshAnalysisErrorCount();
 
   totalCount.textContent = stats.total.toLocaleString("de-DE");
   availableCount.textContent = stats.available.toLocaleString("de-DE");
@@ -1737,8 +3261,7 @@ async function refreshCatalog(): Promise<void> {
   lastScan.textContent = stats.lastScan ?? "—";
   mediaTabCount.textContent = stats.total.toLocaleString("de-DE");
   duplicateTabCount.textContent = stats.duplicateGroups.toLocaleString("de-DE");
-  peopleTabCount.textContent = stats.personCandidates.toLocaleString("de-DE");
-  petsTabCount.textContent = stats.petCandidates.toLocaleString("de-DE");
+  renderIdentityTabStats(stats);
   recycleTabCount.textContent = stats.recycleBin.toLocaleString("de-DE");
 
   if (currentView === "duplicates") {
@@ -1760,6 +3283,12 @@ async function refreshCatalog(): Promise<void> {
   if (currentView === "recycle") {
     const rows = await window.imageSorter.catalog.listRecycleMedia(sourceId, 500);
     renderRows(rows, "Keine wiederherstellbaren oder mehrdeutigen Papierkorb-Einträge.");
+    return;
+  }
+
+  if (currentView === "search") {
+    await loadSearchFacets(sourceId);
+    await runCombinedSearch(sourceId);
     return;
   }
 
@@ -1786,7 +3315,9 @@ async function loadSources(preselectId?: number): Promise<void> {
   }
 
   if (preselectId !== undefined) sourceSelect.value = String(preselectId);
+  renderCatalogWatchState();
   await refreshCatalog();
+  await refreshSelectedPipelineStatus();
 }
 
 async function runSafely(action: () => Promise<void>): Promise<void> {
@@ -1831,7 +3362,8 @@ addSourceButton.addEventListener("click", () => {
     if (!selected) return;
     const source = await window.imageSorter.catalog.addSource(selected);
     await loadSources(source.id);
-    progressText.textContent = "Quelle hinzugefügt. Bereit zum Scannen.";
+    progressText.textContent =
+      "Quelle hinzugefügt. Live-Überwachung und erster automatischer Abgleich wurden gestartet.";
   });
 });
 
@@ -1874,8 +3406,9 @@ resetButton.addEventListener("click", () => {
 
   const confirmed = window.confirm(
     "Wirklich die komplette Entwicklungsdatenbank zurücksetzen? " +
-    "Alle Medienquellen, Katalogeinträge, Scan-Historien und Analysejobs werden gelöscht. " +
-    "Die Originaldateien auf der Festplatte bleiben unverändert."
+    "Medienquellen, Katalog, Scan-Historie, Analysejobs, Gesichts-/Haustierzuordnungen, " +
+    "Motiverkennung und alle SigLIP2-Semantikvektoren werden vollständig gelöscht. " +
+    "Die Originaldateien und die lokal installierten KI-Modelle bleiben unverändert."
   );
   if (!confirmed) return;
 
@@ -1891,16 +3424,24 @@ resetButton.addEventListener("click", () => {
       await window.imageSorter.catalog.resetCatalog();
       currentView = "media";
       mediaTab.classList.add("active");
+      searchTab.classList.remove("active");
       duplicateTab.classList.remove("active");
       peopleTab.classList.remove("active");
       petsTab.classList.remove("active");
       recycleTab.classList.remove("active");
+      searchPanel.hidden = true;
       mediaView.hidden = false;
       duplicateView.hidden = true;
       personView.hidden = true;
       petView.hidden = true;
+      clearSearchControls();
+      searchFacetsSourceId = null;
+      searchTabCount.textContent = "0";
+      searchSummary.textContent = "Noch keine Suche ausgeführt.";
       await loadSources();
-      progressText.textContent = "Katalog zurückgesetzt. Du kannst jetzt eine Medienquelle neu hinzufügen und sauber neu scannen.";
+      progressText.textContent =
+        "Datenbank vollständig zurückgesetzt. Du kannst jetzt sauber neu beginnen; " +
+        "auch alte KI- und Semantikdaten sind entfernt.";
     } finally {
       resetting = false;
       resetButton.disabled = false;
@@ -1912,6 +3453,7 @@ resetButton.addEventListener("click", () => {
 });
 
 mediaTab.addEventListener("click", () => setView("media"));
+searchTab.addEventListener("click", () => setView("search"));
 duplicateTab.addEventListener("click", () => setView("duplicates"));
 peopleTab.addEventListener("click", () => setView("people"));
 petsTab.addEventListener("click", () => setView("pets"));
@@ -1925,7 +3467,7 @@ refreshPeopleButton.addEventListener("click", () => {
     personStatus.textContent = "Personenvorschläge werden neu berechnet …";
     await loadPersonOverview(sourceId, true);
     const stats = await window.imageSorter.catalog.getStats(sourceId);
-    peopleTabCount.textContent = stats.personCandidates.toLocaleString("de-DE");
+    renderIdentityTabStats(stats);
   });
 });
 
@@ -1937,9 +3479,209 @@ refreshPetsButton.addEventListener("click", () => {
     petStatus.textContent = "Hundegruppen werden neu berechnet …";
     await loadPetOverview(sourceId, true);
     const stats = await window.imageSorter.catalog.getStats(sourceId);
-    petsTabCount.textContent = stats.petCandidates.toLocaleString("de-DE");
+    renderIdentityTabStats(stats);
   });
 });
+analysisDevLogButton.addEventListener("click", () => {
+  void runSafely(async () => {
+    const result = await window.imageSorter.analysis.openDevLog();
+    progressText.textContent = "Dev-Protokoll geöffnet: " + result.path;
+  });
+});
+
+analysisCopyDevLogButton.addEventListener("click", () => {
+  void runSafely(async () => {
+    analysisCopyDevLogButton.disabled = true;
+    try {
+      const result = await window.imageSorter.analysis.copyDevLog();
+      progressText.textContent =
+        "Dev-Protokoll in die Zwischenablage kopiert · " +
+        result.characters.toLocaleString("de-DE") +
+        " Zeichen.";
+    } finally {
+      analysisCopyDevLogButton.disabled = false;
+    }
+  });
+});
+
+qwenAutomaticButton.addEventListener("click", () => {
+  if (automaticQwenEnabled) return;
+
+  void runSafely(async () => {
+    qwenAutomaticButton.disabled = true;
+    progressText.textContent =
+      "Qwen3-VL-4B-Kataloganalyse wird freigegeben. Das Modell wird erst beim nächsten 4B-Job geladen …";
+
+    try {
+      const result = await window.imageSorter.analysis.startAutomaticQwen();
+      renderAutomaticQwenState(result.enabled);
+      progressText.textContent =
+        "Qwen3-VL-4B-Kataloganalyse ist aktiv. Einzelbildtests pausieren sie weiterhin automatisch.";
+    } catch (error) {
+      renderAutomaticQwenState(false);
+      throw error;
+    }
+  });
+});
+
+async function closeQwenBenchmarkAndResume(): Promise<void> {
+  if (qwenBenchmarkRunning) {
+    qwenBenchmarkLive.textContent =
+      "Der Test läuft noch. Nach Abschluss kann das Fenster geschlossen werden.";
+    return;
+  }
+
+  closeQwenBenchmarkButton.disabled = true;
+  pickQwenBenchmarkImageButton.disabled = true;
+  runQwenBenchmarkButton.disabled = true;
+  qwenBenchmarkLive.textContent =
+    "Testmodus wird beendet. Normale Analyse wird wieder freigegeben …";
+
+  try {
+    await window.imageSorter.analysis.finishQwenBenchmark();
+    qwenBenchmarkDialog.close();
+    progressText.textContent =
+      "Vision-Einzeltest beendet. Automatische Kataloganalyse läuft wieder weiter.";
+  } finally {
+    closeQwenBenchmarkButton.disabled = false;
+    pickQwenBenchmarkImageButton.disabled = false;
+    runQwenBenchmarkButton.disabled = false;
+  }
+}
+
+qwenBenchmarkButton.addEventListener("click", () => {
+  void runSafely(async () => {
+    if (!qwenBenchmarkDialog.open) qwenBenchmarkDialog.showModal();
+
+    qwenBenchmarkButton.disabled = true;
+    pickQwenBenchmarkImageButton.disabled = true;
+    runQwenBenchmarkButton.disabled = true;
+    qwenBenchmarkLive.textContent =
+      "Standardanalyse wird pausiert und große Vision-Modelle werden aus dem Speicher entladen …";
+
+    try {
+      await window.imageSorter.analysis.prepareQwenBenchmark();
+      qwenBenchmarkLive.textContent =
+        "Standardanalyse ist vollständig pausiert. " +
+        "Du kannst jetzt ein Bild auswählen.";
+    } finally {
+      qwenBenchmarkButton.disabled = false;
+      pickQwenBenchmarkImageButton.disabled = false;
+      runQwenBenchmarkButton.disabled = false;
+    }
+  });
+});
+
+closeQwenBenchmarkButton.addEventListener("click", () => {
+  void runSafely(closeQwenBenchmarkAndResume);
+});
+
+qwenBenchmarkDialog.addEventListener("cancel", (event) => {
+  event.preventDefault();
+  if (!qwenBenchmarkRunning) {
+    void runSafely(closeQwenBenchmarkAndResume);
+  } else {
+    qwenBenchmarkLive.textContent =
+      "Der Test läuft noch. Nach Abschluss kann das Fenster geschlossen werden.";
+  }
+});
+
+pickQwenBenchmarkImageButton.addEventListener("click", () => {
+  void runSafely(async () => {
+    const selected = await window.imageSorter.analysis.pickQwenBenchmarkImage();
+    if (!selected) return;
+
+    qwenBenchmarkSelectedPath = selected;
+    qwenBenchmarkFilePath.textContent = selected;
+    qwenBenchmarkFilePath.title = selected;
+    qwenBenchmarkLive.textContent =
+      "Bild ausgewählt. Jetzt eine oder mehrere Teststufen starten.";
+  });
+});
+
+runQwenBenchmarkButton.addEventListener("click", () => {
+  void runSafely(async () => {
+    if (!qwenBenchmarkSelectedPath) {
+      qwenBenchmarkLive.textContent = "Bitte zuerst ein Bild auswählen.";
+      return;
+    }
+
+    const selectedModelInput = qwenBenchmarkModelInputs.find(
+      (input) => input.checked
+    );
+    const model = (selectedModelInput?.value ?? "minicpm") as QwenBenchmarkModel;
+    const profiles = qwenBenchmarkProfileInputs
+      .filter((input) => input.checked)
+      .map((input) => input.value as QwenBenchmarkProfile);
+
+    if (profiles.length === 0) {
+      qwenBenchmarkLive.textContent = "Bitte mindestens eine Teststufe auswählen.";
+      return;
+    }
+
+    qwenBenchmarkRunning = true;
+    qwenBenchmarkModelInRun = model;
+    qwenBenchmarkStages = [];
+    qwenBenchmarkProfilesInRun = [...profiles];
+    qwenBenchmarkProgressCurrent = null;
+    qwenBenchmarkRunError = null;
+    renderQwenBenchmarkResults();
+    runQwenBenchmarkButton.disabled = true;
+    pickQwenBenchmarkImageButton.disabled = true;
+    copyQwenBenchmarkButton.disabled = true;
+    closeQwenBenchmarkButton.disabled = true;
+    for (const input of qwenBenchmarkModelInputs) input.disabled = true;
+    qwenBenchmarkLive.textContent =
+      "Standardanalyse ist pausiert. " +
+      benchmarkModelLabel(model) +
+      " wird vorbereitet …";
+
+    try {
+      const result = await window.imageSorter.analysis.runQwenBenchmark(
+        qwenBenchmarkSelectedPath,
+        model,
+        profiles
+      );
+
+      for (const stage of result.results) {
+        if (!qwenBenchmarkStages.some((item) => item.profile === stage.profile)) {
+          renderQwenBenchmarkStage(stage);
+        }
+      }
+
+      qwenBenchmarkLive.textContent =
+        "Test abgeschlossen · " +
+        result.results.length.toLocaleString("de-DE") +
+        (result.results.length === 1 ? " Stufe." : " Stufen.");
+    } catch (error) {
+      qwenBenchmarkRunError =
+        error instanceof Error ? error.message : String(error);
+      qwenBenchmarkLive.textContent =
+        benchmarkModelLabel(model) + " abgebrochen: " + qwenBenchmarkRunError;
+    } finally {
+      qwenBenchmarkRunning = false;
+      renderQwenBenchmarkResults();
+      runQwenBenchmarkButton.disabled = false;
+      pickQwenBenchmarkImageButton.disabled = false;
+      closeQwenBenchmarkButton.disabled = false;
+      for (const input of qwenBenchmarkModelInputs) input.disabled = false;
+      copyQwenBenchmarkButton.disabled = qwenBenchmarkStages.length === 0;
+    }
+  });
+});
+
+qwenBenchmarkSearchProbe.addEventListener("input", () => {
+  renderQwenBenchmarkResults();
+});
+
+copyQwenBenchmarkButton.addEventListener("click", () => {
+  void runSafely(async () => {
+    if (qwenBenchmarkStages.length === 0) return;
+    await copyText(qwenBenchmarkCopyText());
+    qwenBenchmarkLive.textContent = "Testprotokoll in die Zwischenablage kopiert.";
+  });
+});
+
 analysisErrorsButton.addEventListener("click", () => {
   void runSafely(async () => {
     await loadAnalysisErrors();
@@ -2012,9 +3754,41 @@ imagePreviewDialog.addEventListener("click", (event) => {
 imagePreviewDialog.addEventListener("close", () => {
   imagePreviewImage.removeAttribute("src");
   imagePreviewCaption.textContent = "";
+  imagePreviewDetails.replaceChildren();
 });
 
-sourceSelect.addEventListener("change", () => void runSafely(refreshCatalog));
+sourceSelect.addEventListener("change", () => {
+  renderCatalogWatchState();
+  scheduleSelectedPipelineRefresh();
+  clearSearchControls();
+  searchFacetsSourceId = null;
+  searchTabCount.textContent = "0";
+  searchSummary.textContent = "Noch keine Suche ausgeführt.";
+  void runSafely(refreshCatalog);
+});
+
+runSearchButton.addEventListener("click", () => {
+  const sourceId = selectedSourceId();
+  if (sourceId === null) return;
+  void runSafely(async () => {
+    if (searchFacetsSourceId !== sourceId) await loadSearchFacets(sourceId);
+    await runCombinedSearch(sourceId);
+  });
+});
+
+searchSemanticQuery.addEventListener("keydown", (event) => {
+  if (event.key !== "Enter") return;
+  event.preventDefault();
+  runSearchButton.click();
+});
+
+resetSearchButton.addEventListener("click", () => {
+  const sourceId = selectedSourceId();
+  clearSearchControls();
+  if (sourceId === null) return;
+  void runSafely(() => runCombinedSearch(sourceId));
+});
+
 refreshButton.addEventListener("click", () => void runSafely(refreshCatalog));
 
 window.imageSorter.catalog.onProgress((progress) => {
@@ -2022,8 +3796,50 @@ window.imageSorter.catalog.onProgress((progress) => {
   progressText.textContent = progress.message;
 });
 
-window.imageSorter.analysis.onStatus(renderAnalysisStatus);
-window.imageSorter.analysis.onPipelineStatus(renderPipelineStatus);
+window.imageSorter.catalog.onWatchEvent((event) => {
+  updateCatalogWatchSnapshot(event);
+  renderCatalogWatchState();
+
+  if (event.sourceId !== selectedSourceId()) return;
+
+  if (event.kind === "CHANGE_DETECTED" || event.kind === "SCAN_STARTED") {
+    progressBar.classList.add("active");
+    progressText.textContent = event.message;
+  }
+
+  if (event.kind === "SCAN_FINISHED") {
+    progressBar.classList.remove("active");
+    progressText.textContent = event.message;
+
+    if (
+      !scanning &&
+      !restoring &&
+      !resetting &&
+      !isEditingPersonView() &&
+      !isEditingPetView()
+    ) {
+      void runSafely(refreshCatalog);
+    }
+  }
+
+  if (event.kind === "ERROR") {
+    progressBar.classList.remove("active");
+    progressText.textContent = event.message;
+  }
+});
+
+window.imageSorter.analysis.onStatus((status) => {
+  renderAnalysisStatus(status);
+  renderQwenBenchmarkProgress(status);
+});
+window.imageSorter.analysis.onQwenBenchmarkStage((stage) => {
+  if (qwenBenchmarkDialog.open || qwenBenchmarkRunning) {
+    renderQwenBenchmarkStage(stage);
+  }
+});
+window.imageSorter.analysis.onPipelineStatus(() => {
+  scheduleSelectedPipelineRefresh();
+});
 
 window.imageSorter.people.onUpdated(() => {
   const sourceId = selectedSourceId();
@@ -2056,7 +3872,12 @@ window.imageSorter.pets.onUpdated(() => {
 });
 
 void window.imageSorter.analysis
-  .getPipelineStatus()
+  .getAutomaticQwenState()
+  .then((state) => renderAutomaticQwenState(state.enabled))
+  .catch(() => renderAutomaticQwenState(false));
+
+void window.imageSorter.analysis
+  .getPipelineStatus(selectedSourceId() ?? undefined)
   .then(renderPipelineStatus)
   .catch(() => {
     renderPipelineStatus({
@@ -2067,7 +3888,9 @@ void window.imageSorter.analysis
       faceEmbeddings: { pending: 0, running: 0, done: 0, failed: 0, unavailable: 0 },
       petDetection: { pending: 0, running: 0, done: 0, failed: 0, unavailable: 0 },
       petFusion: { pending: 0, running: 0, done: 0, failed: 0, unavailable: 0 },
-      petEmbeddings: { pending: 0, running: 0, done: 0, failed: 0, unavailable: 0 }
+      petEmbeddings: { pending: 0, running: 0, done: 0, failed: 0, unavailable: 0 },
+      objectVerification: { pending: 0, running: 0, done: 0, failed: 0, unavailable: 0 },
+      semanticEmbeddings: { pending: 0, running: 0, done: 0, failed: 0, unavailable: 0 }
     });
   });
 
@@ -2089,7 +3912,9 @@ void window.imageSorter.analysis
   });
 
 void runSafely(async () => {
+  catalogWatchSnapshot = await window.imageSorter.catalog.getWatchSnapshot();
   await loadSources();
+  renderCatalogWatchState();
   workerState.textContent = "Katalog-Worker aktiv";
   workerState.classList.add("ready");
 });
