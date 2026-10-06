@@ -403,6 +403,7 @@ export type FaceEmbeddingForClustering = {
 export type FaceEmbeddingSet = {
   revision: string;
   needsRebuild: boolean;
+  algorithmChanged: boolean;
   faces: FaceEmbeddingForClustering[];
   cannotLinks: Array<{
     faceAId: number;
