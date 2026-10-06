@@ -106,6 +106,8 @@ export class AnalysisService {
   private readonly pending = new Map<string, Pending>();
   private stopping = false;
   private qwenServerPid: number | null = null;
+  private qwen3vl4bAvailable = false;
+  private qwen3vl4bIssue: string | null = "Qwen3-VL 4B wurde noch nicht geprüft.";
   private status: AnalysisWorkerStatus = { ...DEFAULT_STATUS };
 
   constructor(
@@ -182,6 +184,14 @@ export class AnalysisService {
 
   getStatus(): AnalysisWorkerStatus {
     return { ...this.status };
+  }
+
+  isQwen3vl4bAvailable(): boolean {
+    return this.qwen3vl4bAvailable;
+  }
+
+  getQwen3vl4bIssue(): string | null {
+    return this.qwen3vl4bIssue;
   }
 
   private publish(patch: Partial<AnalysisWorkerStatus>): void {
@@ -338,18 +348,35 @@ export class AnalysisService {
           );
         }
 
-        // Qwen3-VL 4B ist jetzt reguläre automatische Katalogstufe.
-        // Ohne das 4B-GGUF oder llama.cpp wäre die Queue dauerhaft fehlerhaft,
-        // deshalb wird die Verfügbarkeit bereits beim Worker-Start geprüft.
-        if (
-          capabilities.qwen3vl4bModel !== true ||
-          capabilities.qwen3vl4bRuntime !== true ||
-          capabilities.qwen3vl4bBenchmark !== true
-        ) {
-          throw new Error(
-            "Qwen3-VL 4B Instruct Q4_K_M oder llama.cpp fehlt für die automatische " +
-            "Kataloganalyse. Bitte 'npm.cmd run setup:ai' ausführen."
-          );
+        const qwen4bModelReady = capabilities.qwen3vl4bModel === true;
+        const qwen4bRuntimeReady = capabilities.qwen3vl4bRuntime === true;
+        const qwen4bBenchmarkReady = capabilities.qwen3vl4bBenchmark === true;
+        this.qwen3vl4bAvailable =
+          qwen4bModelReady && qwen4bRuntimeReady && qwen4bBenchmarkReady;
+
+        if (this.qwen3vl4bAvailable) {
+          this.qwen3vl4bIssue = null;
+          this.devLog("QWEN4B_CAPABILITY_READY", {
+            diagnostics: capabilities.qwen3vl4bDiagnostics ?? null
+          });
+        } else {
+          const missing: string[] = [];
+          if (!qwen4bModelReady) missing.push("4B-GGUF/Projektor");
+          if (!qwen4bRuntimeReady) missing.push("llama.cpp");
+          if (!qwen4bBenchmarkReady && qwen4bModelReady && qwen4bRuntimeReady) {
+            missing.push("Vision-Fähigkeit");
+          }
+
+          this.qwen3vl4bIssue =
+            "Qwen3-VL 4B pausiert: " +
+            (missing.length > 0 ? missing.join(", ") + " nicht verfügbar." : "nicht verfügbar.");
+
+          this.devLog("QWEN4B_OPTIONAL_UNAVAILABLE", {
+            qwen3vl4bModel: qwen4bModelReady,
+            qwen3vl4bRuntime: qwen4bRuntimeReady,
+            qwen3vl4bBenchmark: qwen4bBenchmarkReady,
+            diagnostics: capabilities.qwen3vl4bDiagnostics ?? null
+          });
         }
 
         // Das frühere 8B-Modell bleibt nur Legacy/optional. Es wird von der
@@ -377,7 +404,9 @@ export class AnalysisService {
         this.applyWorkerResult(configured);
         this.publish({
           state: "READY",
-          message: "Analyse-Worker läuft getrennt im Hintergrund."
+          message: this.qwen3vl4bAvailable
+            ? "Analyse-Worker läuft getrennt im Hintergrund."
+            : "Analyse-Worker läuft. " + (this.qwen3vl4bIssue ?? "Qwen3-VL 4B ist pausiert.")
         });
         this.devLog("START_READY", {
           totalElapsedMs: Date.now() - startAt,
