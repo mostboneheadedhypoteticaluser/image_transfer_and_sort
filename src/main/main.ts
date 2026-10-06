@@ -723,18 +723,81 @@ function registerIpc(): void {
     return { opened: true };
   });
 
-  ipcMain.handle("analysis:getPipelineStatus", (): PipelineStatus => ({
-    technical: { ...pipelineStatus.technical },
-    thumbnails: { ...pipelineStatus.thumbnails },
-    imageMetadata: { ...pipelineStatus.imageMetadata },
-    faces: { ...pipelineStatus.faces },
-    faceEmbeddings: { ...pipelineStatus.faceEmbeddings },
-    petDetection: { ...pipelineStatus.petDetection },
-    petFusion: { ...pipelineStatus.petFusion },
-    petEmbeddings: { ...pipelineStatus.petEmbeddings },
-    objectVerification: { ...pipelineStatus.objectVerification },
-    semanticEmbeddings: { ...pipelineStatus.semanticEmbeddings }
-  }));
+  ipcMain.handle(
+    "analysis:getPipelineStatus",
+    async (_event, sourceId?: number): Promise<PipelineStatus> => {
+      if (sourceId === undefined) {
+        return {
+          technical: { ...pipelineStatus.technical },
+          thumbnails: { ...pipelineStatus.thumbnails },
+          imageMetadata: { ...pipelineStatus.imageMetadata },
+          faces: { ...pipelineStatus.faces },
+          faceEmbeddings: { ...pipelineStatus.faceEmbeddings },
+          petDetection: { ...pipelineStatus.petDetection },
+          petFusion: { ...pipelineStatus.petFusion },
+          petEmbeddings: { ...pipelineStatus.petEmbeddings },
+          objectVerification: { ...pipelineStatus.objectVerification },
+          semanticEmbeddings: { ...pipelineStatus.semanticEmbeddings }
+        };
+      }
+
+      const queue = (module: string) =>
+        catalog!.request<AnalysisQueueStats>("getAnalysisQueueStats", {
+          sourceId,
+          module
+        });
+
+      const [
+        technical,
+        thumbnails,
+        imageMetadata,
+        faces,
+        faceEmbeddings,
+        petNanoDet,
+        petYolox,
+        petFusion,
+        petEmbeddings,
+        semanticEmbeddings,
+        objectVerification
+      ] = await Promise.all([
+        queue("file-probe-v1"),
+        queue("thumbnail-v1"),
+        queue("image-metadata-v1"),
+        queue("face-detect-yunet-v1"),
+        queue("face-embed-sface-v1"),
+        queue("pet-detect-nanodet-v1"),
+        queue("pet-detect-yolox-v1"),
+        queue("pet-fuse-ensemble-v1"),
+        queue("pet-embed-dogreid-v1"),
+        queue("semantic-embed-siglip2-v1"),
+        queue("catalog-semantic-qwen3vl4b-v3")
+      ]);
+
+      const combine = (
+        left: AnalysisQueueStats,
+        right: AnalysisQueueStats
+      ): AnalysisQueueStats => ({
+        pending: left.pending + right.pending,
+        running: left.running + right.running,
+        done: left.done + right.done,
+        failed: left.failed + right.failed,
+        unavailable: left.unavailable + right.unavailable
+      });
+
+      return {
+        technical,
+        thumbnails,
+        imageMetadata,
+        faces,
+        faceEmbeddings,
+        petDetection: combine(petNanoDet, petYolox),
+        petFusion,
+        petEmbeddings,
+        objectVerification,
+        semanticEmbeddings
+      };
+    }
+  );
 
   ipcMain.handle(
     "people:getOverview",
