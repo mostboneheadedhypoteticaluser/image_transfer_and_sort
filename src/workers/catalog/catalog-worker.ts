@@ -5908,7 +5908,7 @@ function autoAssignKnownPetCandidates(sourceId: number) {
 }
 
 function listPetCandidates(sourceId: number, requestedLimit: number) {
-  const limit = Math.max(1, Math.min(500, Math.trunc(requestedLimit || 100)));
+  const limit = Math.max(1, Math.min(2000, Math.trunc(requestedLimit || 500)));
 
   const candidates = db.prepare(`
     SELECT
@@ -5917,12 +5917,13 @@ function listPetCandidates(sourceId: number, requestedLimit: number) {
       pc.representative_pet_id,
       pc.average_similarity,
       pc.min_similarity,
-      COUNT(pci.pet_detection_id) AS detection_count
+      COUNT(pci.pet_detection_id) AS detection_count,
+      MAX(pci.pet_detection_id) AS newest_pet_id
     FROM pet_candidates pc
     JOIN pet_candidate_items pci ON pci.candidate_id=pc.id
     WHERE pc.source_id=?
     GROUP BY pc.id
-    ORDER BY detection_count DESC, pc.average_similarity DESC, pc.id ASC
+    ORDER BY newest_pet_id DESC, detection_count DESC, pc.average_similarity DESC
     LIMIT ?
   `).all(sourceId, limit);
 
@@ -6004,6 +6005,7 @@ function listPetCandidates(sourceId: number, requestedLimit: number) {
       id: candidateId,
       petClass: String(candidate.pet_class),
       detectionCount: Number(candidate.detection_count),
+      newestPetId: Number(candidate.newest_pet_id),
       representativePetId,
       averageSimilarity: Number(candidate.average_similarity),
       minSimilarity: Number(candidate.min_similarity),
@@ -7109,6 +7111,7 @@ function listPersonCandidates(sourceId: number, requestedLimit: number) {
     return {
       id: Number(candidate.id),
       faceCount: Number(candidate.face_count),
+      newestFaceId: Number(candidate.newest_face_id),
       representativeFaceId,
       averageSimilarity: Number(candidate.average_similarity),
       minSimilarity: Number(candidate.min_similarity),
