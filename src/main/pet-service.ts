@@ -14,7 +14,7 @@ import type {
 import { AnalysisService } from "./analysis-service";
 import { CatalogService } from "./catalog-service";
 
-const ALGORITHM_VERSION = "dogreid-centroid-v1";
+const ALGORITHM_VERSION = "dogreid-complete-link-v2";
 
 type ClusterWorkerResult = {
   algorithm: string;
@@ -39,7 +39,8 @@ export class PetService {
   async getOverview(
     sourceId: number,
     forceRefresh = false,
-    allowWhilePending = false
+    allowWhilePending = false,
+    rebuildIfNeeded = true
   ): Promise<PetOverview> {
     const queue = await this.catalog.request<AnalysisQueueStats>(
       "getAnalysisQueueStats",
@@ -63,7 +64,11 @@ export class PetService {
         }
       );
 
-      if (forceRefresh || set.needsRebuild) {
+      if (
+        forceRefresh ||
+        set.algorithmChanged ||
+        (rebuildIfNeeded && set.needsRebuild)
+      ) {
         const clustered = await this.analysis.request<ClusterWorkerResult>(
           "cluster_pet_embeddings",
           {
@@ -96,6 +101,20 @@ export class PetService {
           writtenItems: replaced.writtenPets,
           ungroupedItems: Math.max(0, set.pets.length - replaced.writtenPets)
         });
+
+        const expectedGroupedPets = clustered.clusters.reduce(
+          (sum, cluster) => sum + cluster.members.length,
+          0
+        );
+        if (replaced.writtenPets !== expectedGroupedPets) {
+          throw new Error(
+            "Hundegruppierung wollte " +
+            expectedGroupedPets +
+            " Fundstellen in echten Gruppen speichern, aber " +
+            replaced.writtenPets +
+            " wurden geschrieben."
+          );
+        }
       }
 
       await this.catalog.request("autoAssignKnownPetCandidates", { sourceId });
@@ -115,7 +134,11 @@ export class PetService {
       pets,
       clusteringPending,
       candidateTotal: stats.petCandidates,
-      candidateDetectionTotal: stats.petCandidateDetections
+      candidateDetectionTotal: stats.petCandidateDetections,
+      ungroupedDetectionTotal: Math.max(
+        0,
+        stats.unassignedDogEmbeddings - stats.petCandidateDetections
+      )
     };
   }
 
@@ -125,7 +148,11 @@ export class PetService {
 
     const overviews: PetOverview[] = [];
     for (const source of enabledSources) {
-      overviews.push(await this.getOverview(source.id, forceRefresh, false));
+      // Normales Öffnen ist read-only; nur explizites Aktualisieren oder ein
+      // Algorithmuswechsel darf synchron neu gruppieren.
+      overviews.push(
+        await this.getOverview(source.id, forceRefresh, false, forceRefresh)
+      );
     }
 
     const petMap = new Map<number, PetRecord>();
@@ -163,9 +190,9 @@ export class PetService {
       .flatMap((overview) => overview.candidates)
       .sort(
         (a, b) =>
-          b.newestPetId - a.newestPetId ||
           b.detectionCount - a.detectionCount ||
-          b.averageSimilarity - a.averageSimilarity
+          b.averageSimilarity - a.averageSimilarity ||
+          b.newestPetId - a.newestPetId
       )
       .slice(0, 500);
 
@@ -181,6 +208,10 @@ export class PetService {
       ),
       candidateDetectionTotal: overviews.reduce(
         (sum, overview) => sum + overview.candidateDetectionTotal,
+        0
+      ),
+      ungroupedDetectionTotal: overviews.reduce(
+        (sum, overview) => sum + overview.ungroupedDetectionTotal,
         0
       )
     };
@@ -198,11 +229,12 @@ export class PetService {
   async confirmCandidate(
     candidateId: number,
     name: string,
-    rejectedPetId?: number
+    rejectedPetId?: number,
+    fallbackPetDetectionId?: number
   ): Promise<ConfirmPetResult> {
     return this.catalog.request<ConfirmPetResult>(
       "confirmPetCandidate",
-      { candidateId, name, rejectedPetId }
+      { candidateId, name, rejectedPetId, fallbackPetDetectionId }
     );
   }
 
