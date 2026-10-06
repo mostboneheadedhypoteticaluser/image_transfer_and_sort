@@ -843,6 +843,8 @@ def extract_face_embeddings(file_path: str, faces: list[dict]) -> dict:
 
     recognizer = cv2.FaceRecognizerSF.create(SFACE_MODEL, "")
     embeddings: list[dict] = []
+    skipped = 0
+    first_errors: list[str] = []
 
     for face in faces:
         if not isinstance(face, dict):
@@ -870,19 +872,27 @@ def extract_face_embeddings(file_path: str, faces: list[dict]) -> dict:
             ])
 
         if not valid_landmarks:
+            skipped += 1
             continue
 
+        # FaceRecognizerSF.alignCrop erwartet die vollständige YuNet-face_box:
+        # x, y, w, h, fünf Landmarken und abschließend den Score.
+        values.append(float(face.get("score", 0.0)))
         detection = np.asarray(values, dtype=np.float32)
 
         try:
             aligned = recognizer.alignCrop(image, detection)
             feature = recognizer.feature(aligned)
-        except Exception:
+        except Exception as exc:
+            skipped += 1
+            if len(first_errors) < 3:
+                first_errors.append(str(exc))
             continue
 
         vector = np.asarray(feature, dtype=np.float32).reshape(-1)
         norm = float(np.linalg.norm(vector))
         if not math.isfinite(norm) or norm <= 0.0:
+            skipped += 1
             continue
 
         vector = vector / norm
@@ -891,6 +901,15 @@ def extract_face_embeddings(file_path: str, faces: list[dict]) -> dict:
             "faceDetectionId": int(face.get("id", 0)),
             "vector": [float(value) for value in vector.tolist()],
         })
+
+    dev_log(
+        "FACE_EMBED_RESULT",
+        target=file_path,
+        inputFaces=len(faces),
+        embeddings=len(embeddings),
+        skipped=skipped,
+        firstErrors=first_errors,
+    )
 
     return {
         "module": "face-embed-sface-v1",
@@ -1675,6 +1694,15 @@ def extract_dog_embeddings(file_path: str, pets: list[dict]) -> dict:
     ]
 
     if not dog_pets:
+        dev_log(
+            "DOG_EMBED_RESULT",
+            target=file_path,
+            inputPets=len(pets),
+            inputDogs=0,
+            embeddings=0,
+            skipped=0,
+            firstErrors=[],
+        )
         return {
             "module": "pet-embed-dogreid-v1",
             "model": "DogReID DINOv2-B14 0.2.0",
@@ -1694,6 +1722,8 @@ def extract_dog_embeddings(file_path: str, pets: list[dict]) -> dict:
     std = np.asarray([0.229, 0.224, 0.225], dtype=np.float32).reshape(1, 1, 3)
 
     embeddings: list[dict] = []
+    skipped = 0
+    first_errors: list[str] = []
 
     for pet in dog_pets:
 
@@ -1723,8 +1753,21 @@ def extract_dog_embeddings(file_path: str, pets: list[dict]) -> dict:
                 "petDetectionId": pet_detection_id,
                 "vector": [float(value) for value in vector.tolist()],
             })
-        except Exception:
+        except Exception as exc:
+            skipped += 1
+            if len(first_errors) < 3:
+                first_errors.append(str(exc))
             continue
+
+    dev_log(
+        "DOG_EMBED_RESULT",
+        target=file_path,
+        inputPets=len(pets),
+        inputDogs=len(dog_pets),
+        embeddings=len(embeddings),
+        skipped=skipped,
+        firstErrors=first_errors,
+    )
 
     return {
         "module": "pet-embed-dogreid-v1",
