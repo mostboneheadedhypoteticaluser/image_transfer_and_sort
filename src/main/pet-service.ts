@@ -24,6 +24,11 @@ type ClusterWorkerResult = {
   clusters: PetClusterInput[];
 };
 
+type ReplacePetCandidatesResult = {
+  writtenClusters: number;
+  writtenPets: number;
+};
+
 export class PetService {
   constructor(
     private readonly catalog: CatalogService,
@@ -70,11 +75,25 @@ export class PetService {
           120000
         );
 
-        await this.catalog.request("replacePetCandidates", {
+        const replaced =
+          await this.catalog.request<ReplacePetCandidatesResult>(
+            "replacePetCandidates",
+            {
+              sourceId,
+              revision: set.revision,
+              algorithmVersion: ALGORITHM_VERSION,
+              clusters: clustered.clusters
+            }
+          );
+
+        this.analysis.logDiagnostic("IDENTITY_CLUSTER_RESULT", {
+          identity: "pets",
           sourceId,
-          revision: set.revision,
-          algorithmVersion: ALGORITHM_VERSION,
-          clusters: clustered.clusters
+          inputEmbeddings: set.pets.length,
+          workerClusters: clustered.clusterCount,
+          writtenClusters: replaced.writtenClusters,
+          writtenItems: replaced.writtenPets,
+          ungroupedItems: Math.max(0, set.pets.length - replaced.writtenPets)
         });
       }
 
