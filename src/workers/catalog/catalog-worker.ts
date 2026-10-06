@@ -881,9 +881,11 @@ function getStats(sourceId: number) {
           SELECT pc.id
           FROM person_candidates pc
           JOIN person_candidate_faces pcf ON pcf.candidate_id=pc.id
+          JOIN face_detections fd ON fd.id=pcf.face_detection_id
+          JOIN media_items m ON m.id=fd.media_id
           WHERE pc.source_id=?
           GROUP BY pc.id
-          HAVING COUNT(pcf.face_detection_id) >= 2
+          HAVING COUNT(DISTINCT m.sha256 || ':' || fd.detection_index) >= 2
         )
       ) AS candidate_count,
       (
@@ -892,9 +894,11 @@ function getStats(sourceId: number) {
           SELECT COUNT(pcf.face_detection_id) AS face_count
           FROM person_candidates pc
           JOIN person_candidate_faces pcf ON pcf.candidate_id=pc.id
+          JOIN face_detections fd ON fd.id=pcf.face_detection_id
+          JOIN media_items m ON m.id=fd.media_id
           WHERE pc.source_id=?
           GROUP BY pc.id
-          HAVING COUNT(pcf.face_detection_id) >= 2
+          HAVING COUNT(DISTINCT m.sha256 || ':' || fd.detection_index) >= 2
         )
       ) AS candidate_face_count,
       (
@@ -921,9 +925,11 @@ function getStats(sourceId: number) {
           SELECT pc.id
           FROM pet_candidates pc
           JOIN pet_candidate_items pci ON pci.candidate_id=pc.id
+          JOIN pet_fused_detections pd ON pd.id=pci.pet_detection_id
+          JOIN media_items m ON m.id=pd.media_id
           WHERE pc.source_id=?
           GROUP BY pc.id
-          HAVING COUNT(pci.pet_detection_id) >= 2
+          HAVING COUNT(DISTINCT m.sha256 || ':' || pd.detection_index) >= 2
         )
       ) AS candidate_count,
       (
@@ -932,9 +938,11 @@ function getStats(sourceId: number) {
           SELECT COUNT(pci.pet_detection_id) AS detection_count
           FROM pet_candidates pc
           JOIN pet_candidate_items pci ON pci.candidate_id=pc.id
+          JOIN pet_fused_detections pd ON pd.id=pci.pet_detection_id
+          JOIN media_items m ON m.id=pd.media_id
           WHERE pc.source_id=?
           GROUP BY pc.id
-          HAVING COUNT(pci.pet_detection_id) >= 2
+          HAVING COUNT(DISTINCT m.sha256 || ':' || pd.detection_index) >= 2
         )
       ) AS candidate_detection_count,
       (
@@ -5955,9 +5963,11 @@ function listPetCandidates(sourceId: number, requestedLimit: number) {
       MAX(pci.pet_detection_id) AS newest_pet_id
     FROM pet_candidates pc
     JOIN pet_candidate_items pci ON pci.candidate_id=pc.id
+    JOIN pet_fused_detections pd ON pd.id=pci.pet_detection_id
+    JOIN media_items m ON m.id=pd.media_id
     WHERE pc.source_id=?
     GROUP BY pc.id
-    HAVING COUNT(pci.pet_detection_id) >= 2
+    HAVING COUNT(DISTINCT m.sha256 || ':' || pd.detection_index) >= 2
     ORDER BY detection_count DESC, pc.average_similarity DESC, newest_pet_id DESC
     LIMIT ?
   `).all(sourceId, limit);
@@ -7157,9 +7167,11 @@ function listPersonCandidates(sourceId: number, requestedLimit: number) {
       MAX(pcf.face_detection_id) AS newest_face_id
     FROM person_candidates pc
     JOIN person_candidate_faces pcf ON pcf.candidate_id=pc.id
+    JOIN face_detections fd ON fd.id=pcf.face_detection_id
+    JOIN media_items m ON m.id=fd.media_id
     WHERE pc.source_id=?
     GROUP BY pc.id
-    HAVING COUNT(pcf.face_detection_id) >= 2
+    HAVING COUNT(DISTINCT m.sha256 || ':' || fd.detection_index) >= 2
     -- Bestätigung ist nach Gruppengröße priorisiert; bei Gleichstand kommt
     -- die Gruppe mit dem jüngsten Gesicht zuerst.
     ORDER BY face_count DESC, pc.average_similarity DESC, newest_face_id DESC
