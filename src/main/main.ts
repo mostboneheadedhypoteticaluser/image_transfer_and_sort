@@ -830,9 +830,14 @@ function registerIpc(): void {
     (
       _event,
       candidateId: number,
-      name: string
+      name: string,
+      fallbackFaceDetectionId?: number
     ): Promise<ConfirmPersonResult> =>
-      personService!.confirmCandidate(candidateId, name)
+      personService!.confirmCandidate(
+        candidateId,
+        name,
+        fallbackFaceDetectionId
+      )
   );
 
   ipcMain.handle(
