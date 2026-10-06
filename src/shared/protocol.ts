@@ -452,6 +452,8 @@ export type PersonOverview = {
   candidates: PersonCandidate[];
   persons: PersonRecord[];
   clusteringPending: boolean;
+  candidateTotal: number;
+  candidateFaceTotal: number;
 };
 
 export type ConfirmPersonResult = {
