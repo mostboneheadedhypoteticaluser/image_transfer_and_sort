@@ -20,6 +20,24 @@ import type {
 
 type CatalogView = "media" | "search" | "duplicates" | "people" | "pets" | "recycle";
 
+type IdentityTabStats = Pick<
+  CatalogStats,
+  | "personCandidates"
+  | "personCandidateFaces"
+  | "detectedFaces"
+  | "embeddedFaces"
+  | "unassignedFaceEmbeddings"
+  | "persons"
+  | "assignedPersonFaces"
+  | "petCandidates"
+  | "petCandidateDetections"
+  | "fusedDogs"
+  | "embeddedDogs"
+  | "unassignedDogEmbeddings"
+  | "pets"
+  | "assignedPetDetections"
+>;
+
 const sourceSelect = document.querySelector<HTMLSelectElement>("#sourceSelect")!;
 const addSourceButton = document.querySelector<HTMLButtonElement>("#addSource")!;
 const scanButton = document.querySelector<HTMLButtonElement>("#scanSource")!;
@@ -151,6 +169,7 @@ let lastSemanticDone = -1;
 let lastPipelineIssueTotal = -1;
 let analysisRefreshTimer: number | null = null;
 let sourcePipelineRefreshTimer: number | null = null;
+let identityStatsRefreshTimer: number | null = null;
 let searchFacetsSourceId: number | null = null;
 let latestAnalysisStatus: AnalysisWorkerStatus | null = null;
 let qwenBenchmarkSelectedPath: string | null = null;
@@ -2040,13 +2059,14 @@ function renderDuplicateGroups(groups: DuplicateGroup[]): void {
   duplicateGroups.appendChild(fragment);
 }
 
-function renderIdentityTabStats(stats: CatalogStats): void {
+function renderIdentityTabStats(stats: IdentityTabStats): void {
   peopleTabCount.textContent =
     stats.personCandidates.toLocaleString("de-DE") +
     " Gr. · " +
     stats.unassignedFaceEmbeddings.toLocaleString("de-DE") +
     " Ges.";
   peopleTabCount.title =
+    "Gesamt über alle aktiven Quellen · " +
     stats.personCandidates.toLocaleString("de-DE") +
     " unbestätigte Personengruppen mit " +
     stats.personCandidateFaces.toLocaleString("de-DE") +
@@ -2068,6 +2088,7 @@ function renderIdentityTabStats(stats: CatalogStats): void {
     stats.unassignedDogEmbeddings.toLocaleString("de-DE") +
     " Hunde";
   petsTabCount.title =
+    "Gesamt über alle aktiven Quellen · " +
     stats.petCandidates.toLocaleString("de-DE") +
     " unbestätigte Hundegruppen mit " +
     stats.petCandidateDetections.toLocaleString("de-DE") +
@@ -2082,6 +2103,64 @@ function renderIdentityTabStats(stats: CatalogStats): void {
     " bestätigte Haustiere mit " +
     stats.assignedPetDetections.toLocaleString("de-DE") +
     " zugeordneten Fundstellen";
+}
+
+async function refreshIdentityTabStats(): Promise<void> {
+  const enabledSources = sources.filter((source) => source.enabled);
+  const aggregate: IdentityTabStats = {
+    personCandidates: 0,
+    personCandidateFaces: 0,
+    detectedFaces: 0,
+    embeddedFaces: 0,
+    unassignedFaceEmbeddings: 0,
+    persons: 0,
+    assignedPersonFaces: 0,
+    petCandidates: 0,
+    petCandidateDetections: 0,
+    fusedDogs: 0,
+    embeddedDogs: 0,
+    unassignedDogEmbeddings: 0,
+    pets: 0,
+    assignedPetDetections: 0
+  };
+
+  const statsList = await Promise.all(
+    enabledSources.map((source) =>
+      window.imageSorter.catalog.getStats(source.id)
+    )
+  );
+
+  for (const stats of statsList) {
+    aggregate.personCandidates += stats.personCandidates;
+    aggregate.personCandidateFaces += stats.personCandidateFaces;
+    aggregate.detectedFaces += stats.detectedFaces;
+    aggregate.embeddedFaces += stats.embeddedFaces;
+    aggregate.unassignedFaceEmbeddings += stats.unassignedFaceEmbeddings;
+    aggregate.persons += stats.persons;
+    aggregate.assignedPersonFaces += stats.assignedPersonFaces;
+    aggregate.petCandidates += stats.petCandidates;
+    aggregate.petCandidateDetections += stats.petCandidateDetections;
+    aggregate.fusedDogs += stats.fusedDogs;
+    aggregate.embeddedDogs += stats.embeddedDogs;
+    aggregate.unassignedDogEmbeddings += stats.unassignedDogEmbeddings;
+    aggregate.pets += stats.pets;
+    aggregate.assignedPetDetections += stats.assignedPetDetections;
+  }
+
+  renderIdentityTabStats(aggregate);
+}
+
+function scheduleIdentityTabStatsRefresh(): void {
+  if (identityStatsRefreshTimer !== null) {
+    window.clearTimeout(identityStatsRefreshTimer);
+  }
+
+  identityStatsRefreshTimer = window.setTimeout(() => {
+    identityStatsRefreshTimer = null;
+    void refreshIdentityTabStats().catch(() => {
+      // Live-Zähler dürfen die Oberfläche bei einem kurzzeitigen DB-Fehler nicht blockieren.
+    });
+  }, 750);
 }
 
 function renderPersonOverview(overview: PersonOverview): void {
@@ -2185,7 +2264,7 @@ function renderPersonOverview(overview: PersonOverview): void {
               if (sourceId !== null) {
                 await loadPersonOverview(sourceId, true);
                 const stats = await window.imageSorter.catalog.getStats(sourceId);
-                renderIdentityTabStats(stats);
+                await refreshIdentityTabStats();
               }
 
               progressText.textContent =
@@ -2508,7 +2587,7 @@ async function loadPersonOverview(
     );
     renderPersonOverview(overview);
     const stats = await window.imageSorter.catalog.getStats(sourceId);
-    renderIdentityTabStats(stats);
+    await refreshIdentityTabStats();
   } finally {
     refreshPeopleButton.disabled = false;
   }
@@ -2726,7 +2805,7 @@ function renderPetOverview(overview: PetOverview): void {
           if (sourceId !== null) {
             await loadPetOverview(sourceId, true);
             const stats = await window.imageSorter.catalog.getStats(sourceId);
-            renderIdentityTabStats(stats);
+            await refreshIdentityTabStats();
           }
         } catch (error) {
           progressText.textContent =
@@ -3029,7 +3108,7 @@ async function loadPetOverview(
     );
     renderPetOverview(overview);
     const stats = await window.imageSorter.catalog.getStats(sourceId);
-    renderIdentityTabStats(stats);
+    await refreshIdentityTabStats();
   } finally {
     refreshPetsButton.disabled = false;
   }
@@ -3268,7 +3347,7 @@ async function refreshCatalog(): Promise<void> {
   lastScan.textContent = stats.lastScan ?? "—";
   mediaTabCount.textContent = stats.total.toLocaleString("de-DE");
   duplicateTabCount.textContent = stats.duplicateGroups.toLocaleString("de-DE");
-  renderIdentityTabStats(stats);
+  await refreshIdentityTabStats();
   recycleTabCount.textContent = stats.recycleBin.toLocaleString("de-DE");
 
   if (currentView === "duplicates") {
@@ -3474,7 +3553,7 @@ refreshPeopleButton.addEventListener("click", () => {
     personStatus.textContent = "Personenvorschläge werden neu berechnet …";
     await loadPersonOverview(sourceId, true);
     const stats = await window.imageSorter.catalog.getStats(sourceId);
-    renderIdentityTabStats(stats);
+    await refreshIdentityTabStats();
   });
 });
 
@@ -3486,7 +3565,7 @@ refreshPetsButton.addEventListener("click", () => {
     petStatus.textContent = "Hundegruppen werden neu berechnet …";
     await loadPetOverview(sourceId, true);
     const stats = await window.imageSorter.catalog.getStats(sourceId);
-    renderIdentityTabStats(stats);
+    await refreshIdentityTabStats();
   });
 });
 analysisDevLogButton.addEventListener("click", () => {
@@ -3846,6 +3925,7 @@ window.imageSorter.analysis.onQwenBenchmarkStage((stage) => {
 });
 window.imageSorter.analysis.onPipelineStatus(() => {
   scheduleSelectedPipelineRefresh();
+  scheduleIdentityTabStatsRefresh();
 });
 
 window.imageSorter.people.onUpdated(() => {
@@ -3854,7 +3934,7 @@ window.imageSorter.people.onUpdated(() => {
 
   void runSafely(async () => {
     const stats = await window.imageSorter.catalog.getStats(sourceId);
-    renderIdentityTabStats(stats);
+    await refreshIdentityTabStats();
 
     // Neue Vorschläge dürfen im Hintergrund entstehen, aber eine laufende
     // Eingabe wird niemals durch replaceChildren()/Neuaufbau unterbrochen.
@@ -3870,7 +3950,7 @@ window.imageSorter.pets.onUpdated(() => {
 
   void runSafely(async () => {
     const stats = await window.imageSorter.catalog.getStats(sourceId);
-    renderIdentityTabStats(stats);
+    await refreshIdentityTabStats();
 
     if (currentView === "pets" && !isEditingPetView()) {
       await loadPetOverview(sourceId);
