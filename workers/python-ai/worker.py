@@ -2209,7 +2209,7 @@ def cluster_face_embeddings(
     )
 
     return {
-        "algorithm": "person-anchor-centroid-v2",
+        "algorithm": "person-anchor-centroid-v3",
         "clusterThreshold": cluster_threshold,
         "verificationThreshold": verification_threshold,
         "minClusterSize": min_cluster_size,
