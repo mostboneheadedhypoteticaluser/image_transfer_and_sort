@@ -166,28 +166,44 @@ function schedulePersonRefresh(): void {
       return;
     }
 
-    const faceDoneAtStart = pipelineStatus.faceEmbeddings.done;
-    const petDoneAtStart = pipelineStatus.petEmbeddings.done;
-
     personRefreshRunning = true;
-    void Promise.all([
-      personService?.refreshAllSources() ?? Promise.resolve(),
-      petService?.refreshAllSources() ?? Promise.resolve()
-    ])
-      .then(() => {
-        groupedFaceEmbeddingsDone = Math.max(
-          groupedFaceEmbeddingsDone,
-          faceDoneAtStart
-        );
-        groupedPetEmbeddingsDone = Math.max(
-          groupedPetEmbeddingsDone,
-          petDoneAtStart
-        );
-        sendToRenderer("people:updated", {});
-        sendToRenderer("pets:updated", {});
-      })
+
+    void (async () => {
+      const faceChanged =
+        pipelineStatus.faceEmbeddings.done > groupedFaceEmbeddingsDone;
+      const petChanged =
+        pipelineStatus.petEmbeddings.done > groupedPetEmbeddingsDone;
+      const faceDoneAtStart = pipelineStatus.faceEmbeddings.done;
+      const petDoneAtStart = pipelineStatus.petEmbeddings.done;
+
+      await analysisCoordinator?.pauseForMaintenance();
+
+      try {
+        if (faceChanged && personService) {
+          // true = bewusst auch bei noch offener Embedding-Queue clustern.
+          await personService.refreshAllSources(true);
+          groupedFaceEmbeddingsDone = Math.max(
+            groupedFaceEmbeddingsDone,
+            faceDoneAtStart
+          );
+          sendToRenderer("people:updated", {});
+        }
+
+        if (petChanged && petService) {
+          await petService.refreshAllSources(true);
+          groupedPetEmbeddingsDone = Math.max(
+            groupedPetEmbeddingsDone,
+            petDoneAtStart
+          );
+          sendToRenderer("pets:updated", {});
+        }
+      } finally {
+        analysisCoordinator?.resumeAfterMaintenance();
+      }
+    })()
       .catch(() => {
-        // Kandidaten sind Komfortdaten; Analyse- und Medienansicht bleiben unabhängig.
+        // Bei einem temporären Clusterfehler bleiben die Done-Zähler bewusst
+        // unverändert; dadurch wird der nächste Sammellauf erneut versucht.
       })
       .finally(() => {
         personRefreshRunning = false;
