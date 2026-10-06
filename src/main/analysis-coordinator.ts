@@ -212,6 +212,19 @@ export class AnalysisCoordinator {
     this.timer = null;
   }
 
+  async waitUntilIdle(timeoutMs = 15000): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    while (this.pumping && Date.now() < deadline) {
+      await new Promise<void>((resolve) => setTimeout(resolve, 50));
+    }
+
+    if (this.pumping) {
+      throw new Error(
+        "Analyse-Pipeline konnte vor dem Datenbank-Reset nicht sauber angehalten werden."
+      );
+    }
+  }
+
   async pauseForMaintenance(): Promise<void> {
     this.maintenancePaused = true;
 
