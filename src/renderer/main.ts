@@ -2060,19 +2060,28 @@ function renderDuplicateGroups(groups: DuplicateGroup[]): void {
 }
 
 function renderIdentityTabStats(stats: IdentityTabStats): void {
+  const ungroupedFaces = Math.max(
+    0,
+    stats.unassignedFaceEmbeddings - stats.personCandidateFaces
+  );
+  const ungroupedDogs = Math.max(
+    0,
+    stats.unassignedDogEmbeddings - stats.petCandidateDetections
+  );
+
   peopleTabCount.textContent =
     stats.personCandidates.toLocaleString("de-DE") +
     " Gr. · " +
-    stats.unassignedFaceEmbeddings.toLocaleString("de-DE") +
+    stats.personCandidateFaces.toLocaleString("de-DE") +
     " Ges.";
   peopleTabCount.title =
     "Alle aktiven Quellen · " +
     stats.personCandidates.toLocaleString("de-DE") +
     " unbestätigte Personengruppen mit " +
     stats.personCandidateFaces.toLocaleString("de-DE") +
-    " gruppierten Gesichtern · " +
-    stats.unassignedFaceEmbeddings.toLocaleString("de-DE") +
-    " SFace-Gesichter warten insgesamt auf Zuordnung · " +
+    " Gesichtern in echten Gruppen · " +
+    ungroupedFaces.toLocaleString("de-DE") +
+    " Einzelgesichter aktuell ohne Gruppe · " +
     stats.embeddedFaces.toLocaleString("de-DE") +
     " Gesichtsmerkmale gespeichert · " +
     stats.detectedFaces.toLocaleString("de-DE") +
@@ -2085,16 +2094,16 @@ function renderIdentityTabStats(stats: IdentityTabStats): void {
   petsTabCount.textContent =
     stats.petCandidates.toLocaleString("de-DE") +
     " Gr. · " +
-    stats.unassignedDogEmbeddings.toLocaleString("de-DE") +
+    stats.petCandidateDetections.toLocaleString("de-DE") +
     " Hunde";
   petsTabCount.title =
     "Alle aktiven Quellen · " +
     stats.petCandidates.toLocaleString("de-DE") +
     " unbestätigte Hundegruppen mit " +
     stats.petCandidateDetections.toLocaleString("de-DE") +
-    " gruppierten Fundstellen · " +
-    stats.unassignedDogEmbeddings.toLocaleString("de-DE") +
-    " Dog-ReID-Fundstellen warten insgesamt auf Zuordnung · " +
+    " Fundstellen in echten Gruppen · " +
+    ungroupedDogs.toLocaleString("de-DE") +
+    " einzelne Hund-Fundstellen aktuell ohne Gruppe · " +
     stats.embeddedDogs.toLocaleString("de-DE") +
     " Hundemerkmale gespeichert · " +
     stats.fusedDogs.toLocaleString("de-DE") +
@@ -2177,7 +2186,7 @@ function renderPersonOverview(overview: PersonOverview): void {
   const candidateWindowText = candidateWindowTruncated
     ? "Gezeigt werden die " +
       overview.candidates.length.toLocaleString("de-DE") +
-      " neuesten von " +
+      " größten von " +
       overview.candidateTotal.toLocaleString("de-DE") +
       " Gruppen. "
     : overview.candidateTotal.toLocaleString("de-DE") +
@@ -2328,21 +2337,42 @@ function renderPersonOverview(overview: PersonOverview): void {
 
         input.disabled = true;
         button.disabled = true;
+        button.textContent = "Bestätige…";
+        progressText.textContent =
+          "Personengruppe wird als „" + name + "“ bestätigt …";
 
         try {
+          const fallbackFaceDetectionId =
+            candidate.representativeFaceId ??
+            candidate.faces[0]?.faceDetectionId;
+
           const result = await window.imageSorter.people.confirmCandidate(
             candidate.id,
-            name
+            name,
+            fallbackFaceDetectionId
           );
+          button.textContent = "Bestätigt ✓";
           progressText.textContent =
             `${result.name}: ${result.faceCount.toLocaleString("de-DE")} ` +
             `${result.faceCount === 1 ? "Gesicht bestätigt" : "Gesichter bestätigt"}.`;
-          await refreshCatalog();
+
+          const sourceId = selectedSourceId();
+          if (sourceId !== null) {
+            // Nur die Personenansicht neu laden. Das ist bewusst read-only und
+            // löst kein komplettes Re-Clustering tausender Gesichter aus.
+            await loadPersonOverview(sourceId);
+          } else {
+            card.remove();
+            await refreshIdentityTabStats();
+          }
         } catch (error) {
-          progressText.textContent =
+          const message =
             error instanceof Error ? error.message : String(error);
+          progressText.textContent = "Bestätigung fehlgeschlagen: " + message;
+          personStatus.textContent = "Bestätigung fehlgeschlagen: " + message;
           input.disabled = false;
           button.disabled = false;
+          button.textContent = "Erneut versuchen";
         }
       };
 
@@ -3121,7 +3151,6 @@ async function loadPetOverview(
       forceRefresh
     );
     renderPetOverview(overview);
-    const stats = await window.imageSorter.catalog.getStats(sourceId);
     await refreshIdentityTabStats();
   } finally {
     refreshPetsButton.disabled = false;
