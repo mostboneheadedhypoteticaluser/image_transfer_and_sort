@@ -124,6 +124,19 @@ const MODULES: ModuleSpec[] = [
   }
 ];
 
+const HEAVY_MODULE_NAMES = new Set([
+  "semantic-embed-siglip2-v1",
+  "catalog-semantic-qwen3vl4b-v3"
+]);
+
+const FAST_MODULES = MODULES.filter(
+  (spec) => !HEAVY_MODULE_NAMES.has(spec.module)
+);
+
+const HEAVY_MODULES = MODULES.filter(
+  (spec) => HEAVY_MODULE_NAMES.has(spec.module)
+);
+
 type PythonPipelineStats = Pick<
   PipelineStatus,
   | "technical"
@@ -159,6 +172,7 @@ export class AnalysisCoordinator {
   private pumping = false;
   private stopped = true;
   private benchmarkPaused = false;
+  private currentFastMediaId: number | null = null;
 
   // Die 4B-Kataloganalyse läuft wieder automatisch. Sie bleibt bewusst die
   // letzte Pipeline-Stufe, damit neue Bilder zuerst alle schnellen technischen,
@@ -191,6 +205,7 @@ export class AnalysisCoordinator {
 
   stop(): void {
     this.stopped = true;
+    this.currentFastMediaId = null;
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
   }
@@ -333,11 +348,50 @@ export class AnalysisCoordinator {
     return result;
   }
 
-  private async nextPendingSpec(): Promise<ModuleSpec | null> {
-    // Die Identitätsstufen stehen bewusst zuerst. Teure allgemeine Analysen
-    // folgen erst danach; Qwen3-VL ist als schwerste Stufe ganz zuletzt.
-    // Innerhalb einer Stufe bleibt das jeweilige Modell für die Bildserie geladen.
-    for (const spec of MODULES) {
+  private async claimFastJob(): Promise<{
+    spec: ModuleSpec;
+    job: AnalysisJob;
+  } | null> {
+    // Ein angefangenes Bild wird bewusst durch alle schnellen Stufen geführt,
+    // bevor ein anderes Bild an die Reihe kommt.
+    if (this.currentFastMediaId !== null) {
+      for (const spec of FAST_MODULES) {
+        const job = await this.catalog.request<AnalysisJob | null>(
+          "claimAnalysisJob",
+          {
+            module: spec.module,
+            mediaId: this.currentFastMediaId
+          }
+        );
+
+        if (job) return { spec, job };
+      }
+
+      this.currentFastMediaId = null;
+    }
+
+    // Danach beginnt das nächste Bild. Durch die Sortierung im Katalog-Worker
+    // werden neu hinzugekommene Bilder vor altem Backlog bevorzugt.
+    for (const spec of FAST_MODULES) {
+      const job = await this.catalog.request<AnalysisJob | null>(
+        "claimAnalysisJob",
+        { module: spec.module }
+      );
+
+      if (job) {
+        this.currentFastMediaId = job.mediaId;
+        return { spec, job };
+      }
+    }
+
+    return null;
+  }
+
+  private async nextHeavySpec(): Promise<ModuleSpec | null> {
+    // Schwere Stufen werden erst betrachtet, wenn kein schneller Job im
+    // gesamten Katalog mehr ausführbar ist. SigLIP2 steht vor Qwen4B, sodass
+    // zunächst alle Vektoren und erst danach die 5-fache 4B-Analyse laufen.
+    for (const spec of HEAVY_MODULES) {
       if (
         spec.module === "catalog-semantic-qwen3vl4b-v3" &&
         (
@@ -380,20 +434,28 @@ export class AnalysisCoordinator {
 
       if (totalRunning > 0) return;
 
-      const spec = await this.nextPendingSpec();
-      if (!spec) return;
+      let selection = await this.claimFastJob();
 
-      const job = await this.catalog.request<AnalysisJob | null>(
-        "claimAnalysisJob",
-        { module: spec.module }
-      );
+      if (!selection) {
+        const heavySpec = await this.nextHeavySpec();
+        if (heavySpec) {
+          const heavyJob = await this.catalog.request<AnalysisJob | null>(
+            "claimAnalysisJob",
+            { module: heavySpec.module }
+          );
 
-      // Ein abhängiger Job kann PENDING sein, obwohl seine Vorstufe noch läuft.
-      // Dann probieren wir beim nächsten Takt weiter, ohne ihn fälschlich zu starten.
-      if (!job) {
+          if (heavyJob) {
+            selection = { spec: heavySpec, job: heavyJob };
+          }
+        }
+      }
+
+      if (!selection) {
         await this.refreshAllStats();
         return;
       }
+
+      const { spec, job } = selection;
 
       const queued =
         stats.technical.pending +
