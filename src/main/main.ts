@@ -525,12 +525,27 @@ function registerIpc(): void {
 
   ipcMain.handle("catalog:resetCatalog", async () => {
     semanticTextCache.clear();
+    analysis?.logDiagnostic("CATALOG_RESET_BEGIN");
     catalogWatchService?.stop();
+
+    // Falls gerade der Einzelbild-Benchmark vorbereitet wird, zuerst dessen
+    // Zustandswechsel abschließen. Anschließend Benchmarkmodus und Pauseflag
+    // explizit auf Normalbetrieb zurücksetzen.
+    if (qwenBenchmarkPreparing) {
+      try {
+        await qwenBenchmarkPreparing;
+      } catch {
+        // Der Reset übernimmt ab hier ohnehin den vollständigen Worker-Neustart.
+      }
+    }
 
     // Laufende Analyse-/Thumbnail-/Gruppierungsjobs zuerst wirklich zum
     // Stillstand bringen. Ein fester Sleep ist dafür nicht ausreichend:
     // sonst könnte ein alter Job nach dem DELETE wieder Ergebnisse eintragen.
     analysisCoordinator?.stop();
+    analysisCoordinator?.endBenchmarkPause();
+    qwenBenchmarkMode = false;
+    qwenBenchmarkPreparing = null;
     thumbnailCoordinator?.stop();
 
     if (personRefreshTimer) {
@@ -587,6 +602,10 @@ function registerIpc(): void {
     }
 
     await catalogWatchService?.start(false);
+    analysis?.logDiagnostic("CATALOG_RESET_COMPLETED", {
+      verifiedEmpty: true,
+      sources: 0
+    });
     return result;
   });
 
