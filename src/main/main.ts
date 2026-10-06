@@ -881,12 +881,14 @@ function registerIpc(): void {
       _event,
       candidateId: number,
       name: string,
-      fallbackFaceDetectionId?: number
+      fallbackFaceDetectionId?: number,
+      expectedFaceCount?: number
     ): Promise<ConfirmPersonResult> =>
       personService!.confirmCandidate(
         candidateId,
         name,
-        fallbackFaceDetectionId
+        fallbackFaceDetectionId,
+        expectedFaceCount
       )
   );
 
@@ -943,13 +945,15 @@ function registerIpc(): void {
       candidateId: number,
       name: string,
       rejectedPetId?: number,
-      fallbackPetDetectionId?: number
+      fallbackPetDetectionId?: number,
+      expectedDetectionCount?: number
     ): Promise<ConfirmPetResult> =>
       petService!.confirmCandidate(
         candidateId,
         name,
         rejectedPetId,
-        fallbackPetDetectionId
+        fallbackPetDetectionId,
+        expectedDetectionCount
       )
   );
 
