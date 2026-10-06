@@ -5595,6 +5595,26 @@ function getPetEmbeddingsForClustering(
       AND mb.source_id=?
   `).all(sourceId, sourceId);
 
+  const implicitCannotLinks: Array<{ petAId: number; petBId: number }> = [];
+  const petIdsByMedia = new Map<number, number[]>();
+  for (const row of rows) {
+    const mediaId = Number(row.media_id);
+    const idsForMedia = petIdsByMedia.get(mediaId) ?? [];
+    idsForMedia.push(Number(row.pet_detection_id));
+    petIdsByMedia.set(mediaId, idsForMedia);
+  }
+
+  for (const idsForMedia of petIdsByMedia.values()) {
+    for (let left = 0; left < idsForMedia.length; left += 1) {
+      for (let right = left + 1; right < idsForMedia.length; right += 1) {
+        implicitCannotLinks.push({
+          petAId: Math.min(idsForMedia[left], idsForMedia[right]),
+          petBId: Math.max(idsForMedia[left], idsForMedia[right])
+        });
+      }
+    }
+  }
+
   const cannotLinkSignature = cannotLinkRows
     .map((row) =>
       `${Number(row.pet_a_id)}-${Number(row.pet_b_id)}-${String(row.created_at ?? "")}`
@@ -5634,10 +5654,13 @@ function getPetEmbeddingsForClustering(
       petClass: String(row.pet_class),
       vector: vectorFromBlob(row.vector_blob, Number(row.dimension))
     })),
-    cannotLinks: cannotLinkRows.map((row) => ({
-      petAId: Number(row.pet_a_id),
-      petBId: Number(row.pet_b_id)
-    }))
+    cannotLinks: [
+      ...cannotLinkRows.map((row) => ({
+        petAId: Number(row.pet_a_id),
+        petBId: Number(row.pet_b_id)
+      })),
+      ...implicitCannotLinks
+    ]
   };
 }
 
@@ -7065,6 +7088,26 @@ function getFaceEmbeddingsForClustering(
       AND mb.source_id=?
   `).all(sourceId, sourceId);
 
+  const implicitCannotLinks: Array<{ faceAId: number; faceBId: number }> = [];
+  const faceIdsByMedia = new Map<number, number[]>();
+  for (const row of rows) {
+    const mediaId = Number(row.media_id);
+    const idsForMedia = faceIdsByMedia.get(mediaId) ?? [];
+    idsForMedia.push(Number(row.face_detection_id));
+    faceIdsByMedia.set(mediaId, idsForMedia);
+  }
+
+  for (const idsForMedia of faceIdsByMedia.values()) {
+    for (let left = 0; left < idsForMedia.length; left += 1) {
+      for (let right = left + 1; right < idsForMedia.length; right += 1) {
+        implicitCannotLinks.push({
+          faceAId: Math.min(idsForMedia[left], idsForMedia[right]),
+          faceBId: Math.max(idsForMedia[left], idsForMedia[right])
+        });
+      }
+    }
+  }
+
   const cannotLinkSignature = cannotLinkRows
     .map((row) =>
       `${Number(row.face_a_id)}-${Number(row.face_b_id)}-${String(row.created_at ?? "")}`
@@ -7103,10 +7146,13 @@ function getFaceEmbeddingsForClustering(
       contentKey: `${String(row.sha256)}:${Number(row.detection_index)}`,
       vector: vectorFromBlob(row.vector_blob, Number(row.dimension))
     })),
-    cannotLinks: cannotLinkRows.map((row) => ({
-      faceAId: Number(row.face_a_id),
-      faceBId: Number(row.face_b_id)
-    }))
+    cannotLinks: [
+      ...cannotLinkRows.map((row) => ({
+        faceAId: Number(row.face_a_id),
+        faceBId: Number(row.face_b_id)
+      })),
+      ...implicitCannotLinks
+    ]
   };
 }
 
