@@ -380,13 +380,78 @@ def qwen3vl2b_gguf_ready() -> bool:
     )
 
 
-def qwen3vl4b_gguf_ready() -> bool:
-    return (
-        os.path.isfile(QWEN3VL4B_MODEL_FILE)
-        and os.path.getsize(QWEN3VL4B_MODEL_FILE) > 2_000_000_000
-        and os.path.isfile(QWEN3VL4B_MMPROJ_FILE)
-        and os.path.getsize(QWEN3VL4B_MMPROJ_FILE) > 400_000_000
+def _first_matching_file(
+    directory: str,
+    preferred: str,
+    *,
+    must_contain: tuple[str, ...],
+    must_not_contain: tuple[str, ...] = (),
+) -> str:
+    if os.path.isfile(preferred):
+        return preferred
+
+    try:
+        names = os.listdir(directory)
+    except OSError:
+        return preferred
+
+    lowered_needles = tuple(value.lower() for value in must_contain)
+    lowered_excludes = tuple(value.lower() for value in must_not_contain)
+
+    for name in sorted(names):
+        candidate = os.path.join(directory, name)
+        lowered = name.lower()
+        if not os.path.isfile(candidate) or not lowered.endswith(".gguf"):
+            continue
+        if not all(needle in lowered for needle in lowered_needles):
+            continue
+        if any(excluded in lowered for excluded in lowered_excludes):
+            continue
+        return candidate
+
+    return preferred
+
+
+def qwen3vl4b_model_file() -> str:
+    return _first_matching_file(
+        QWEN3VL4B_MODEL_DIR,
+        QWEN3VL4B_MODEL_FILE,
+        must_contain=("4b", "instruct", "q4_k_m"),
+        must_not_contain=("mmproj",),
     )
+
+
+def qwen3vl4b_mmproj_file() -> str:
+    return _first_matching_file(
+        QWEN3VL4B_MODEL_DIR,
+        QWEN3VL4B_MMPROJ_FILE,
+        must_contain=("mmproj", "4b", "instruct", "q8_0"),
+    )
+
+
+def qwen3vl4b_gguf_ready() -> bool:
+    model_file = qwen3vl4b_model_file()
+    mmproj_file = qwen3vl4b_mmproj_file()
+    return (
+        os.path.isfile(model_file)
+        and os.path.getsize(model_file) > 2_000_000_000
+        and os.path.isfile(mmproj_file)
+        and os.path.getsize(mmproj_file) > 400_000_000
+    )
+
+
+def qwen3vl4b_diagnostics() -> dict:
+    model_file = qwen3vl4b_model_file()
+    mmproj_file = qwen3vl4b_mmproj_file()
+    return {
+        "modelPath": model_file,
+        "modelExists": os.path.isfile(model_file),
+        "modelBytes": os.path.getsize(model_file) if os.path.isfile(model_file) else 0,
+        "mmprojPath": mmproj_file,
+        "mmprojExists": os.path.isfile(mmproj_file),
+        "mmprojBytes": os.path.getsize(mmproj_file) if os.path.isfile(mmproj_file) else 0,
+        "llamaServer": find_llama_server(),
+    }
 
 
 def snapshot() -> dict:
@@ -414,6 +479,7 @@ def snapshot() -> dict:
             "qwen3vl2bRuntime": find_llama_server() is not None,
             "qwen3vl4bModel": qwen3vl4b_gguf_ready(),
             "qwen3vl4bRuntime": find_llama_server() is not None,
+            "qwen3vl4bDiagnostics": qwen3vl4b_diagnostics(),
             "torch": importlib.util.find_spec("torch") is not None,
             "transformers": importlib.util.find_spec("transformers") is not None,
             "onnxRuntime": importlib.util.find_spec("onnxruntime") is not None,
@@ -4523,12 +4589,23 @@ def qwen3vl4b_runtime() -> int:
         buffering=1,
     )
 
+    model_file = qwen3vl4b_model_file()
+    mmproj_file = qwen3vl4b_mmproj_file()
+
+    if not qwen3vl4b_gguf_ready():
+        diagnostics = qwen3vl4b_diagnostics()
+        raise RuntimeError(
+            "Qwen3-VL 4B Modell-Dateien sind nicht vollständig verfügbar. "
+            f"LLM: {diagnostics['modelPath']} ({diagnostics['modelBytes']} Bytes), "
+            f"Vision: {diagnostics['mmprojPath']} ({diagnostics['mmprojBytes']} Bytes)."
+        )
+
     args = [
         executable,
         "-m",
-        QWEN3VL4B_MODEL_FILE,
+        model_file,
         "--mmproj",
-        QWEN3VL4B_MMPROJ_FILE,
+        mmproj_file,
         "--host",
         "127.0.0.1",
         "--port",
@@ -4553,8 +4630,8 @@ def qwen3vl4b_runtime() -> int:
         executable=executable,
         port=port,
         context=QWEN3VL4B_CONTEXT_SIZE,
-        model=QWEN3VL4B_MODEL_FILE,
-        mmproj=QWEN3VL4B_MMPROJ_FILE,
+        model=model_file,
+        mmproj=mmproj_file,
     )
 
     _qwen_server_process = subprocess.Popen(
