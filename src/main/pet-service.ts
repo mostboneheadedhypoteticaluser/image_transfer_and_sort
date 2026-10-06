@@ -230,11 +230,18 @@ export class PetService {
     candidateId: number,
     name: string,
     rejectedPetId?: number,
-    fallbackPetDetectionId?: number
+    fallbackPetDetectionId?: number,
+    expectedDetectionCount?: number
   ): Promise<ConfirmPetResult> {
     return this.catalog.request<ConfirmPetResult>(
       "confirmPetCandidate",
-      { candidateId, name, rejectedPetId, fallbackPetDetectionId }
+      {
+        candidateId,
+        name,
+        rejectedPetId,
+        fallbackPetDetectionId,
+        expectedDetectionCount
+      }
     );
   }
 
