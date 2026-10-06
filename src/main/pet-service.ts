@@ -32,7 +32,8 @@ export class PetService {
 
   async getOverview(
     sourceId: number,
-    forceRefresh = false
+    forceRefresh = false,
+    allowWhilePending = false
   ): Promise<PetOverview> {
     const queue = await this.catalog.request<AnalysisQueueStats>(
       "getAnalysisQueueStats",
@@ -44,7 +45,10 @@ export class PetService {
 
     const clusteringPending = queue.pending > 0 || queue.running > 0;
 
-    if (!clusteringPending && this.analysis.getStatus().state === "READY") {
+    if (
+      (!clusteringPending || allowWhilePending) &&
+      this.analysis.getStatus().state === "READY"
+    ) {
       const set = await this.catalog.request<PetEmbeddingSet>(
         "getPetEmbeddingsForClustering",
         {
@@ -92,12 +96,12 @@ export class PetService {
     };
   }
 
-  async refreshAllSources(): Promise<void> {
+  async refreshAllSources(incremental = false): Promise<void> {
     const sources = await this.catalog.request<SourceRecord[]>("listSources");
 
     for (const source of sources) {
       if (!source.enabled) continue;
-      await this.getOverview(source.id);
+      await this.getOverview(source.id, incremental, incremental);
     }
   }
 
