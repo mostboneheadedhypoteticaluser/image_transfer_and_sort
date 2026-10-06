@@ -7063,7 +7063,7 @@ function replacePersonCandidates(
 }
 
 function listPersonCandidates(sourceId: number, requestedLimit: number) {
-  const limit = Math.max(1, Math.min(500, Math.trunc(requestedLimit || 100)));
+  const limit = Math.max(1, Math.min(2000, Math.trunc(requestedLimit || 500)));
 
   const candidates = db.prepare(`
     SELECT
@@ -7071,12 +7071,16 @@ function listPersonCandidates(sourceId: number, requestedLimit: number) {
       pc.representative_face_id,
       pc.average_similarity,
       pc.min_similarity,
-      COUNT(pcf.face_detection_id) AS face_count
+      COUNT(pcf.face_detection_id) AS face_count,
+      MAX(pcf.face_detection_id) AS newest_face_id
     FROM person_candidates pc
     JOIN person_candidate_faces pcf ON pcf.candidate_id=pc.id
     WHERE pc.source_id=?
     GROUP BY pc.id
-    ORDER BY face_count DESC, pc.average_similarity DESC, pc.id ASC
+    -- Wichtig bei großen Katalogen: Gruppen mit frisch erkannten Gesichtern
+    -- zuerst zeigen. Vorher dominierten große alte Gruppen dauerhaft die
+    -- auf 100 begrenzte Ansicht.
+    ORDER BY newest_face_id DESC, face_count DESC, pc.average_similarity DESC
     LIMIT ?
   `).all(sourceId, limit);
 
