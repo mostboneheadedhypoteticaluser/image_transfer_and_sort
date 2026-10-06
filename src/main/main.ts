@@ -515,6 +515,7 @@ function registerIpc(): void {
       catalogWatchService?.waitUntilIdle() ?? Promise.resolve()
     ]);
 
+    catalogWatchService?.clearHistory();
     groupedFaceEmbeddingCounts.clear();
     groupedPetEmbeddingCounts.clear();
 
