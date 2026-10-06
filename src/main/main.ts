@@ -57,6 +57,8 @@ let catalogWatchService: CatalogWatchService | null = null;
 let thumbnailCacheRoot = "";
 let personRefreshTimer: NodeJS.Timeout | null = null;
 let personRefreshRunning = false;
+let groupedFaceEmbeddingsDone = 0;
+let groupedPetEmbeddingsDone = 0;
 let isQuitting = false;
 let qwenBenchmarkMode = false;
 let qwenBenchmarkPreparing: Promise<void> | null = null;
@@ -133,17 +135,11 @@ function sendToRenderer(channel: string, payload: unknown): void {
   win.webContents.send(channel, payload);
 }
 
-function pythonAnalysisIdle(): boolean {
-  return [
-    pipelineStatus.technical,
-    pipelineStatus.imageMetadata,
-    pipelineStatus.faces,
-    pipelineStatus.faceEmbeddings,
-    pipelineStatus.petDetection,
-    pipelineStatus.petFusion,
-    pipelineStatus.petEmbeddings,
-    pipelineStatus.objectVerification
-  ].every((stats) => stats.pending === 0 && stats.running === 0);
+function identityResultsChanged(): boolean {
+  return (
+    pipelineStatus.faceEmbeddings.done > groupedFaceEmbeddingsDone ||
+    pipelineStatus.petEmbeddings.done > groupedPetEmbeddingsDone
+  );
 }
 
 function schedulePersonRefresh(): void {
@@ -151,16 +147,27 @@ function schedulePersonRefresh(): void {
     isQuitting ||
     (!personService && !petService) ||
     personRefreshRunning ||
-    !pythonAnalysisIdle()
+    personRefreshTimer ||
+    !identityResultsChanged()
   ) {
     return;
   }
 
-  if (personRefreshTimer) clearTimeout(personRefreshTimer);
-
+  // Während der bildweisen Fast-Lane werden Kandidaten regelmäßig
+  // nachgezogen, ohne nach jedem einzelnen Gesicht/Hund teuer neu zu clustern.
   personRefreshTimer = setTimeout(() => {
     personRefreshTimer = null;
-    if ((!personService && !petService) || isQuitting || personRefreshRunning) return;
+    if (
+      (!personService && !petService) ||
+      isQuitting ||
+      personRefreshRunning ||
+      !identityResultsChanged()
+    ) {
+      return;
+    }
+
+    const faceDoneAtStart = pipelineStatus.faceEmbeddings.done;
+    const petDoneAtStart = pipelineStatus.petEmbeddings.done;
 
     personRefreshRunning = true;
     void Promise.all([
@@ -168,6 +175,14 @@ function schedulePersonRefresh(): void {
       petService?.refreshAllSources() ?? Promise.resolve()
     ])
       .then(() => {
+        groupedFaceEmbeddingsDone = Math.max(
+          groupedFaceEmbeddingsDone,
+          faceDoneAtStart
+        );
+        groupedPetEmbeddingsDone = Math.max(
+          groupedPetEmbeddingsDone,
+          petDoneAtStart
+        );
         sendToRenderer("people:updated", {});
         sendToRenderer("pets:updated", {});
       })
@@ -176,8 +191,11 @@ function schedulePersonRefresh(): void {
       })
       .finally(() => {
         personRefreshRunning = false;
+        // Sind während des Clusterings weitere Identitätsmerkmale fertig
+        // geworden, wird automatisch der nächste Sammellauf vorgemerkt.
+        schedulePersonRefresh();
       });
-  }, 900);
+  }, 10000);
   personRefreshTimer.unref();
 }
 
@@ -193,14 +211,8 @@ function updatePipelineStage(
   sendToRenderer("analysis:pipelineStatus", pipelineStatus);
 
   if (
-    stage === "technical" ||
-    stage === "imageMetadata" ||
-    stage === "faces" ||
     stage === "faceEmbeddings" ||
-    stage === "petDetection" ||
-    stage === "petFusion" ||
-    stage === "petEmbeddings" ||
-    stage === "objectVerification"
+    stage === "petEmbeddings"
   ) {
     schedulePersonRefresh();
   }
