@@ -915,12 +915,27 @@ function getStats(sourceId: number) {
 
   const petIdentityStats = db.prepare(`
     SELECT
-      (SELECT COUNT(*) FROM pet_candidates WHERE source_id=?) AS candidate_count,
       (
         SELECT COUNT(*)
-        FROM pet_candidate_items pci
-        JOIN pet_candidates pc ON pc.id=pci.candidate_id
-        WHERE pc.source_id=?
+        FROM (
+          SELECT pc.id
+          FROM pet_candidates pc
+          JOIN pet_candidate_items pci ON pci.candidate_id=pc.id
+          WHERE pc.source_id=?
+          GROUP BY pc.id
+          HAVING COUNT(pci.pet_detection_id) >= 2
+        )
+      ) AS candidate_count,
+      (
+        SELECT COALESCE(SUM(detection_count), 0)
+        FROM (
+          SELECT COUNT(pci.pet_detection_id) AS detection_count
+          FROM pet_candidates pc
+          JOIN pet_candidate_items pci ON pci.candidate_id=pc.id
+          WHERE pc.source_id=?
+          GROUP BY pc.id
+          HAVING COUNT(pci.pet_detection_id) >= 2
+        )
       ) AS candidate_detection_count,
       (
         SELECT COUNT(DISTINCT pa.pet_id)
@@ -5529,12 +5544,16 @@ function getPetEmbeddingsForClustering(
     WHERE source_id=?
   `).get(sourceId);
 
+  const algorithmChanged =
+    !previousRun ||
+    String(previousRun.algorithm_version) !== algorithmVersion;
+
   return {
     revision,
     needsRebuild:
-      !previousRun ||
-      String(previousRun.embedding_revision) !== revision ||
-      String(previousRun.algorithm_version) !== algorithmVersion,
+      algorithmChanged ||
+      String(previousRun?.embedding_revision ?? "") !== revision,
+    algorithmChanged,
     pets: rows.map((row) => ({
       petDetectionId: Number(row.pet_detection_id),
       mediaId: Number(row.media_id),
@@ -5938,7 +5957,8 @@ function listPetCandidates(sourceId: number, requestedLimit: number) {
     JOIN pet_candidate_items pci ON pci.candidate_id=pc.id
     WHERE pc.source_id=?
     GROUP BY pc.id
-    ORDER BY newest_pet_id DESC, detection_count DESC, pc.average_similarity DESC
+    HAVING COUNT(pci.pet_detection_id) >= 2
+    ORDER BY detection_count DESC, pc.average_similarity DESC, newest_pet_id DESC
     LIMIT ?
   `).all(sourceId, limit);
 
@@ -6105,20 +6125,57 @@ function listPets(sourceId: number) {
 function confirmPetCandidate(
   candidateId: number,
   rawName: unknown,
-  rejectedPetId?: number
+  rejectedPetId?: number,
+  fallbackPetDetectionId?: number
 ) {
   const name = typeof rawName === "string" ? rawName.trim() : "";
   if (!name) throw new Error("Bitte einen Namen für das Haustier eingeben.");
   if (name.length > 120) throw new Error("Der Haustiername ist zu lang.");
 
-  const candidate = db.prepare(`
+  let resolvedCandidateId = candidateId;
+  let candidate = db.prepare(`
     SELECT id, source_id, pet_class
     FROM pet_candidates
     WHERE id=?
-  `).get(candidateId);
+  `).get(resolvedCandidateId);
+
+  const stablePetId =
+    Number.isInteger(fallbackPetDetectionId) &&
+    Number(fallbackPetDetectionId) > 0
+      ? Number(fallbackPetDetectionId)
+      : null;
+
+  const candidateStillMatches =
+    candidate && stablePetId !== null
+      ? Boolean(
+          db.prepare(`
+            SELECT 1
+            FROM pet_candidate_items
+            WHERE candidate_id=?
+              AND pet_detection_id=?
+            LIMIT 1
+          `).get(resolvedCandidateId, stablePetId)
+        )
+      : Boolean(candidate);
+
+  if (!candidateStillMatches && stablePetId !== null) {
+    candidate = db.prepare(`
+      SELECT pc.id, pc.source_id, pc.pet_class
+      FROM pet_candidate_items pci
+      JOIN pet_candidates pc ON pc.id=pci.candidate_id
+      WHERE pci.pet_detection_id=?
+      LIMIT 1
+    `).get(stablePetId);
+
+    if (candidate) {
+      resolvedCandidateId = Number(candidate.id);
+    }
+  }
 
   if (!candidate) {
-    throw new Error("Der Haustiervorschlag wurde nicht mehr gefunden.");
+    throw new Error(
+      "Die Hundegruppe wurde während der Analyse neu aufgebaut. Bitte die Haustieransicht aktualisieren und erneut bestätigen."
+    );
   }
 
   const members = db.prepare(`
@@ -6128,7 +6185,7 @@ function confirmPetCandidate(
     WHERE pci.candidate_id=?
       AND pa.pet_detection_id IS NULL
     ORDER BY pci.pet_detection_id
-  `).all(candidateId);
+  `).all(resolvedCandidateId);
 
   if (members.length === 0) {
     throw new Error("Der Haustiervorschlag enthält keine unbestätigten Fundstellen mehr.");
@@ -6239,9 +6296,10 @@ function confirmPetCandidate(
       detectionCount += 1;
     }
 
-    db.prepare("DELETE FROM pet_candidates WHERE id=?").run(candidateId);
-    db.prepare("DELETE FROM pet_cluster_runs WHERE source_id=?")
-      .run(Number(candidate.source_id));
+    db.prepare("DELETE FROM pet_candidates WHERE id=?").run(resolvedCandidateId);
+    // Wie bei Personen bleibt der letzte Clusterlauf stehen. Eine Bestätigung
+    // soll die UI sofort aktualisieren und nicht synchron ein vollständiges
+    // Dog-ReID-Re-Clustering aller bisherigen Fundstellen erzwingen.
 
     db.exec("COMMIT");
 
@@ -8528,7 +8586,7 @@ async function dispatch(method: CatalogMethod, payload: Record<string, unknown> 
         asNumber(payload.sourceId, "sourceId"),
         typeof payload.algorithmVersion === "string"
           ? payload.algorithmVersion
-          : "dogreid-centroid-v1"
+          : "dogreid-complete-link-v2"
       );
     case "replacePetCandidates":
       return replacePetCandidates(
@@ -8536,7 +8594,7 @@ async function dispatch(method: CatalogMethod, payload: Record<string, unknown> 
         typeof payload.revision === "string" ? payload.revision : "",
         typeof payload.algorithmVersion === "string"
           ? payload.algorithmVersion
-          : "dogreid-centroid-v1",
+          : "dogreid-complete-link-v2",
         payload.clusters
       );
     case "autoAssignKnownPetCandidates":
@@ -8556,7 +8614,10 @@ async function dispatch(method: CatalogMethod, payload: Record<string, unknown> 
         payload.name,
         payload.rejectedPetId === undefined
           ? undefined
-          : asNumber(payload.rejectedPetId, "rejectedPetId")
+          : asNumber(payload.rejectedPetId, "rejectedPetId"),
+        payload.fallbackPetDetectionId === undefined
+          ? undefined
+          : asNumber(payload.fallbackPetDetectionId, "fallbackPetDetectionId")
       );
     case "removePetFromCandidate":
       return removePetFromCandidate(
@@ -8600,7 +8661,7 @@ async function dispatch(method: CatalogMethod, payload: Record<string, unknown> 
         asNumber(payload.sourceId, "sourceId"),
         typeof payload.algorithmVersion === "string"
           ? payload.algorithmVersion
-          : "person-anchor-centroid-v3"
+          : "person-complete-link-v4"
       );
     case "replacePersonCandidates":
       return replacePersonCandidates(
@@ -8608,7 +8669,7 @@ async function dispatch(method: CatalogMethod, payload: Record<string, unknown> 
         typeof payload.revision === "string" ? payload.revision : "",
         typeof payload.algorithmVersion === "string"
           ? payload.algorithmVersion
-          : "person-anchor-centroid-v3",
+          : "person-complete-link-v4",
         payload.clusters
       );
     case "listPersonCandidates":
