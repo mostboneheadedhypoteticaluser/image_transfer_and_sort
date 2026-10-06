@@ -215,8 +215,10 @@ export class AnalysisCoordinator {
   async pauseForMaintenance(): Promise<void> {
     this.maintenancePaused = true;
 
-    const deadline = Date.now() + 15000;
-    while (this.pumping && Date.now() < deadline) {
+    // Einen bereits laufenden schnellen Bildschritt sauber fertigstellen.
+    // Nicht abbrechen: danach kann die Gruppierung denselben Worker exklusiv
+    // nutzen und die Fast-Lane setzt exakt beim aktuellen Bild fort.
+    while (this.pumping && !this.stopped) {
       await new Promise<void>((resolve) => setTimeout(resolve, 50));
     }
   }
