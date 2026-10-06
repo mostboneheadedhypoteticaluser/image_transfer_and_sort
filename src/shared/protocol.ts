@@ -302,6 +302,7 @@ export type PetEmbeddingForClustering = {
 export type PetEmbeddingSet = {
   revision: string;
   needsRebuild: boolean;
+  algorithmChanged: boolean;
   pets: PetEmbeddingForClustering[];
   cannotLinks: Array<{
     petAId: number;
@@ -363,6 +364,7 @@ export type PetOverview = {
   clusteringPending: boolean;
   candidateTotal: number;
   candidateDetectionTotal: number;
+  ungroupedDetectionTotal: number;
 };
 
 export type ConfirmPetResult = {
@@ -459,6 +461,7 @@ export type PersonOverview = {
   clusteringPending: boolean;
   candidateTotal: number;
   candidateFaceTotal: number;
+  ungroupedFaceTotal: number;
 };
 
 export type ConfirmPersonResult = {
