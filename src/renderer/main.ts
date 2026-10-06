@@ -2086,10 +2086,8 @@ function renderIdentityTabStats(stats: IdentityTabStats): void {
     " Gesichtsmerkmale gespeichert · " +
     stats.detectedFaces.toLocaleString("de-DE") +
     " Gesichter erkannt · " +
-    stats.persons.toLocaleString("de-DE") +
-    " bestätigte Personen mit " +
     stats.assignedPersonFaces.toLocaleString("de-DE") +
-    " zugeordneten Gesichtern";
+    " Gesichter bereits bestätigt/zugeordnet";
 
   petsTabCount.textContent =
     stats.petCandidates.toLocaleString("de-DE") +
@@ -2108,10 +2106,8 @@ function renderIdentityTabStats(stats: IdentityTabStats): void {
     " Hundemerkmale gespeichert · " +
     stats.fusedDogs.toLocaleString("de-DE") +
     " Hunde nach Ensemble-Fusion erkannt · " +
-    stats.pets.toLocaleString("de-DE") +
-    " bestätigte Haustiere mit " +
     stats.assignedPetDetections.toLocaleString("de-DE") +
-    " zugeordneten Fundstellen";
+    " Hundefundstellen bereits bestätigt/zugeordnet";
 }
 
 async function refreshIdentityTabStats(): Promise<void> {
@@ -2196,7 +2192,9 @@ function renderPersonOverview(overview: PersonOverview): void {
     personStatus.textContent =
       candidateWindowText +
       overview.candidateFaceTotal.toLocaleString("de-DE") +
-      " unbestätigte Gesichter insgesamt · " +
+      " Gesichter in Gruppen · " +
+      overview.ungroupedFaceTotal.toLocaleString("de-DE") +
+      " Einzelgesichter ohne Gruppe · " +
       assignedFaces.toLocaleString("de-DE") +
       " Gesichter bereits bestätigt. " +
       "Neue SFace-Ergebnisse werden während der laufenden Analyse regelmäßig neu gruppiert.";
@@ -2204,12 +2202,16 @@ function renderPersonOverview(overview: PersonOverview): void {
     personStatus.textContent =
       candidateWindowText +
       overview.candidateFaceTotal.toLocaleString("de-DE") +
-      " unbestätigte Gesichter insgesamt · " +
+      " Gesichter in Gruppen · " +
+      overview.ungroupedFaceTotal.toLocaleString("de-DE") +
+      " Einzelgesichter ohne Gruppe · " +
       assignedFaces.toLocaleString("de-DE") +
       " Gesichter bereits bestätigt.";
   } else {
     personStatus.textContent =
-      "Aktuell gibt es keine unbestätigten Personenvorschläge. " +
+      "Aktuell gibt es keine unbestätigten Personengruppen. " +
+      overview.ungroupedFaceTotal.toLocaleString("de-DE") +
+      " Einzelgesichter haben derzeit keine Gruppe · " +
       assignedFaces.toLocaleString("de-DE") + " Gesichter sind bereits bestätigt.";
   }
 
@@ -2645,7 +2647,7 @@ function renderPetOverview(overview: PetOverview): void {
   const petWindowText = petWindowTruncated
     ? "Gezeigt werden die " +
       overview.candidates.length.toLocaleString("de-DE") +
-      " neuesten von " +
+      " größten von " +
       overview.candidateTotal.toLocaleString("de-DE") +
       " Hundegruppen. "
     : overview.candidateTotal.toLocaleString("de-DE") +
@@ -2655,7 +2657,9 @@ function renderPetOverview(overview: PetOverview): void {
     petStatus.textContent =
       petWindowText +
       overview.candidateDetectionTotal.toLocaleString("de-DE") +
-      " gruppierte Hundefundstellen insgesamt · " +
+      " Hundefundstellen in Gruppen · " +
+      overview.ungroupedDetectionTotal.toLocaleString("de-DE") +
+      " einzelne Hundefundstellen ohne Gruppe · " +
       assignedDogs.toLocaleString("de-DE") +
       " Fundstellen bereits einem Hund zugeordnet. " +
       "Neue Dog-ReID-Ergebnisse werden während der laufenden Analyse regelmäßig neu gruppiert.";
@@ -2663,14 +2667,18 @@ function renderPetOverview(overview: PetOverview): void {
     petStatus.textContent =
       petWindowText +
       overview.candidateDetectionTotal.toLocaleString("de-DE") +
-      " gruppierte Hundefundstellen insgesamt · " +
+      " Hundefundstellen in Gruppen · " +
+      overview.ungroupedDetectionTotal.toLocaleString("de-DE") +
+      " einzelne Hundefundstellen ohne Gruppe · " +
       assignedDogs.toLocaleString("de-DE") +
       " Fundstellen sind bereits zugeordnet.";
   } else {
     petStatus.textContent =
       "Aktuell gibt es keine unbestätigten Hundegruppen. " +
+      overview.ungroupedDetectionTotal.toLocaleString("de-DE") +
+      " einzelne Hundefundstellen haben derzeit keine Gruppe · " +
       assignedDogs.toLocaleString("de-DE") +
-      " Hundefundstellen sind bereits zugeordnet. Gruppen benötigen mindestens zwei ausreichend ähnliche Fundstellen.";
+      " Hundefundstellen sind bereits zugeordnet.";
   }
 
   if (overview.candidates.length === 0) {
@@ -2820,6 +2828,9 @@ function renderPetOverview(overview: PetOverview): void {
 
         input.disabled = true;
         button.disabled = true;
+        button.textContent = "Bestätige…";
+        progressText.textContent =
+          "Hundegruppe wird als „" + name + "“ bestätigt …";
 
         try {
           const matchesSuggestion =
@@ -2832,12 +2843,18 @@ function renderPetOverview(overview: PetOverview): void {
               ? candidate.suggestedPetId
               : undefined;
 
+          const fallbackPetDetectionId =
+            candidate.representativePetId ??
+            candidate.pets[0]?.petDetectionId;
+
           const result = await window.imageSorter.pets.confirmCandidate(
             candidate.id,
             name,
-            rejectedPetId
+            rejectedPetId,
+            fallbackPetDetectionId
           );
 
+          button.textContent = "Bestätigt ✓";
           progressText.textContent =
             result.name + ": " +
             result.detectionCount.toLocaleString("de-DE") + " " +
@@ -2847,15 +2864,19 @@ function renderPetOverview(overview: PetOverview): void {
 
           const sourceId = selectedSourceId();
           if (sourceId !== null) {
-            await loadPetOverview(sourceId, true);
-            const stats = await window.imageSorter.catalog.getStats(sourceId);
+            await loadPetOverview(sourceId);
+          } else {
+            card.remove();
             await refreshIdentityTabStats();
           }
         } catch (error) {
-          progressText.textContent =
+          const message =
             error instanceof Error ? error.message : String(error);
+          progressText.textContent = "Bestätigung fehlgeschlagen: " + message;
+          petStatus.textContent = "Bestätigung fehlgeschlagen: " + message;
           input.disabled = false;
           button.disabled = false;
+          updateConfirmLabel();
         }
       };
 
@@ -3372,14 +3393,16 @@ async function refreshCatalog(): Promise<void> {
       persons: [],
       clusteringPending: false,
       candidateTotal: 0,
-      candidateFaceTotal: 0
+      candidateFaceTotal: 0,
+      ungroupedFaceTotal: 0
     });
     renderPetOverview({
       candidates: [],
       pets: [],
       clusteringPending: false,
       candidateTotal: 0,
-      candidateDetectionTotal: 0
+      candidateDetectionTotal: 0,
+      ungroupedDetectionTotal: 0
     });
     return;
   }
@@ -3599,7 +3622,6 @@ refreshPeopleButton.addEventListener("click", () => {
   void runSafely(async () => {
     personStatus.textContent = "Personenvorschläge werden neu berechnet …";
     await loadPersonOverview(sourceId, true);
-    const stats = await window.imageSorter.catalog.getStats(sourceId);
     await refreshIdentityTabStats();
   });
 });
@@ -3611,7 +3633,6 @@ refreshPetsButton.addEventListener("click", () => {
   void runSafely(async () => {
     petStatus.textContent = "Hundegruppen werden neu berechnet …";
     await loadPetOverview(sourceId, true);
-    const stats = await window.imageSorter.catalog.getStats(sourceId);
     await refreshIdentityTabStats();
   });
 });
@@ -3980,7 +4001,6 @@ window.imageSorter.people.onUpdated(() => {
   if (sourceId === null) return;
 
   void runSafely(async () => {
-    const stats = await window.imageSorter.catalog.getStats(sourceId);
     await refreshIdentityTabStats();
 
     // Neue Vorschläge dürfen im Hintergrund entstehen, aber eine laufende
@@ -3996,7 +4016,6 @@ window.imageSorter.pets.onUpdated(() => {
   if (sourceId === null) return;
 
   void runSafely(async () => {
-    const stats = await window.imageSorter.catalog.getStats(sourceId);
     await refreshIdentityTabStats();
 
     if (currentView === "pets" && !isEditingPetView()) {
