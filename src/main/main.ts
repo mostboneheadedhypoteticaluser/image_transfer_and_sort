@@ -528,6 +528,8 @@ function registerIpc(): void {
     analysis?.logDiagnostic("CATALOG_RESET_BEGIN");
     catalogWatchService?.stop();
 
+    let resetSucceeded = false;
+
     // Falls gerade der Einzelbild-Benchmark vorbereitet wird, zuerst dessen
     // Zustandswechsel abschließen. Anschließend Benchmarkmodus und Pauseflag
     // explizit auf Normalbetrieb zurücksetzen.
@@ -558,55 +560,80 @@ function registerIpc(): void {
     analysis?.stopImmediately();
     thumbnailService?.stop();
 
-    await Promise.all([
-      analysisCoordinator?.waitUntilIdle() ?? Promise.resolve(),
-      thumbnailCoordinator?.waitUntilIdle() ?? Promise.resolve(),
-      waitForIdentityRefreshIdle(),
-      catalogWatchService?.waitUntilIdle() ?? Promise.resolve()
-    ]);
+    try {
+      await Promise.all([
+        analysisCoordinator?.waitUntilIdle() ?? Promise.resolve(),
+        thumbnailCoordinator?.waitUntilIdle() ?? Promise.resolve(),
+        waitForIdentityRefreshIdle(),
+        catalogWatchService?.waitUntilIdle() ?? Promise.resolve()
+      ]);
 
-    catalogWatchService?.clearHistory();
-    groupedFaceEmbeddingCounts.clear();
-    groupedPetEmbeddingCounts.clear();
+      const result = await catalog!.request<ResetCatalogResult>("resetCatalog");
+      resetSucceeded = true;
 
-    const result = await catalog!.request<ResetCatalogResult>("resetCatalog");
+      catalogWatchService?.clearHistory();
+      groupedFaceEmbeddingCounts.clear();
+      groupedPetEmbeddingCounts.clear();
 
-    // Auch abgeleitete Vorschaudateien/Crops entfernen. Die Originalmedien
-    // und die großen KI-Modellgewichte bleiben ausdrücklich erhalten.
-    if (thumbnailCacheRoot) {
-      await rm(thumbnailCacheRoot, { recursive: true, force: true });
-    }
+      // Auch abgeleitete Vorschaudateien/Crops entfernen. Ein Cache-Fehler
+      // macht einen bereits verifizierten Datenbank-Reset nicht rückgängig.
+      if (thumbnailCacheRoot) {
+        try {
+          await rm(thumbnailCacheRoot, { recursive: true, force: true });
+        } catch (error) {
+          analysis?.logDiagnostic("CATALOG_RESET_CACHE_WARNING", {
+            error: error instanceof Error ? error.message : String(error)
+          });
+        }
+      }
 
-    pipelineStatus = {
-      technical: { ...EMPTY_QUEUE },
-      thumbnails: { ...EMPTY_QUEUE },
-      imageMetadata: { ...EMPTY_QUEUE },
-      faces: { ...EMPTY_QUEUE },
-      faceEmbeddings: { ...EMPTY_QUEUE },
-      petDetection: { ...EMPTY_QUEUE },
-      petFusion: { ...EMPTY_QUEUE },
-      petEmbeddings: { ...EMPTY_QUEUE },
-      objectVerification: { ...EMPTY_QUEUE },
-      semanticEmbeddings: { ...EMPTY_QUEUE }
-    };
-    sendToRenderer("analysis:pipelineStatus", pipelineStatus);
+      pipelineStatus = {
+        technical: { ...EMPTY_QUEUE },
+        thumbnails: { ...EMPTY_QUEUE },
+        imageMetadata: { ...EMPTY_QUEUE },
+        faces: { ...EMPTY_QUEUE },
+        faceEmbeddings: { ...EMPTY_QUEUE },
+        petDetection: { ...EMPTY_QUEUE },
+        petFusion: { ...EMPTY_QUEUE },
+        petEmbeddings: { ...EMPTY_QUEUE },
+        objectVerification: { ...EMPTY_QUEUE },
+        semanticEmbeddings: { ...EMPTY_QUEUE }
+      };
+      sendToRenderer("analysis:pipelineStatus", pipelineStatus);
 
-    thumbnailService?.start();
-    void thumbnailCoordinator?.start();
+      analysis?.logDiagnostic("CATALOG_RESET_COMPLETED", {
+        verifiedEmpty: true,
+        sources: 0
+      });
 
-    if (analysis) {
-      await analysis.start();
-      if (analysis.getStatus().state === "READY") {
-        void analysisCoordinator?.start();
+      return result;
+    } catch (error) {
+      analysis?.logDiagnostic("CATALOG_RESET_ERROR", {
+        error: error instanceof Error ? error.message : String(error)
+      });
+      throw error;
+    } finally {
+      // Auch bei einem abgebrochenen Reset darf die Anwendung nicht in einem
+      // halb gestoppten Zustand verbleiben.
+      if (!isQuitting) {
+        thumbnailService?.start();
+        if (thumbnailCoordinator) {
+          await thumbnailCoordinator.start();
+        }
+
+        if (analysis) {
+          await analysis.start();
+          if (analysis.getStatus().state === "READY" && analysisCoordinator) {
+            await analysisCoordinator.start();
+          }
+        }
+
+        // Nach erfolgreichem Reset gibt es keine Quellen mehr. Bei einem
+        // fehlgeschlagenen Reset wird dagegen ein Sicherheitsabgleich der
+        // weiterhin vorhandenen Quellen durchgeführt.
+        await catalogWatchService?.start(!resetSucceeded);
       }
     }
-
-    await catalogWatchService?.start(false);
-    analysis?.logDiagnostic("CATALOG_RESET_COMPLETED", {
-      verifiedEmpty: true,
-      sources: 0
-    });
-    return result;
   });
 
   ipcMain.handle("analysis:getStatus", (): Promise<AnalysisWorkerStatus> =>
