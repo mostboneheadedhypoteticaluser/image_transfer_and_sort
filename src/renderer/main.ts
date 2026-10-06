@@ -1,6 +1,7 @@
 import type {
   AnalysisErrorRecord,
   AnalysisWorkerStatus,
+  CatalogStats,
   CatalogWatchEvent,
   CatalogWatchSnapshot,
   QwenBenchmarkModel,
@@ -149,6 +150,7 @@ let lastObjectVerificationDone = -1;
 let lastSemanticDone = -1;
 let lastPipelineIssueTotal = -1;
 let analysisRefreshTimer: number | null = null;
+let sourcePipelineRefreshTimer: number | null = null;
 let searchFacetsSourceId: number | null = null;
 let latestAnalysisStatus: AnalysisWorkerStatus | null = null;
 let qwenBenchmarkSelectedPath: string | null = null;
@@ -2017,25 +2019,74 @@ function renderDuplicateGroups(groups: DuplicateGroup[]): void {
   duplicateGroups.appendChild(fragment);
 }
 
+function renderIdentityTabStats(stats: CatalogStats): void {
+  peopleTabCount.textContent =
+    stats.personCandidates.toLocaleString("de-DE") +
+    " Gr. · " +
+    stats.personCandidateFaces.toLocaleString("de-DE") +
+    " Ges.";
+  peopleTabCount.title =
+    stats.personCandidates.toLocaleString("de-DE") +
+    " unbestätigte Personengruppen · " +
+    stats.personCandidateFaces.toLocaleString("de-DE") +
+    " unbestätigte Gesichter · " +
+    stats.persons.toLocaleString("de-DE") +
+    " bestätigte Personen mit " +
+    stats.assignedPersonFaces.toLocaleString("de-DE") +
+    " zugeordneten Gesichtern";
+
+  petsTabCount.textContent =
+    stats.petCandidates.toLocaleString("de-DE") +
+    " Gr. · " +
+    stats.petCandidateDetections.toLocaleString("de-DE") +
+    " Hunde";
+  petsTabCount.title =
+    stats.petCandidates.toLocaleString("de-DE") +
+    " unbestätigte Hundegruppen · " +
+    stats.petCandidateDetections.toLocaleString("de-DE") +
+    " unbestätigte Hundefundstellen · " +
+    stats.pets.toLocaleString("de-DE") +
+    " bestätigte Haustiere mit " +
+    stats.assignedPetDetections.toLocaleString("de-DE") +
+    " zugeordneten Fundstellen";
+}
+
 function renderPersonOverview(overview: PersonOverview): void {
   personCandidates.replaceChildren();
   confirmedPersons.replaceChildren();
 
+  const candidateFaces = overview.candidates.reduce(
+    (sum, candidate) => sum + candidate.faceCount,
+    0
+  );
+  const assignedFaces = overview.persons.reduce(
+    (sum, person) => sum + person.faceCount,
+    0
+  );
+
   if (overview.clusteringPending) {
     personStatus.textContent =
-      "Gesichtsmerkmale werden noch im Hintergrund berechnet. " +
-      "Die Personenvorschläge werden danach neu gruppiert.";
+      overview.candidates.length.toLocaleString("de-DE") + " Gruppen mit " +
+      candidateFaces.toLocaleString("de-DE") +
+      " unbestätigten Gesichtern · " +
+      assignedFaces.toLocaleString("de-DE") +
+      " Gesichter bereits bestätigt. " +
+      "Neue SFace-Ergebnisse werden während der laufenden Analyse regelmäßig neu gruppiert.";
   } else if (overview.candidates.length > 0) {
     personStatus.textContent =
-      `${overview.candidates.length.toLocaleString("de-DE")} unbestätigte ` +
-      `${overview.candidates.length === 1 ? "Gruppe" : "Gruppen"} gefunden. ` +
-      "Erst deine Bestätigung erzeugt eine dauerhafte Person.";
+      overview.candidates.length.toLocaleString("de-DE") + " unbestätigte " +
+      (overview.candidates.length === 1 ? "Gruppe" : "Gruppen") + " mit " +
+      candidateFaces.toLocaleString("de-DE") + " Gesichtern gefunden. " +
+      assignedFaces.toLocaleString("de-DE") + " Gesichter sind bereits bestätigt.";
   } else {
     personStatus.textContent =
-      "Aktuell gibt es keine unbestätigten Personenvorschläge.";
+      "Aktuell gibt es keine unbestätigten Personenvorschläge. " +
+      assignedFaces.toLocaleString("de-DE") + " Gesichter sind bereits bestätigt.";
   }
 
-  peopleTabCount.textContent = overview.candidates.length.toLocaleString("de-DE");
+  peopleTabCount.textContent =
+    overview.candidates.length.toLocaleString("de-DE") +
+    " Gr. · " + candidateFaces.toLocaleString("de-DE") + " Ges.";
 
   if (overview.candidates.length === 0) {
     const empty = document.createElement("div");
@@ -2105,8 +2156,7 @@ function renderPersonOverview(overview: PersonOverview): void {
               if (sourceId !== null) {
                 await loadPersonOverview(sourceId, true);
                 const stats = await window.imageSorter.catalog.getStats(sourceId);
-                peopleTabCount.textContent =
-                  stats.personCandidates.toLocaleString("de-DE");
+                renderIdentityTabStats(stats);
               }
 
               progressText.textContent =
@@ -2438,22 +2488,40 @@ function renderPetOverview(overview: PetOverview): void {
   petCandidates.replaceChildren();
   confirmedPets.replaceChildren();
 
+  const candidateDogs = overview.candidates.reduce(
+    (sum, candidate) => sum + candidate.detectionCount,
+    0
+  );
+  const assignedDogs = overview.pets.reduce(
+    (sum, pet) => sum + pet.detectionCount,
+    0
+  );
+
   if (overview.clusteringPending) {
     petStatus.textContent =
-      "Individuelle Hundemerkmale werden noch im Hintergrund berechnet. " +
-      "Die Hundegruppen entstehen automatisch, sobald diese Stufe fertig ist.";
+      overview.candidates.length.toLocaleString("de-DE") + " Gruppen mit " +
+      candidateDogs.toLocaleString("de-DE") +
+      " unbestätigten Hundefundstellen · " +
+      assignedDogs.toLocaleString("de-DE") +
+      " Fundstellen bereits einem Hund zugeordnet. " +
+      "Neue Dog-ReID-Ergebnisse werden während der laufenden Analyse regelmäßig neu gruppiert.";
   } else if (overview.candidates.length > 0) {
     petStatus.textContent =
       overview.candidates.length.toLocaleString("de-DE") + " " +
       (overview.candidates.length === 1 ? "Hundegruppe" : "Hundegruppen") +
-      " zur Bestätigung gefunden.";
+      " mit " + candidateDogs.toLocaleString("de-DE") +
+      " Fundstellen zur Bestätigung gefunden. " +
+      assignedDogs.toLocaleString("de-DE") + " Fundstellen sind bereits zugeordnet.";
   } else {
     petStatus.textContent =
       "Aktuell gibt es keine unbestätigten Hundegruppen. " +
-      "Gruppen benötigen mindestens zwei ausreichend ähnliche Fundstellen.";
+      assignedDogs.toLocaleString("de-DE") +
+      " Hundefundstellen sind bereits zugeordnet. Gruppen benötigen mindestens zwei ausreichend ähnliche Fundstellen.";
   }
 
-  petsTabCount.textContent = overview.candidates.length.toLocaleString("de-DE");
+  petsTabCount.textContent =
+    overview.candidates.length.toLocaleString("de-DE") +
+    " Gr. · " + candidateDogs.toLocaleString("de-DE") + " Hunde";
 
   if (overview.candidates.length === 0) {
     const empty = document.createElement("div");
@@ -3172,8 +3240,7 @@ async function refreshCatalog(): Promise<void> {
   lastScan.textContent = stats.lastScan ?? "—";
   mediaTabCount.textContent = stats.total.toLocaleString("de-DE");
   duplicateTabCount.textContent = stats.duplicateGroups.toLocaleString("de-DE");
-  peopleTabCount.textContent = stats.personCandidates.toLocaleString("de-DE");
-  petsTabCount.textContent = stats.petCandidates.toLocaleString("de-DE");
+  renderIdentityTabStats(stats);
   recycleTabCount.textContent = stats.recycleBin.toLocaleString("de-DE");
 
   if (currentView === "duplicates") {
@@ -3378,7 +3445,7 @@ refreshPeopleButton.addEventListener("click", () => {
     personStatus.textContent = "Personenvorschläge werden neu berechnet …";
     await loadPersonOverview(sourceId, true);
     const stats = await window.imageSorter.catalog.getStats(sourceId);
-    peopleTabCount.textContent = stats.personCandidates.toLocaleString("de-DE");
+    renderIdentityTabStats(stats);
   });
 });
 
@@ -3390,7 +3457,7 @@ refreshPetsButton.addEventListener("click", () => {
     petStatus.textContent = "Hundegruppen werden neu berechnet …";
     await loadPetOverview(sourceId, true);
     const stats = await window.imageSorter.catalog.getStats(sourceId);
-    petsTabCount.textContent = stats.petCandidates.toLocaleString("de-DE");
+    renderIdentityTabStats(stats);
   });
 });
 analysisDevLogButton.addEventListener("click", () => {
