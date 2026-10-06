@@ -223,11 +223,12 @@ export class PersonService {
 
   async confirmCandidate(
     candidateId: number,
-    name: string
+    name: string,
+    fallbackFaceDetectionId?: number
   ): Promise<ConfirmPersonResult> {
     return this.catalog.request<ConfirmPersonResult>(
       "confirmPersonCandidate",
-      { candidateId, name }
+      { candidateId, name, fallbackFaceDetectionId }
     );
   }
 
