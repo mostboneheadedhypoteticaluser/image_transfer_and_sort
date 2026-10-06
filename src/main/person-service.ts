@@ -1,5 +1,6 @@
 import type {
   AnalysisQueueStats,
+  CatalogStats,
   ConfirmPersonResult,
   FaceEmbeddingSet,
   MergePersonsResult,
@@ -104,18 +105,23 @@ export class PersonService {
       }
     }
 
-    const [candidates, persons] = await Promise.all([
+    const [candidates, persons, stats] = await Promise.all([
       this.catalog.request<PersonCandidate[]>("listPersonCandidates", {
         sourceId,
-        limit: 100
+        // Neue Gruppen müssen bei großen Katalogen sichtbar bleiben. Die DB
+        // liefert sie neueste-zuerst; 500 hält DOM/Payload trotzdem begrenzt.
+        limit: 500
       }),
-      this.catalog.request<PersonRecord[]>("listPersons", { sourceId })
+      this.catalog.request<PersonRecord[]>("listPersons", { sourceId }),
+      this.catalog.request<CatalogStats>("getStats", { sourceId })
     ]);
 
     return {
       candidates,
       persons,
-      clusteringPending
+      clusteringPending,
+      candidateTotal: stats.personCandidates,
+      candidateFaceTotal: stats.personCandidateFaces
     };
   }
 
