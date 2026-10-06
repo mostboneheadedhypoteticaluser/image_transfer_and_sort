@@ -875,12 +875,27 @@ function getStats(sourceId: number) {
 
   const personStats = db.prepare(`
     SELECT
-      (SELECT COUNT(*) FROM person_candidates WHERE source_id=?) AS candidate_count,
       (
         SELECT COUNT(*)
-        FROM person_candidate_faces pcf
-        JOIN person_candidates pc ON pc.id=pcf.candidate_id
-        WHERE pc.source_id=?
+        FROM (
+          SELECT pc.id
+          FROM person_candidates pc
+          JOIN person_candidate_faces pcf ON pcf.candidate_id=pc.id
+          WHERE pc.source_id=?
+          GROUP BY pc.id
+          HAVING COUNT(pcf.face_detection_id) >= 2
+        )
+      ) AS candidate_count,
+      (
+        SELECT COALESCE(SUM(face_count), 0)
+        FROM (
+          SELECT COUNT(pcf.face_detection_id) AS face_count
+          FROM person_candidates pc
+          JOIN person_candidate_faces pcf ON pcf.candidate_id=pc.id
+          WHERE pc.source_id=?
+          GROUP BY pc.id
+          HAVING COUNT(pcf.face_detection_id) >= 2
+        )
       ) AS candidate_face_count,
       (
         SELECT COUNT(DISTINCT pfa.person_id)
@@ -7086,6 +7101,7 @@ function listPersonCandidates(sourceId: number, requestedLimit: number) {
     JOIN person_candidate_faces pcf ON pcf.candidate_id=pc.id
     WHERE pc.source_id=?
     GROUP BY pc.id
+    HAVING COUNT(pcf.face_detection_id) >= 2
     -- Bestätigung ist nach Gruppengröße priorisiert; bei Gleichstand kommt
     -- die Gruppe mit dem jüngsten Gesicht zuerst.
     ORDER BY face_count DESC, pc.average_similarity DESC, newest_face_id DESC
