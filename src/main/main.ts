@@ -428,6 +428,8 @@ function registerIpc(): void {
       clearTimeout(personRefreshTimer);
       personRefreshTimer = null;
     }
+    groupedFaceEmbeddingsDone = 0;
+    groupedPetEmbeddingsDone = 0;
 
     await new Promise<void>((resolve) => setTimeout(resolve, 800));
 
