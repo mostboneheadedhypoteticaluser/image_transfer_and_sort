@@ -14,7 +14,7 @@ import type {
 import { AnalysisService } from "./analysis-service";
 import { CatalogService } from "./catalog-service";
 
-const ALGORITHM_VERSION = "dogreid-complete-link-v2";
+const ALGORITHM_VERSION = "dogreid-complete-link-v3";
 
 type ClusterWorkerResult = {
   algorithm: string;
