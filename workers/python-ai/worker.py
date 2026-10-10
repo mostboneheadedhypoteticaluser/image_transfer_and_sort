@@ -2004,7 +2004,7 @@ def cluster_pet_embeddings(
     )
 
     return {
-        "algorithm": "dogreid-complete-link-v3",
+        "algorithm": "dogreid-complete-link-v4-ignore",
         "clusterThreshold": cluster_threshold,
         "verificationThreshold": verification_threshold,
         "minClusterSize": min_cluster_size,
@@ -2204,7 +2204,7 @@ def cluster_face_embeddings(
     )
 
     return {
-        "algorithm": "person-complete-link-v5",
+        "algorithm": "person-complete-link-v6-ignore",
         "clusterThreshold": cluster_threshold,
         "verificationThreshold": verification_threshold,
         "minClusterSize": min_cluster_size,
