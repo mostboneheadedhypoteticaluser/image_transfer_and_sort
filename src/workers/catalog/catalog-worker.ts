@@ -9760,7 +9760,13 @@ async function dispatch(method: CatalogMethod, payload: Record<string, unknown> 
         asNumber(payload.sourceId, "sourceId"),
         typeof payload.algorithmVersion === "string"
           ? payload.algorithmVersion
-          : "dogreid-complete-link-v3"
+          : "dogreid-complete-link-v4-ignore",
+        payload.ignoreDefiniteThreshold === undefined
+          ? 0.68
+          : Number(payload.ignoreDefiniteThreshold),
+        payload.ignoreDoubtThreshold === undefined
+          ? 0.60
+          : Number(payload.ignoreDoubtThreshold)
       );
     case "replacePetCandidates":
       return replacePetCandidates(
@@ -9768,7 +9774,7 @@ async function dispatch(method: CatalogMethod, payload: Record<string, unknown> 
         typeof payload.revision === "string" ? payload.revision : "",
         typeof payload.algorithmVersion === "string"
           ? payload.algorithmVersion
-          : "dogreid-complete-link-v3",
+          : "dogreid-complete-link-v4-ignore",
         payload.clusters
       );
     case "autoAssignKnownPetCandidates":
@@ -9778,7 +9784,13 @@ async function dispatch(method: CatalogMethod, payload: Record<string, unknown> 
     case "listPetCandidates":
       return listPetCandidates(
         asNumber(payload.sourceId, "sourceId"),
-        payload.limit === undefined ? 100 : asNumber(payload.limit, "limit")
+        payload.limit === undefined ? 100 : asNumber(payload.limit, "limit"),
+        payload.ignoreDefiniteThreshold === undefined
+          ? 0.68
+          : Number(payload.ignoreDefiniteThreshold),
+        payload.ignoreDoubtThreshold === undefined
+          ? 0.60
+          : Number(payload.ignoreDoubtThreshold)
       );
     case "listPets":
       return listPets(asNumber(payload.sourceId, "sourceId"));
@@ -9798,6 +9810,22 @@ async function dispatch(method: CatalogMethod, payload: Record<string, unknown> 
         typeof payload.expectedMemberSignature === "string"
           ? payload.expectedMemberSignature
           : undefined
+      );
+    case "ignorePetCandidate":
+      return ignorePetCandidate(
+        asNumber(payload.candidateId, "candidateId"),
+        payload.fallbackPetDetectionId === undefined
+          ? undefined
+          : asNumber(payload.fallbackPetDetectionId, "fallbackPetDetectionId"),
+        payload.expectedDetectionCount === undefined
+          ? undefined
+          : asNumber(payload.expectedDetectionCount, "expectedDetectionCount"),
+        typeof payload.expectedMemberSignature === "string"
+          ? payload.expectedMemberSignature
+          : undefined,
+        payload.ignoredIdentityId === undefined
+          ? undefined
+          : asNumber(payload.ignoredIdentityId, "ignoredIdentityId")
       );
     case "removePetFromCandidate":
       return removePetFromCandidate(
@@ -9841,7 +9869,13 @@ async function dispatch(method: CatalogMethod, payload: Record<string, unknown> 
         asNumber(payload.sourceId, "sourceId"),
         typeof payload.algorithmVersion === "string"
           ? payload.algorithmVersion
-          : "person-complete-link-v5"
+          : "person-complete-link-v6-ignore",
+        payload.ignoreDefiniteThreshold === undefined
+          ? 0.62
+          : Number(payload.ignoreDefiniteThreshold),
+        payload.ignoreDoubtThreshold === undefined
+          ? 0.55
+          : Number(payload.ignoreDoubtThreshold)
       );
     case "replacePersonCandidates":
       return replacePersonCandidates(
@@ -9849,13 +9883,19 @@ async function dispatch(method: CatalogMethod, payload: Record<string, unknown> 
         typeof payload.revision === "string" ? payload.revision : "",
         typeof payload.algorithmVersion === "string"
           ? payload.algorithmVersion
-          : "person-complete-link-v5",
+          : "person-complete-link-v6-ignore",
         payload.clusters
       );
     case "listPersonCandidates":
       return listPersonCandidates(
         asNumber(payload.sourceId, "sourceId"),
-        payload.limit === undefined ? 100 : asNumber(payload.limit, "limit")
+        payload.limit === undefined ? 100 : asNumber(payload.limit, "limit"),
+        payload.ignoreDefiniteThreshold === undefined
+          ? 0.62
+          : Number(payload.ignoreDefiniteThreshold),
+        payload.ignoreDoubtThreshold === undefined
+          ? 0.55
+          : Number(payload.ignoreDoubtThreshold)
       );
     case "listPersons":
       return listPersons(asNumber(payload.sourceId, "sourceId"));
@@ -9872,6 +9912,22 @@ async function dispatch(method: CatalogMethod, payload: Record<string, unknown> 
         typeof payload.expectedMemberSignature === "string"
           ? payload.expectedMemberSignature
           : undefined
+      );
+    case "ignorePersonCandidate":
+      return ignorePersonCandidate(
+        asNumber(payload.candidateId, "candidateId"),
+        payload.fallbackFaceDetectionId === undefined
+          ? undefined
+          : asNumber(payload.fallbackFaceDetectionId, "fallbackFaceDetectionId"),
+        payload.expectedFaceCount === undefined
+          ? undefined
+          : asNumber(payload.expectedFaceCount, "expectedFaceCount"),
+        typeof payload.expectedMemberSignature === "string"
+          ? payload.expectedMemberSignature
+          : undefined,
+        payload.ignoredIdentityId === undefined
+          ? undefined
+          : asNumber(payload.ignoredIdentityId, "ignoredIdentityId")
       );
     case "removeFaceFromPersonCandidate":
       return removeFaceFromPersonCandidate(
