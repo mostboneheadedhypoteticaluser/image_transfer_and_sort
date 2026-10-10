@@ -125,13 +125,16 @@ export class PetService {
       await this.catalog.request("autoAssignKnownPetCandidates", { sourceId });
     }
 
-    const [candidates, pets, stats] = await Promise.all([
-      this.catalog.request<PetCandidate[]>("listPetCandidates", {
+    const candidates = await this.catalog.request<PetCandidate[]>(
+      "listPetCandidates",
+      {
         sourceId,
         limit: 500,
         ignoreDefiniteThreshold: CLUSTER_THRESHOLD,
         ignoreDoubtThreshold: VERIFICATION_THRESHOLD
-      }),
+      }
+    );
+    const [pets, stats] = await Promise.all([
       this.catalog.request<PetRecord[]>("listPets", { sourceId }),
       this.catalog.request<CatalogStats>("getStats", { sourceId })
     ]);
