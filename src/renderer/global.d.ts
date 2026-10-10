@@ -27,13 +27,17 @@ import type {
   ScanResult,
   SearchFacets,
   SearchFilter,
-  SourceRecord
+  SourceRecord,
+  ShutdownStatus
 } from "../shared/protocol";
 
 declare global {
   interface Window {
     imageSorter: {
       pickSource(): Promise<string | null>;
+      lifecycle: {
+        onShutdownStatus(listener: (status: ShutdownStatus) => void): () => void;
+      };
       analysis: {
         getStatus(): Promise<AnalysisWorkerStatus>;
         getPipelineStatus(sourceId?: number): Promise<PipelineStatus>;
