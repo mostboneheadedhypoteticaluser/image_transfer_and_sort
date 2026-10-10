@@ -193,6 +193,11 @@ export class AnalysisCoordinator {
   async start(): Promise<void> {
     if (!this.stopped) return;
     this.shutdownRequested = false;
+
+    // Qwen3-VL 4B ist wieder fester Bestandteil des normalen Katalog-Flows.
+    // Ein vorheriger Benchmark-/Wartungszustand darf die automatische letzte
+    // Pipeline-Stufe nach einem Neustart des Coordinators nicht deaktivieren.
+    this.automaticQwenEnabled = true;
     this.stopped = false;
 
     await this.enqueueExistingSources();
@@ -345,10 +350,10 @@ export class AnalysisCoordinator {
       this.onStats(stage, result[stage]);
     }
 
-    // Solange die Qwen-Serienanalyse nicht ausdrücklich gestartet wurde,
-    // zählen deren wartende Jobs nicht als aktive Worker-Warteschlange. Die
-    // Pipeline-Kachel zeigt sie weiterhin als offen, aber der Worker bleibt
-    // speicherschonend ohne llama.cpp-Modell.
+    // Qwen gehört wieder automatisch zum normalen Flow. Nur wenn die
+    // benötigte 4B-GGUF-/llama.cpp-Kombination auf diesem Rechner nicht
+    // verfügbar ist, bleibt die Stufe pausiert und wird nicht als aktive
+    // Worker-Warteschlange gezählt.
     const qwenRunnable =
       this.automaticQwenEnabled && this.analysis.isQwen3vl4bAvailable();
     const qwenQueued = qwenRunnable
