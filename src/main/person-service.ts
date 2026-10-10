@@ -2,6 +2,7 @@ import type {
   AnalysisQueueStats,
   CatalogStats,
   ConfirmPersonResult,
+  IgnorePersonResult,
   FaceEmbeddingSet,
   MergePersonsResult,
   PersonCorrectionResult,
@@ -13,7 +14,9 @@ import type {
 import { AnalysisService } from "./analysis-service";
 import { CatalogService } from "./catalog-service";
 
-const ALGORITHM_VERSION = "person-complete-link-v5";
+const ALGORITHM_VERSION = "person-complete-link-v6-ignore";
+const CLUSTER_THRESHOLD = 0.62;
+const VERIFICATION_THRESHOLD = 0.55;
 
 type ClusterWorkerResult = {
   algorithm: string;
@@ -60,7 +63,9 @@ export class PersonService {
         "getFaceEmbeddingsForClustering",
         {
           sourceId,
-          algorithmVersion: ALGORITHM_VERSION
+          algorithmVersion: ALGORITHM_VERSION,
+          ignoreDefiniteThreshold: CLUSTER_THRESHOLD,
+          ignoreDoubtThreshold: VERIFICATION_THRESHOLD
         }
       );
 
@@ -74,8 +79,8 @@ export class PersonService {
           {
             faces: set.faces,
             cannotLinks: set.cannotLinks,
-            clusterThreshold: 0.62,
-            verificationThreshold: 0.55,
+            clusterThreshold: CLUSTER_THRESHOLD,
+            verificationThreshold: VERIFICATION_THRESHOLD,
             minClusterSize: 2
           },
           120000
@@ -123,7 +128,8 @@ export class PersonService {
         sourceId,
         // 500 größte Gruppen reichen für die Bestätigungsansicht; Einzelgesichter
         // werden grundsätzlich nicht als Gruppe gespeichert.
-        limit: 500
+        limit: 500,
+        ignoreDoubtThreshold: VERIFICATION_THRESHOLD
       }),
       this.catalog.request<PersonRecord[]>("listPersons", { sourceId }),
       this.catalog.request<CatalogStats>("getStats", { sourceId })
@@ -248,6 +254,25 @@ export class PersonService {
         fallbackFaceDetectionId,
         expectedFaceCount,
         expectedMemberSignature
+      }
+    );
+  }
+
+  async ignoreCandidate(
+    candidateId: number,
+    fallbackFaceDetectionId?: number,
+    expectedFaceCount?: number,
+    expectedMemberSignature?: string,
+    ignoredIdentityId?: number
+  ): Promise<IgnorePersonResult> {
+    return this.catalog.request<IgnorePersonResult>(
+      "ignorePersonCandidate",
+      {
+        candidateId,
+        fallbackFaceDetectionId,
+        expectedFaceCount,
+        expectedMemberSignature,
+        ignoredIdentityId
       }
     );
   }
