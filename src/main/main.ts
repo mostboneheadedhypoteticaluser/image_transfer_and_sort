@@ -997,6 +997,25 @@ function registerIpc(): void {
   );
 
   ipcMain.handle(
+    "people:ignoreCandidate",
+    (
+      _event,
+      candidateId: number,
+      fallbackFaceDetectionId?: number,
+      expectedFaceCount?: number,
+      expectedMemberSignature?: string,
+      ignoredIdentityId?: number
+    ): Promise<IgnorePersonResult> =>
+      personService!.ignoreCandidate(
+        candidateId,
+        fallbackFaceDetectionId,
+        expectedFaceCount,
+        expectedMemberSignature,
+        ignoredIdentityId
+      )
+  );
+
+  ipcMain.handle(
     "people:removeCandidateFace",
     (
       _event,
@@ -1060,6 +1079,25 @@ function registerIpc(): void {
         fallbackPetDetectionId,
         expectedDetectionCount,
         expectedMemberSignature
+      )
+  );
+
+  ipcMain.handle(
+    "pets:ignoreCandidate",
+    (
+      _event,
+      candidateId: number,
+      fallbackPetDetectionId?: number,
+      expectedDetectionCount?: number,
+      expectedMemberSignature?: string,
+      ignoredIdentityId?: number
+    ): Promise<IgnorePetResult> =>
+      petService!.ignoreCandidate(
+        candidateId,
+        fallbackPetDetectionId,
+        expectedDetectionCount,
+        expectedMemberSignature,
+        ignoredIdentityId
       )
   );
 
