@@ -173,6 +173,7 @@ export class AnalysisCoordinator {
   private stopped = true;
   private benchmarkPaused = false;
   private maintenancePaused = false;
+  private shutdownRequested = false;
   private currentFastMediaId: number | null = null;
 
   // Die 4B-Kataloganalyse läuft wieder automatisch. Sie bleibt bewusst die
@@ -191,6 +192,7 @@ export class AnalysisCoordinator {
 
   async start(): Promise<void> {
     if (!this.stopped) return;
+    this.shutdownRequested = false;
     this.stopped = false;
 
     await this.enqueueExistingSources();
@@ -210,6 +212,11 @@ export class AnalysisCoordinator {
     this.currentFastMediaId = null;
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
+  }
+
+  prepareForShutdown(): void {
+    this.shutdownRequested = true;
+    this.stop();
   }
 
   async waitUntilIdle(timeoutMs = 15000): Promise<void> {
@@ -623,11 +630,10 @@ export class AnalysisCoordinator {
           error: message
         });
 
-        // Der Einzelbildtest darf den gerade unterbrochenen Standardjob nicht
-        // als echten Analysefehler hinterlassen. Nach dem kontrollierten Kill
-        // wird er sofort wieder auf PENDING gesetzt und erst nach Testende neu
-        // gestartet.
-        if (this.benchmarkPaused) {
+        // Benchmarkpause und App-Shutdown sind kontrollierte Unterbrechungen,
+        // keine echten Analysefehler. Der gerade beanspruchte Job wird deshalb
+        // wieder auf PENDING gesetzt und beim nächsten Start sauber wiederholt.
+        if (this.benchmarkPaused || this.shutdownRequested) {
           await this.catalog.request("retryAnalysisJob", {
             jobId: job.id
           });
