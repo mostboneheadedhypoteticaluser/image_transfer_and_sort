@@ -487,13 +487,16 @@ function registerIpc(): void {
     catalog!.request<MediaRecord[]>("listMedia", { sourceId, limit })
   );
 
-  ipcMain.handle("catalog:getSearchFacets", (_event, sourceId: number) =>
-    catalog!.request<SearchFacets>("getSearchFacets", { sourceId })
+  ipcMain.handle("catalog:getSearchFacets", (_event, sourceId?: number) =>
+    catalog!.request<SearchFacets>(
+      "getSearchFacets",
+      sourceId === undefined ? {} : { sourceId }
+    )
   );
 
   ipcMain.handle(
     "catalog:searchMedia",
-    async (_event, sourceId: number, filter: SearchFilter, limit: number) => {
+    async (_event, sourceId: number | undefined, filter: SearchFilter, limit: number) => {
       const query =
         typeof filter?.semanticQuery === "string"
           ? filter.semanticQuery.trim()
@@ -536,7 +539,7 @@ function registerIpc(): void {
       }
 
       return catalog!.request<MediaRecord[]>("searchMedia", {
-        sourceId,
+        ...(sourceId === undefined ? {} : { sourceId }),
         filter,
         semantic,
         limit
@@ -920,24 +923,9 @@ function registerIpc(): void {
   ipcMain.handle(
     "analysis:getPipelineStatus",
     async (_event, sourceId?: number): Promise<PipelineStatus> => {
-      if (sourceId === undefined) {
-        return {
-          technical: { ...pipelineStatus.technical },
-          thumbnails: { ...pipelineStatus.thumbnails },
-          imageMetadata: { ...pipelineStatus.imageMetadata },
-          faces: { ...pipelineStatus.faces },
-          faceEmbeddings: { ...pipelineStatus.faceEmbeddings },
-          petDetection: { ...pipelineStatus.petDetection },
-          petFusion: { ...pipelineStatus.petFusion },
-          petEmbeddings: { ...pipelineStatus.petEmbeddings },
-          objectVerification: { ...pipelineStatus.objectVerification },
-          semanticEmbeddings: { ...pipelineStatus.semanticEmbeddings }
-        };
-      }
-
       const queue = (module: string) =>
         catalog!.request<AnalysisQueueStats>("getAnalysisQueueStats", {
-          sourceId,
+          ...(sourceId === undefined ? {} : { sourceId }),
           module
         });
 
@@ -958,9 +946,10 @@ function registerIpc(): void {
         queue("image-metadata-v1"),
         queue("face-detect-yunet-v1"),
         queue("face-embed-sface-v1"),
-        catalog!.request<AnalysisQueueStats>("getPetDetectionQueueStats", {
-          sourceId
-        }),
+        catalog!.request<AnalysisQueueStats>(
+          "getPetDetectionQueueStats",
+          sourceId === undefined ? {} : { sourceId }
+        ),
         queue("pet-fuse-ensemble-v1"),
         queue("pet-embed-dogreid-v1"),
         queue("semantic-embed-siglip2-v1"),
