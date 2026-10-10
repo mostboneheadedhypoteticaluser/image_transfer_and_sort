@@ -350,6 +350,8 @@ export type PetCandidate = {
   suggestedPetId: number | null;
   suggestedPetName: string | null;
   suggestedPetSimilarity: number | null;
+  ignoredIdentityId: number | null;
+  ignoredSimilarity: number | null;
   pets: PetCandidateItem[];
 };
 
@@ -383,6 +385,12 @@ export type ConfirmPetResult = {
   petId: number;
   name: string;
   detectionCount: number;
+};
+
+export type IgnorePetResult = {
+  ignoredIdentityId: number;
+  detectionCount: number;
+  extendedExisting: boolean;
 };
 
 export type PetCorrectionResult = {
@@ -450,6 +458,8 @@ export type PersonCandidate = {
   representativeFaceId: number | null;
   averageSimilarity: number;
   minSimilarity: number;
+  ignoredIdentityId: number | null;
+  ignoredSimilarity: number | null;
   faces: PersonCandidateFace[];
 };
 
@@ -481,6 +491,12 @@ export type ConfirmPersonResult = {
   personId: number;
   name: string;
   faceCount: number;
+};
+
+export type IgnorePersonResult = {
+  ignoredIdentityId: number;
+  faceCount: number;
+  extendedExisting: boolean;
 };
 
 export type PersonCorrectionResult = {
@@ -745,6 +761,7 @@ export type CatalogMethod =
   | "listPetCandidates"
   | "listPets"
   | "confirmPetCandidate"
+  | "ignorePetCandidate"
   | "removePetFromCandidate"
   | "removePetFromPet"
   | "confirmPetDetection"
@@ -756,6 +773,7 @@ export type CatalogMethod =
   | "listPersonCandidates"
   | "listPersons"
   | "confirmPersonCandidate"
+  | "ignorePersonCandidate"
   | "removeFaceFromPersonCandidate"
   | "removeFaceFromPerson"
   | "mergePersons"
