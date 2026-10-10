@@ -287,22 +287,31 @@
               <div class="search-panel-heading">
                 <div>
                   <h3>Kombinierte Suche</h3>
-                  <p>Mehrere ausgewählte Kriterien werden mit UND verknüpft. Innerhalb einer Gruppe kannst du mehrere konkrete Personen, Haustiere oder Motive verlangen.</p>
+                  <p>Filter werden mit UND verknüpft. Standardmäßig wird der gesamte Katalog durchsucht.</p>
                 </div>
-                <span id="searchSummary" class="search-summary">Noch keine Suche ausgeführt.</span>
+                <div class="search-heading-tools">
+                  <label class="search-scope-control" for="searchScope">
+                    Bereich
+                    <select id="searchScope">
+                      <option value="catalog" selected>Gesamter Katalog</option>
+                      <option value="source">Aktuelle Quelle</option>
+                    </select>
+                  </label>
+                  <span id="searchSummary" class="search-summary">Noch keine Suche ausgeführt.</span>
+                </div>
               </div>
 
               <div class="search-grid">
-                <section class="search-group">
+                <section class="search-group identity-search-group">
                   <h4>Personen</h4>
-                  <p>Nur bereits bestätigte Personen.</p>
-                  <div id="searchPersons" class="search-facets"></div>
+                  <p>Bestätigte Personen aus dem gewählten Suchbereich.</p>
+                  <div id="searchPersons" class="search-facets identity-facets"></div>
                 </section>
 
-                <section class="search-group">
+                <section class="search-group identity-search-group">
                   <h4>Haustiere</h4>
-                  <p>Bestätigte bzw. sicher automatisch zugeordnete Haustiere.</p>
-                  <div id="searchPets" class="search-facets"></div>
+                  <p>Bestätigte Hunde/Haustiere aus dem gewählten Suchbereich.</p>
+                  <div id="searchPets" class="search-facets identity-facets"></div>
                 </section>
 
                 <section class="search-group search-group-wide semantic-search-group">
