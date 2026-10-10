@@ -28,11 +28,22 @@ import type {
   ScanResult,
   SearchFacets,
   SearchFilter,
-  SourceRecord
+  SourceRecord,
+  ShutdownStatus
 } from "../shared/protocol";
 
 const api = {
   pickSource: (): Promise<string | null> => ipcRenderer.invoke("dialog:pickSource"),
+  lifecycle: {
+    onShutdownStatus: (listener: (status: ShutdownStatus) => void) => {
+      const handler = (
+        _event: Electron.IpcRendererEvent,
+        status: ShutdownStatus
+      ) => listener(status);
+      ipcRenderer.on("app:shutdownStatus", handler);
+      return () => ipcRenderer.removeListener("app:shutdownStatus", handler);
+    }
+  },
   analysis: {
     getStatus: (): Promise<AnalysisWorkerStatus> => ipcRenderer.invoke("analysis:getStatus"),
     getPipelineStatus: (sourceId?: number): Promise<PipelineStatus> =>
