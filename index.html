@@ -304,21 +304,34 @@
               <div class="search-grid">
                 <section class="search-group identity-search-group">
                   <h4>Personen</h4>
-                  <p>Bestätigte Personen aus dem gewählten Suchbereich.</p>
+                  <p>Bestätigte Personen im Suchbereich.</p>
                   <div id="searchPersons" class="search-facets identity-facets"></div>
                 </section>
 
                 <section class="search-group identity-search-group">
                   <h4>Haustiere</h4>
-                  <p>Bestätigte Hunde/Haustiere aus dem gewählten Suchbereich.</p>
+                  <p>Bestätigte Hunde/Haustiere im Suchbereich.</p>
                   <div id="searchPets" class="search-facets identity-facets"></div>
+                </section>
+
+                <section class="search-group animal-count-group">
+                  <h4>Anzahl Tiere</h4>
+                  <div class="search-counts-inline">
+                    <label for="searchMinDogs">
+                      Hunde
+                      <input id="searchMinDogs" type="number" min="0" max="20" step="1" value="0" />
+                    </label>
+                    <label for="searchMinCats">
+                      Katzen
+                      <input id="searchMinCats" type="number" min="0" max="20" step="1" value="0" />
+                    </label>
+                  </div>
                 </section>
 
                 <section class="search-group search-group-wide semantic-search-group">
                   <h4>Semantischer Bildinhalt · SigLIP2</h4>
-                  <p>Freier Suchtext, z. B. „Hund beim Abseilen“, „Hund im Schnee“ oder „Person mit Hund neben einem Fahrzeug“. Die Suche kombiniert gespeicherte Qwen-4B-Beschreibungen, Motive, Handlungen, Tags und Konzepte mit SigLIP2, wenn der Analyse-Worker gerade frei ist.</p>
                   <div class="semantic-search-row">
-                    <input id="searchSemanticQuery" type="text" maxlength="300" autocomplete="off" placeholder="Semantischen Bildinhalt beschreiben …" />
+                    <input id="searchSemanticQuery" type="text" maxlength="300" autocomplete="off" placeholder="z. B. Hund beim Abseilen, Person mit Hund am Fahrzeug …" />
                     <label for="searchSemanticMinProbability">
                       Mindest-Relevanz
                       <span class="semantic-score-input">
@@ -327,25 +340,12 @@
                       </span>
                     </label>
                   </div>
-                  <small class="semantic-search-note">Standard 65 % ist bewusst streng gewählt. Ein exakter Qwen-Konzept-/Motivtreffer kann ein Bild auch dann finden, wenn SigLIP2 schwächer ist. Die Suche startet Qwen nicht erneut.</small>
+                  <small class="semantic-search-note">Durchsucht vorhandene Qwen-Beschreibungen/Konzepte und nutzt SigLIP2 zum Ranking, wenn der Worker frei ist.</small>
                 </section>
 
-                <section class="search-group search-group-wide">
+                <section class="search-group search-group-wide motif-search-group">
                   <h4>Motive</h4>
-                  <p>Objektfilter stammen weiterhin aus den schnellen Detektoren bzw. vorhandenen verifizierten Motivergebnissen. Die neue Qwen3-VL-4B-Stufe ergänzt den Katalog separat um Beschreibung, Tags und Suchkonzepte.</p>
                   <div id="searchObjects" class="search-facets motif-facets"></div>
-                </section>
-
-                <section class="search-group">
-                  <h4>Anzahl Tiere</h4>
-                  <div class="search-count-row">
-                    <label for="searchMinDogs">Mindestens Hunde</label>
-                    <input id="searchMinDogs" type="number" min="0" max="20" step="1" value="0" />
-                  </div>
-                  <div class="search-count-row">
-                    <label for="searchMinCats">Mindestens Katzen</label>
-                    <input id="searchMinCats" type="number" min="0" max="20" step="1" value="0" />
-                  </div>
                 </section>
               </div>
 
