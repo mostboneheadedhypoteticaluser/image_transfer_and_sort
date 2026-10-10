@@ -140,6 +140,8 @@ const closeImagePreviewButton = document.querySelector<HTMLButtonElement>("#clos
 const imagePreviewImage = document.querySelector<HTMLImageElement>("#imagePreviewImage")!;
 const imagePreviewCaption = document.querySelector<HTMLDivElement>("#imagePreviewCaption")!;
 const imagePreviewDetails = document.querySelector<HTMLDivElement>("#imagePreviewDetails")!;
+const shutdownOverlay = document.querySelector<HTMLDivElement>("#shutdownOverlay")!;
+const shutdownMessage = document.querySelector<HTMLParagraphElement>("#shutdownMessage")!;
 const searchPanel = document.querySelector<HTMLElement>("#searchPanel")!;
 const searchPersons = document.querySelector<HTMLDivElement>("#searchPersons")!;
 const searchPets = document.querySelector<HTMLDivElement>("#searchPets")!;
@@ -3997,6 +3999,20 @@ window.imageSorter.catalog.onWatchEvent((event) => {
   if (event.kind === "ERROR") {
     progressBar.classList.remove("active");
     progressText.textContent = event.message;
+  }
+});
+
+window.imageSorter.lifecycle.onShutdownStatus((status) => {
+  shutdownMessage.textContent = status.message;
+  shutdownOverlay.hidden = false;
+
+  // Während des geordneten Shutdowns keine weitere Interaktion zulassen.
+  for (const control of Array.from(
+    document.querySelectorAll<HTMLButtonElement | HTMLInputElement | HTMLSelectElement>(
+      "button, input, select"
+    )
+  )) {
+    control.disabled = true;
   }
 });
 
