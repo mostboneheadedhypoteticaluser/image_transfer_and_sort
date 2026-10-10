@@ -237,11 +237,18 @@ export class PersonService {
     candidateId: number,
     name: string,
     fallbackFaceDetectionId?: number,
-    expectedFaceCount?: number
+    expectedFaceCount?: number,
+    expectedMemberSignature?: string
   ): Promise<ConfirmPersonResult> {
     return this.catalog.request<ConfirmPersonResult>(
       "confirmPersonCandidate",
-      { candidateId, name, fallbackFaceDetectionId, expectedFaceCount }
+      {
+        candidateId,
+        name,
+        fallbackFaceDetectionId,
+        expectedFaceCount,
+        expectedMemberSignature
+      }
     );
   }
 
