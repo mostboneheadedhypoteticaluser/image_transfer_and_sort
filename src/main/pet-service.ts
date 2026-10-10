@@ -2,6 +2,7 @@ import type {
   AnalysisQueueStats,
   CatalogStats,
   ConfirmPetResult,
+  IgnorePetResult,
   PetCandidate,
   PetClusterInput,
   PetCorrectionResult,
@@ -14,7 +15,9 @@ import type {
 import { AnalysisService } from "./analysis-service";
 import { CatalogService } from "./catalog-service";
 
-const ALGORITHM_VERSION = "dogreid-complete-link-v3";
+const ALGORITHM_VERSION = "dogreid-complete-link-v4-ignore";
+const CLUSTER_THRESHOLD = 0.68;
+const VERIFICATION_THRESHOLD = 0.60;
 
 type ClusterWorkerResult = {
   algorithm: string;
@@ -60,7 +63,9 @@ export class PetService {
         "getPetEmbeddingsForClustering",
         {
           sourceId,
-          algorithmVersion: ALGORITHM_VERSION
+          algorithmVersion: ALGORITHM_VERSION,
+          ignoreDefiniteThreshold: CLUSTER_THRESHOLD,
+          ignoreDoubtThreshold: VERIFICATION_THRESHOLD
         }
       );
 
@@ -74,8 +79,8 @@ export class PetService {
           {
             pets: set.pets,
             cannotLinks: set.cannotLinks,
-            clusterThreshold: 0.68,
-            verificationThreshold: 0.60,
+            clusterThreshold: CLUSTER_THRESHOLD,
+            verificationThreshold: VERIFICATION_THRESHOLD,
             minClusterSize: 2
           },
           120000
@@ -123,7 +128,8 @@ export class PetService {
     const [candidates, pets, stats] = await Promise.all([
       this.catalog.request<PetCandidate[]>("listPetCandidates", {
         sourceId,
-        limit: 500
+        limit: 500,
+        ignoreDoubtThreshold: VERIFICATION_THRESHOLD
       }),
       this.catalog.request<PetRecord[]>("listPets", { sourceId }),
       this.catalog.request<CatalogStats>("getStats", { sourceId })
@@ -243,6 +249,25 @@ export class PetService {
         fallbackPetDetectionId,
         expectedDetectionCount,
         expectedMemberSignature
+      }
+    );
+  }
+
+  async ignoreCandidate(
+    candidateId: number,
+    fallbackPetDetectionId?: number,
+    expectedDetectionCount?: number,
+    expectedMemberSignature?: string,
+    ignoredIdentityId?: number
+  ): Promise<IgnorePetResult> {
+    return this.catalog.request<IgnorePetResult>(
+      "ignorePetCandidate",
+      {
+        candidateId,
+        fallbackPetDetectionId,
+        expectedDetectionCount,
+        expectedMemberSignature,
+        ignoredIdentityId
       }
     );
   }
