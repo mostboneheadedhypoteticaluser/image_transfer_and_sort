@@ -1261,12 +1261,15 @@ function catalogSemanticMatch(
 }
 
 function listMedia(
-  sourceId: number,
+  sourceId: number | undefined,
   requestedLimit: number,
   rawSearch?: SearchFilter,
   semantic?: SemanticTextEmbedding | null
 ) {
   const limit = Math.max(1, Math.min(2000, Math.trunc(requestedLimit || 500)));
+  const sourceWhere = sourceId === undefined ? "1=1" : "m.source_id=?";
+  const sourceArgs: Array<number | string> =
+    sourceId === undefined ? [] : [sourceId];
   const search = normalizeSearchFilter(rawSearch);
   const searchClauses: string[] = [];
   const searchArgs: Array<number | string> = [];
@@ -1355,6 +1358,7 @@ function listMedia(
     SELECT
       m.id,
       m.relative_path,
+      ms.path AS source_path,
       m.extension,
       m.size_bytes,
       m.availability,
@@ -1497,11 +1501,12 @@ function listMedia(
         ELSE 0
       END AS duplicate_count
     FROM media_items m
+    JOIN media_sources ms ON ms.id=m.source_id
     LEFT JOIN media_thumbnails t ON t.media_id=m.id
     LEFT JOIN media_image_metadata md ON md.media_id=m.id
     LEFT JOIN semantic_embeddings se ON se.media_id=m.id
     LEFT JOIN media_semantic_annotations msa ON msa.media_id=m.id
-    WHERE m.source_id=?${searchSql}
+    WHERE ${sourceWhere}${searchSql}
     ORDER BY
       CASE
         WHEN m.availability='MISSING' AND m.in_recycle_bin=1 THEN 1
@@ -1512,7 +1517,7 @@ function listMedia(
       m.relative_path COLLATE NOCASE
     ${limitSql}
   `).all(
-    sourceId,
+    ...sourceArgs,
     ...searchArgs,
     ...(semanticActive ? [] : [limit])
   );
@@ -1593,6 +1598,7 @@ function listMedia(
     return {
     id: Number(row.id),
     relativePath: String(row.relative_path),
+    sourcePath: row.source_path ? String(row.source_path) : null,
     extension: String(row.extension),
     sizeBytes: Number(row.size_bytes),
     availability: String(row.availability),
@@ -1645,25 +1651,33 @@ function listMedia(
   return mapped.slice(0, limit);
 }
 
-function getSearchFacets(sourceId: number): SearchFacets {
+function getSearchFacets(sourceId?: number): SearchFacets {
+  const sourceFilter = sourceId === undefined ? "" : "AND m.source_id=?";
+  const sourceArgs = sourceId === undefined ? [] : [sourceId];
+
   const persons = db.prepare(`
     SELECT
       p.id,
       p.name,
-      COUNT(DISTINCT fd.media_id) AS media_count
+      COUNT(DISTINCT fd.media_id) AS media_count,
+      MIN(fd.id) AS representative_face_id
     FROM persons p
     JOIN person_face_assignments pfa ON pfa.person_id=p.id
     JOIN face_detections fd ON fd.id=pfa.face_detection_id
     JOIN media_items m ON m.id=fd.media_id
-    WHERE m.source_id=?
-      AND m.availability='AVAILABLE'
+    WHERE m.availability='AVAILABLE'
       AND fd.input_sha256=m.sha256
+      ${sourceFilter}
     GROUP BY p.id, p.name
     ORDER BY p.name COLLATE NOCASE, p.id
-  `).all(sourceId).map((row) => ({
+  `).all(...sourceArgs).map((row) => ({
     id: Number(row.id),
     name: String(row.name),
-    mediaCount: Number(row.media_count ?? 0)
+    mediaCount: Number(row.media_count ?? 0),
+    representativeFaceId:
+      row.representative_face_id === null
+        ? null
+        : Number(row.representative_face_id)
   }));
 
   const pets = db.prepare(`
@@ -1671,21 +1685,26 @@ function getSearchFacets(sourceId: number): SearchFacets {
       p.id,
       p.name,
       p.pet_class,
-      COUNT(DISTINCT pd.media_id) AS media_count
+      COUNT(DISTINCT pd.media_id) AS media_count,
+      MIN(pd.id) AS representative_pet_id
     FROM pets p
     JOIN pet_assignments pa ON pa.pet_id=p.id
     JOIN pet_fused_detections pd ON pd.id=pa.pet_detection_id
     JOIN media_items m ON m.id=pd.media_id
-    WHERE m.source_id=?
-      AND m.availability='AVAILABLE'
+    WHERE m.availability='AVAILABLE'
       AND pd.input_sha256=m.sha256
+      ${sourceFilter}
     GROUP BY p.id, p.name, p.pet_class
     ORDER BY p.name COLLATE NOCASE, p.id
-  `).all(sourceId).map((row) => ({
+  `).all(...sourceArgs).map((row) => ({
     id: Number(row.id),
     name: String(row.name),
     petClass: String(row.pet_class) === "cat" ? "cat" as const : "dog" as const,
-    mediaCount: Number(row.media_count ?? 0)
+    mediaCount: Number(row.media_count ?? 0),
+    representativePetId:
+      row.representative_pet_id === null
+        ? null
+        : Number(row.representative_pet_id)
   }));
 
   const objects = db.prepare(`
@@ -1694,13 +1713,13 @@ function getSearchFacets(sourceId: number): SearchFacets {
       COUNT(DISTINCT od.media_id) AS media_count
     FROM object_fused_detections od
     JOIN media_items m ON m.id=od.media_id
-    WHERE m.source_id=?
-      AND m.availability='AVAILABLE'
+    WHERE m.availability='AVAILABLE'
       AND od.input_sha256=m.sha256
       AND od.label NOT IN ('dog','cat')
+      ${sourceFilter}
     GROUP BY od.label
     ORDER BY media_count DESC, od.label COLLATE NOCASE
-  `).all(sourceId).map((row) => ({
+  `).all(...sourceArgs).map((row) => ({
     label: String(row.label),
     mediaCount: Number(row.media_count ?? 0)
   }));
@@ -8781,10 +8800,16 @@ async function dispatch(method: CatalogMethod, payload: Record<string, unknown> 
         payload.limit === undefined ? 500 : asNumber(payload.limit, "limit")
       );
     case "getSearchFacets":
-      return getSearchFacets(asNumber(payload.sourceId, "sourceId"));
+      return getSearchFacets(
+        payload.sourceId === undefined
+          ? undefined
+          : asNumber(payload.sourceId, "sourceId")
+      );
     case "searchMedia":
       return listMedia(
-        asNumber(payload.sourceId, "sourceId"),
+        payload.sourceId === undefined
+          ? undefined
+          : asNumber(payload.sourceId, "sourceId"),
         payload.limit === undefined ? 500 : asNumber(payload.limit, "limit"),
         payload.filter as SearchFilter | undefined,
         payload.semantic as SemanticTextEmbedding | null | undefined
