@@ -12,6 +12,7 @@ export class ThumbnailCoordinator {
   private timer: NodeJS.Timeout | null = null;
   private pumping = false;
   private stopped = true;
+  private shutdownRequested = false;
 
   constructor(
     private readonly catalog: CatalogService,
@@ -21,6 +22,7 @@ export class ThumbnailCoordinator {
 
   async start(): Promise<void> {
     if (!this.stopped) return;
+    this.shutdownRequested = false;
     this.stopped = false;
 
     await this.enqueueExistingSources();
@@ -38,6 +40,11 @@ export class ThumbnailCoordinator {
     this.stopped = true;
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
+  }
+
+  prepareForShutdown(): void {
+    this.shutdownRequested = true;
+    this.stop();
   }
 
   async waitUntilIdle(timeoutMs = 15000): Promise<void> {
@@ -115,6 +122,12 @@ export class ThumbnailCoordinator {
           jobId: job.id,
           error: error instanceof Error ? error.message : String(error)
         });
+
+        if (this.shutdownRequested) {
+          await this.catalog.request("retryAnalysisJob", {
+            jobId: job.id
+          });
+        }
       }
 
       await this.refreshStats();
