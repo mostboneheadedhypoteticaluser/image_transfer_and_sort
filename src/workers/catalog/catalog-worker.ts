@@ -5679,6 +5679,11 @@ function getPetEmbeddingsForClustering(
       updated_at=CURRENT_TIMESTAMP
   `);
 
+  const removeCandidateMembership = db.prepare(`
+    DELETE FROM pet_candidate_items
+    WHERE pet_detection_id=?
+  `);
+
   const rows = rawRows.filter((row) => {
     const vector = vectorFromBlob(row.vector_blob, Number(row.dimension));
     const match = classifyIgnoredVectors(
@@ -5691,11 +5696,13 @@ function getPetEmbeddingsForClustering(
 
     if (!match?.definite) return true;
 
+    const petDetectionId = Number(row.pet_detection_id);
     insertIgnoredMatch.run(
-      Number(row.pet_detection_id),
+      petDetectionId,
       match.identityId,
       match.similarity
     );
+    removeCandidateMembership.run(petDetectionId);
     return false;
   });
 
@@ -7649,6 +7656,11 @@ function getFaceEmbeddingsForClustering(
       updated_at=CURRENT_TIMESTAMP
   `);
 
+  const removeCandidateMembership = db.prepare(`
+    DELETE FROM person_candidate_faces
+    WHERE face_detection_id=?
+  `);
+
   const rows = rawRows.filter((row) => {
     const vector = vectorFromBlob(row.vector_blob, Number(row.dimension));
     const match = classifyIgnoredVectors(
@@ -7660,11 +7672,13 @@ function getFaceEmbeddingsForClustering(
 
     if (!match?.definite) return true;
 
+    const faceDetectionId = Number(row.face_detection_id);
     insertIgnoredMatch.run(
-      Number(row.face_detection_id),
+      faceDetectionId,
       match.identityId,
       match.similarity
     );
+    removeCandidateMembership.run(faceDetectionId);
     return false;
   });
 
