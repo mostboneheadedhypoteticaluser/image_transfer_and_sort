@@ -525,6 +525,12 @@ export class AnalysisCoordinator {
         `${spec.label}: ${job.absolutePath}`
       );
 
+      // claimAnalysisJob setzt den Datensatz bereits auf RUNNING. Den Status
+      // sofort erneut aus SQLite lesen und veröffentlichen, damit eine lange
+      // SigLIP-/Qwen-Berechnung nicht minutenlang mit dem Stand vor dem Claim
+      // angezeigt wird.
+      await this.refreshAllStats();
+
       try {
         let extraPayload: Record<string, unknown> = {};
 
