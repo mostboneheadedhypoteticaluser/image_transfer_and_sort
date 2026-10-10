@@ -153,6 +153,7 @@ const searchMinCats = document.querySelector<HTMLInputElement>("#searchMinCats")
 const runSearchButton = document.querySelector<HTMLButtonElement>("#runSearch")!;
 const resetSearchButton = document.querySelector<HTMLButtonElement>("#resetSearch")!;
 const searchSummary = document.querySelector<HTMLSpanElement>("#searchSummary")!;
+const searchScope = document.querySelector<HTMLSelectElement>("#searchScope")!;
 
 let sources: SourceRecord[] = [];
 let currentView: CatalogView = "media";
@@ -172,7 +173,7 @@ let lastPipelineIssueTotal = -1;
 let analysisRefreshTimer: number | null = null;
 let sourcePipelineRefreshTimer: number | null = null;
 let identityStatsRefreshTimer: number | null = null;
-let searchFacetsSourceId: number | null = null;
+let searchFacetsScopeKey: string | null = null;
 let latestAnalysisStatus: AnalysisWorkerStatus | null = null;
 let qwenBenchmarkSelectedPath: string | null = null;
 let qwenBenchmarkRunning = false;
@@ -675,16 +676,17 @@ function renderStage(
   stateElement.textContent = state.text;
   countsElement.textContent =
     `${stats.done.toLocaleString("de-DE")} fertig · ` +
+    `${stats.running.toLocaleString("de-DE")} läuft · ` +
     `${stats.pending.toLocaleString("de-DE")} offen · ` +
     `${stats.failed.toLocaleString("de-DE")} Fehler · ` +
     `${stats.unavailable.toLocaleString("de-DE")} fehlen`;
 }
 
 async function refreshSelectedPipelineStatus(): Promise<void> {
-  const sourceId = selectedSourceId();
-  const status = await window.imageSorter.analysis.getPipelineStatus(
-    sourceId ?? undefined
-  );
+  // Die Stufenanzeige ist global und entspricht damit der ebenfalls globalen
+  // Worker-Statuszeile. Ein aktuell laufender SigLIP/Qwen-Job kann so nicht
+  // hinter einer bereits fertigen ausgewählten Quelle verschwinden.
+  const status = await window.imageSorter.analysis.getPipelineStatus();
   renderPipelineStatus(status);
 }
 
@@ -1617,7 +1619,8 @@ function appendFacet(
   value: string,
   label: string,
   mediaCount: number,
-  checked: boolean
+  checked: boolean,
+  previewUrl?: string | null
 ): void {
   const wrapper = document.createElement("label");
   wrapper.className = "search-facet";
@@ -1626,6 +1629,15 @@ function appendFacet(
   input.type = "checkbox";
   input.value = value;
   input.checked = checked;
+
+  if (previewUrl) {
+    const preview = document.createElement("img");
+    preview.className = "search-facet-preview";
+    preview.src = previewUrl;
+    preview.alt = "";
+    preview.loading = "lazy";
+    wrapper.appendChild(preview);
+  }
 
   const text = document.createElement("span");
   text.textContent = label;
@@ -1652,7 +1664,10 @@ function renderSearchFacets(facets: SearchFacets): void {
       String(person.id),
       person.name,
       person.mediaCount,
-      selectedPersons.has(String(person.id))
+      selectedPersons.has(String(person.id)),
+      person.representativeFaceId === null
+        ? null
+        : faceCropUrl(person.representativeFaceId)
     );
   }
 
@@ -1662,7 +1677,10 @@ function renderSearchFacets(facets: SearchFacets): void {
       String(pet.id),
       pet.name + (pet.petClass === "dog" ? " · Hund" : " · Katze"),
       pet.mediaCount,
-      selectedPets.has(String(pet.id))
+      selectedPets.has(String(pet.id)),
+      pet.representativePetId === null
+        ? null
+        : petCropUrl(pet.representativePetId)
     );
   }
 
@@ -1689,22 +1707,40 @@ function renderSearchFacets(facets: SearchFacets): void {
   addEmpty(searchObjects, "Noch keine belastbaren Motive analysiert.");
 }
 
-async function loadSearchFacets(sourceId: number): Promise<void> {
-  const facets = await window.imageSorter.catalog.getSearchFacets(sourceId);
-  renderSearchFacets(facets);
-  searchFacetsSourceId = sourceId;
+function searchScopeSourceId(): number | undefined {
+  if (searchScope.value !== "source") return undefined;
+  return selectedSourceId() ?? undefined;
 }
 
-async function runCombinedSearch(sourceId: number): Promise<void> {
+function currentSearchScopeKey(): string {
+  const sourceId = searchScopeSourceId();
+  return sourceId === undefined ? "catalog" : "source:" + sourceId;
+}
+
+async function loadSearchFacets(sourceId?: number): Promise<void> {
+  const facets = await window.imageSorter.catalog.getSearchFacets(sourceId);
+  renderSearchFacets(facets);
+  searchFacetsScopeKey =
+    sourceId === undefined ? "catalog" : "source:" + sourceId;
+}
+
+async function runCombinedSearch(sourceId?: number): Promise<void> {
   const filter = currentSearchFilter();
-  const rows = await window.imageSorter.catalog.searchMedia(sourceId, filter, 1000);
+  const rows = await window.imageSorter.catalog.searchMedia(
+    sourceId,
+    filter,
+    1000
+  );
   renderRows(rows, "Keine Medien entsprechen allen ausgewählten Kriterien.");
 
   const criteria = searchCriterionCount(filter);
+  const scopeLabel =
+    sourceId === undefined ? "gesamter Katalog" : "aktuelle Quelle";
   searchTabCount.textContent = rows.length.toLocaleString("de-DE");
   searchSummary.textContent =
     rows.length.toLocaleString("de-DE") + " " +
     (rows.length === 1 ? "Treffer" : "Treffer") +
+    " · " + scopeLabel +
     (criteria > 0
       ? " · " + criteria.toLocaleString("de-DE") + " UND-" +
         (criteria === 1 ? "Kriterium" : "Kriterien")
@@ -1804,6 +1840,21 @@ function renderRows(rows: MediaRecord[], emptyText = "Noch keine Medien katalogi
     pathMain.className = "path-main";
     pathMain.textContent = row.relativePath;
     pathCell.appendChild(pathMain);
+
+    if (
+      currentView === "search" &&
+      searchScope.value === "catalog" &&
+      row.sourcePath
+    ) {
+      const source = document.createElement("small");
+      source.className = "path-meta";
+      const normalized = row.sourcePath.replace(/\\/g, "/");
+      const sourceName =
+        normalized.split("/").filter(Boolean).at(-1) ?? row.sourcePath;
+      source.textContent = "Quelle: " + sourceName;
+      source.title = row.sourcePath;
+      pathCell.appendChild(source);
+    }
 
     if (row.capturedAt) {
       const captured = document.createElement("small");
@@ -3449,8 +3500,9 @@ async function refreshCatalog(): Promise<void> {
   }
 
   if (currentView === "search") {
-    await loadSearchFacets(sourceId);
-    await runCombinedSearch(sourceId);
+    const searchSourceId = searchScopeSourceId();
+    await loadSearchFacets(searchSourceId);
+    await runCombinedSearch(searchSourceId);
     return;
   }
 
@@ -3610,7 +3662,7 @@ resetButton.addEventListener("click", () => {
       personView.hidden = true;
       petView.hidden = true;
       clearSearchControls();
-      searchFacetsSourceId = null;
+      searchFacetsScopeKey = null;
       searchTabCount.textContent = "0";
       searchSummary.textContent = "Noch keine Suche ausgeführt.";
       await loadSources();
@@ -3934,18 +3986,24 @@ imagePreviewDialog.addEventListener("close", () => {
 sourceSelect.addEventListener("change", () => {
   renderCatalogWatchState();
   scheduleSelectedPipelineRefresh();
-  clearSearchControls();
-  searchFacetsSourceId = null;
-  searchTabCount.textContent = "0";
-  searchSummary.textContent = "Noch keine Suche ausgeführt.";
+
+  if (searchScope.value === "source") {
+    clearSearchControls();
+    searchFacetsScopeKey = null;
+    searchTabCount.textContent = "0";
+    searchSummary.textContent = "Noch keine Suche ausgeführt.";
+  }
+
   void runSafely(refreshCatalog);
 });
 
 runSearchButton.addEventListener("click", () => {
-  const sourceId = selectedSourceId();
-  if (sourceId === null) return;
   void runSafely(async () => {
-    if (searchFacetsSourceId !== sourceId) await loadSearchFacets(sourceId);
+    const sourceId = searchScopeSourceId();
+    const scopeKey = currentSearchScopeKey();
+    if (searchFacetsScopeKey !== scopeKey) {
+      await loadSearchFacets(sourceId);
+    }
     await runCombinedSearch(sourceId);
   });
 });
@@ -3957,10 +4015,21 @@ searchSemanticQuery.addEventListener("keydown", (event) => {
 });
 
 resetSearchButton.addEventListener("click", () => {
-  const sourceId = selectedSourceId();
   clearSearchControls();
-  if (sourceId === null) return;
-  void runSafely(() => runCombinedSearch(sourceId));
+  void runSafely(() => runCombinedSearch(searchScopeSourceId()));
+});
+
+searchScope.addEventListener("change", () => {
+  clearSearchControls();
+  searchFacetsScopeKey = null;
+  searchTabCount.textContent = "0";
+  searchSummary.textContent = "Noch keine Suche ausgeführt.";
+
+  void runSafely(async () => {
+    const sourceId = searchScopeSourceId();
+    await loadSearchFacets(sourceId);
+    await runCombinedSearch(sourceId);
+  });
 });
 
 refreshButton.addEventListener("click", () => void runSafely(refreshCatalog));
@@ -4064,7 +4133,7 @@ void window.imageSorter.analysis
   .catch(() => renderAutomaticQwenState(false));
 
 void window.imageSorter.analysis
-  .getPipelineStatus(selectedSourceId() ?? undefined)
+  .getPipelineStatus()
   .then(renderPipelineStatus)
   .catch(() => {
     renderPipelineStatus({
