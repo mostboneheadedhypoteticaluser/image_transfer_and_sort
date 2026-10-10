@@ -1054,12 +1054,15 @@ function getStats(sourceId: number) {
         JOIN media_items m ON m.id=fe.media_id
         LEFT JOIN person_face_assignments pfa
           ON pfa.face_detection_id=fd.id
+        LEFT JOIN ignored_person_matches ipm
+          ON ipm.face_detection_id=fd.id
         WHERE m.source_id=?
           AND m.availability='AVAILABLE'
           AND fe.model_version='SFace 2021dec'
           AND fe.input_sha256=m.sha256
           AND fd.input_sha256=m.sha256
           AND pfa.face_detection_id IS NULL
+          AND ipm.face_detection_id IS NULL
       ) AS unassigned_face_embedding_count
   `).get(sourceId, sourceId, sourceId);
 
@@ -1093,6 +1096,8 @@ function getStats(sourceId: number) {
         JOIN media_items m ON m.id=pe.media_id
         LEFT JOIN pet_assignments pa
           ON pa.pet_detection_id=pd.id
+        LEFT JOIN ignored_pet_matches ipm
+          ON ipm.pet_detection_id=pd.id
         WHERE m.source_id=?
           AND m.availability='AVAILABLE'
           AND pd.pet_class='dog'
@@ -1100,6 +1105,7 @@ function getStats(sourceId: number) {
           AND pe.input_sha256=m.sha256
           AND pd.input_sha256=m.sha256
           AND pa.pet_detection_id IS NULL
+          AND ipm.pet_detection_id IS NULL
       ) AS unassigned_dog_embedding_count
   `).get(sourceId, sourceId, sourceId);
 
@@ -5804,6 +5810,7 @@ function replacePetCandidates(
     JOIN pet_embeddings pe ON pe.pet_detection_id=pd.id
     JOIN media_items m ON m.id=pd.media_id
     LEFT JOIN pet_assignments pa ON pa.pet_detection_id=pd.id
+    LEFT JOIN ignored_pet_matches ipm ON ipm.pet_detection_id=pd.id
     WHERE m.source_id=?
       AND m.availability='AVAILABLE'
       AND pd.pet_class='dog'
@@ -5811,6 +5818,7 @@ function replacePetCandidates(
       AND pe.input_sha256=m.sha256
       AND pd.input_sha256=m.sha256
       AND pa.pet_detection_id IS NULL
+      AND ipm.pet_detection_id IS NULL
   `).all(sourceId);
 
   const eligibleIds = new Set(
@@ -7530,12 +7538,14 @@ function replacePersonCandidates(
     JOIN face_embeddings fe ON fe.face_detection_id=fd.id
     JOIN media_items m ON m.id=fd.media_id
     LEFT JOIN person_face_assignments pfa ON pfa.face_detection_id=fd.id
+    LEFT JOIN ignored_person_matches ipm ON ipm.face_detection_id=fd.id
     WHERE m.source_id=?
       AND m.availability='AVAILABLE'
       AND fe.model_version='SFace 2021dec'
       AND fe.input_sha256=m.sha256
       AND fd.input_sha256=m.sha256
       AND pfa.face_detection_id IS NULL
+      AND ipm.face_detection_id IS NULL
   `).all(sourceId);
 
   const eligibleIds = new Set(
