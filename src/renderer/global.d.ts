@@ -134,9 +134,9 @@ declare global {
         getStats(sourceId: number): Promise<CatalogStats>;
         getWatchSnapshot(): Promise<CatalogWatchSnapshot>;
         listMedia(sourceId: number, limit?: number): Promise<MediaRecord[]>;
-        getSearchFacets(sourceId: number): Promise<SearchFacets>;
+        getSearchFacets(sourceId?: number): Promise<SearchFacets>;
         searchMedia(
-          sourceId: number,
+          sourceId: number | undefined,
           filter: SearchFilter,
           limit?: number
         ): Promise<MediaRecord[]>;
