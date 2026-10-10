@@ -129,6 +129,7 @@ export class PersonService {
         // 500 größte Gruppen reichen für die Bestätigungsansicht; Einzelgesichter
         // werden grundsätzlich nicht als Gruppe gespeichert.
         limit: 500,
+        ignoreDefiniteThreshold: CLUSTER_THRESHOLD,
         ignoreDoubtThreshold: VERIFICATION_THRESHOLD
       }),
       this.catalog.request<PersonRecord[]>("listPersons", { sourceId }),
