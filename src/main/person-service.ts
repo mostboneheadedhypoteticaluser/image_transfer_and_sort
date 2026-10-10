@@ -123,15 +123,19 @@ export class PersonService {
       }
     }
 
-    const [candidates, persons, stats] = await Promise.all([
-      this.catalog.request<PersonCandidate[]>("listPersonCandidates", {
+    // Kandidaten zuerst laden: listPersonCandidates darf dabei eindeutige
+    // Treffer gegen die dauerhafte Ignore-Liste automatisch ausblenden.
+    // Die danach gelesenen Summen entsprechen dadurch exakt der sichtbaren Ansicht.
+    const candidates = await this.catalog.request<PersonCandidate[]>(
+      "listPersonCandidates",
+      {
         sourceId,
-        // 500 größte Gruppen reichen für die Bestätigungsansicht; Einzelgesichter
-        // werden grundsätzlich nicht als Gruppe gespeichert.
         limit: 500,
         ignoreDefiniteThreshold: CLUSTER_THRESHOLD,
         ignoreDoubtThreshold: VERIFICATION_THRESHOLD
-      }),
+      }
+    );
+    const [persons, stats] = await Promise.all([
       this.catalog.request<PersonRecord[]>("listPersons", { sourceId }),
       this.catalog.request<CatalogStats>("getStats", { sourceId })
     ]);
