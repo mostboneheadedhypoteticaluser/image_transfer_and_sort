@@ -6586,6 +6586,202 @@ function listPets(sourceId: number) {
   }));
 }
 
+function ignorePetCandidate(
+  candidateId: number,
+  fallbackPetDetectionId?: number,
+  expectedDetectionCount?: number,
+  expectedMemberSignature?: string,
+  requestedIgnoredIdentityId?: number
+) {
+  let resolvedCandidateId = candidateId;
+  let candidate = db.prepare(`
+    SELECT id, source_id, pet_class
+    FROM pet_candidates
+    WHERE id=?
+  `).get(resolvedCandidateId);
+
+  const stablePetId =
+    Number.isInteger(fallbackPetDetectionId) &&
+    Number(fallbackPetDetectionId) > 0
+      ? Number(fallbackPetDetectionId)
+      : null;
+
+  const candidateStillMatches =
+    candidate && stablePetId !== null
+      ? Boolean(
+          db.prepare(`
+            SELECT 1
+            FROM pet_candidate_items
+            WHERE candidate_id=?
+              AND pet_detection_id=?
+            LIMIT 1
+          `).get(resolvedCandidateId, stablePetId)
+        )
+      : Boolean(candidate);
+
+  if (!candidateStillMatches && stablePetId !== null) {
+    candidate = db.prepare(`
+      SELECT pc.id, pc.source_id, pc.pet_class
+      FROM pet_candidate_items pci
+      JOIN pet_candidates pc ON pc.id=pci.candidate_id
+      WHERE pci.pet_detection_id=?
+      LIMIT 1
+    `).get(stablePetId);
+
+    if (candidate) resolvedCandidateId = Number(candidate.id);
+  }
+
+  if (!candidate) {
+    throw new Error(
+      "Die Hundegruppe wurde während der Analyse neu aufgebaut. Bitte die Ansicht aktualisieren und erneut prüfen."
+    );
+  }
+
+  const members = db.prepare(`
+    SELECT pci.pet_detection_id
+    FROM pet_candidate_items pci
+    LEFT JOIN pet_assignments pa ON pa.pet_detection_id=pci.pet_detection_id
+    WHERE pci.candidate_id=?
+      AND pa.pet_detection_id IS NULL
+    ORDER BY pci.pet_detection_id
+  `).all(resolvedCandidateId);
+
+  if (members.length === 0) {
+    throw new Error("Die Hundegruppe enthält keine unbestätigten Fundstellen mehr.");
+  }
+
+  if (
+    Number.isInteger(expectedDetectionCount) &&
+    Number(expectedDetectionCount) >= 2 &&
+    members.length !== Number(expectedDetectionCount)
+  ) {
+    throw new Error(
+      "Die Hundegruppe hat sich während der Analyse geändert. Bitte die Ansicht aktualisieren und erneut prüfen."
+    );
+  }
+
+  const currentMemberSignature = members
+    .map((member) => Number(member.pet_detection_id))
+    .join(",");
+  if (
+    typeof expectedMemberSignature === "string" &&
+    expectedMemberSignature.length > 0 &&
+    currentMemberSignature !== expectedMemberSignature
+  ) {
+    throw new Error(
+      "Die Zusammensetzung der Hundegruppe hat sich während der Analyse geändert. Bitte die Ansicht aktualisieren und erneut prüfen."
+    );
+  }
+
+  const embeddingQuery = db.prepare(`
+    SELECT
+      pe.pet_detection_id,
+      pe.model_version,
+      pe.dimension,
+      pe.vector_blob
+    FROM pet_embeddings pe
+    WHERE pe.pet_detection_id=?
+      AND pe.model_version='DogReID DINOv2-B14 0.2.0'
+  `);
+
+  const petClass = String(candidate.pet_class);
+  let ignoredIdentityId =
+    Number.isInteger(requestedIgnoredIdentityId) &&
+    Number(requestedIgnoredIdentityId) > 0
+      ? Number(requestedIgnoredIdentityId)
+      : null;
+
+  if (ignoredIdentityId !== null) {
+    const existing = db.prepare(`
+      SELECT id
+      FROM ignored_pet_identities
+      WHERE id=? AND pet_class=?
+    `).get(ignoredIdentityId, petClass);
+    if (!existing) ignoredIdentityId = null;
+  }
+
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const extendedExisting = ignoredIdentityId !== null;
+
+    if (ignoredIdentityId === null) {
+      ignoredIdentityId = Number(
+        db.prepare(`
+          INSERT INTO ignored_pet_identities(pet_class)
+          VALUES(?)
+        `).run(petClass).lastInsertRowid
+      );
+    }
+
+    const insertReference = db.prepare(`
+      INSERT OR IGNORE INTO ignored_pet_references(
+        identity_id,
+        model_version,
+        dimension,
+        vector_blob,
+        source_pet_detection_id
+      )
+      VALUES(?,?,?,?,?)
+    `);
+    const insertMatch = db.prepare(`
+      INSERT INTO ignored_pet_matches(
+        pet_detection_id,
+        identity_id,
+        match_source,
+        similarity,
+        updated_at
+      )
+      VALUES(?,?,'USER_REJECTED',NULL,CURRENT_TIMESTAMP)
+      ON CONFLICT(pet_detection_id) DO UPDATE SET
+        identity_id=excluded.identity_id,
+        match_source='USER_REJECTED',
+        similarity=NULL,
+        updated_at=CURRENT_TIMESTAMP
+    `);
+
+    let detectionCount = 0;
+    for (const member of members) {
+      const petDetectionId = Number(member.pet_detection_id);
+      const embedding = embeddingQuery.get(petDetectionId);
+      if (!embedding) continue;
+
+      insertReference.run(
+        ignoredIdentityId,
+        String(embedding.model_version),
+        Number(embedding.dimension),
+        embedding.vector_blob,
+        petDetectionId
+      );
+      insertMatch.run(petDetectionId, ignoredIdentityId);
+      detectionCount += 1;
+    }
+
+    if (detectionCount === 0) {
+      throw new Error(
+        "Für die Hundegruppe konnten keine Dog-ReID-Merkmale als dauerhafte Ignore-Referenz gespeichert werden."
+      );
+    }
+
+    db.prepare(`
+      UPDATE ignored_pet_identities
+      SET updated_at=CURRENT_TIMESTAMP
+      WHERE id=?
+    `).run(ignoredIdentityId);
+
+    db.prepare("DELETE FROM pet_candidates WHERE id=?").run(resolvedCandidateId);
+
+    db.exec("COMMIT");
+    return {
+      ignoredIdentityId,
+      detectionCount,
+      extendedExisting
+    };
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+}
+
 function confirmPetCandidate(
   candidateId: number,
   rawName: unknown,
@@ -8227,6 +8423,201 @@ function mergePersons(targetPersonId: number, sourcePersonId: number) {
     name: String(target.name),
     faceCount: Number(count?.count ?? 0)
   };
+}
+
+function ignorePersonCandidate(
+  candidateId: number,
+  fallbackFaceDetectionId?: number,
+  expectedFaceCount?: number,
+  expectedMemberSignature?: string,
+  requestedIgnoredIdentityId?: number
+) {
+  let resolvedCandidateId = candidateId;
+  let candidate = db.prepare(`
+    SELECT id, source_id
+    FROM person_candidates
+    WHERE id=?
+  `).get(resolvedCandidateId);
+
+  const stableFaceId =
+    Number.isInteger(fallbackFaceDetectionId) &&
+    Number(fallbackFaceDetectionId) > 0
+      ? Number(fallbackFaceDetectionId)
+      : null;
+
+  const candidateStillMatches =
+    candidate && stableFaceId !== null
+      ? Boolean(
+          db.prepare(`
+            SELECT 1
+            FROM person_candidate_faces
+            WHERE candidate_id=?
+              AND face_detection_id=?
+            LIMIT 1
+          `).get(resolvedCandidateId, stableFaceId)
+        )
+      : Boolean(candidate);
+
+  if (!candidateStillMatches && stableFaceId !== null) {
+    candidate = db.prepare(`
+      SELECT pc.id, pc.source_id
+      FROM person_candidate_faces pcf
+      JOIN person_candidates pc ON pc.id=pcf.candidate_id
+      WHERE pcf.face_detection_id=?
+      LIMIT 1
+    `).get(stableFaceId);
+
+    if (candidate) resolvedCandidateId = Number(candidate.id);
+  }
+
+  if (!candidate) {
+    throw new Error(
+      "Die Personengruppe wurde während der Analyse neu aufgebaut. Bitte die Ansicht aktualisieren und erneut prüfen."
+    );
+  }
+
+  const members = db.prepare(`
+    SELECT pcf.face_detection_id
+    FROM person_candidate_faces pcf
+    LEFT JOIN person_face_assignments pfa
+      ON pfa.face_detection_id=pcf.face_detection_id
+    WHERE pcf.candidate_id=?
+      AND pfa.face_detection_id IS NULL
+    ORDER BY pcf.face_detection_id
+  `).all(resolvedCandidateId);
+
+  if (members.length === 0) {
+    throw new Error("Die Personengruppe enthält keine unbestätigten Gesichter mehr.");
+  }
+
+  if (
+    Number.isInteger(expectedFaceCount) &&
+    Number(expectedFaceCount) >= 2 &&
+    members.length !== Number(expectedFaceCount)
+  ) {
+    throw new Error(
+      "Die Personengruppe hat sich während der Analyse geändert. Bitte die Ansicht aktualisieren und erneut prüfen."
+    );
+  }
+
+  const currentMemberSignature = members
+    .map((member) => Number(member.face_detection_id))
+    .join(",");
+  if (
+    typeof expectedMemberSignature === "string" &&
+    expectedMemberSignature.length > 0 &&
+    currentMemberSignature !== expectedMemberSignature
+  ) {
+    throw new Error(
+      "Die Zusammensetzung der Personengruppe hat sich während der Analyse geändert. Bitte die Ansicht aktualisieren und erneut prüfen."
+    );
+  }
+
+  const embeddingQuery = db.prepare(`
+    SELECT
+      fe.face_detection_id,
+      fe.model_version,
+      fe.dimension,
+      fe.vector_blob
+    FROM face_embeddings fe
+    WHERE fe.face_detection_id=?
+      AND fe.model_version='SFace 2021dec'
+  `);
+
+  let ignoredIdentityId =
+    Number.isInteger(requestedIgnoredIdentityId) &&
+    Number(requestedIgnoredIdentityId) > 0
+      ? Number(requestedIgnoredIdentityId)
+      : null;
+
+  if (ignoredIdentityId !== null) {
+    const existing = db.prepare(`
+      SELECT id
+      FROM ignored_person_identities
+      WHERE id=?
+    `).get(ignoredIdentityId);
+    if (!existing) ignoredIdentityId = null;
+  }
+
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const extendedExisting = ignoredIdentityId !== null;
+
+    if (ignoredIdentityId === null) {
+      ignoredIdentityId = Number(
+        db.prepare(`
+          INSERT INTO ignored_person_identities DEFAULT VALUES
+        `).run().lastInsertRowid
+      );
+    }
+
+    const insertReference = db.prepare(`
+      INSERT OR IGNORE INTO ignored_person_references(
+        identity_id,
+        model_version,
+        dimension,
+        vector_blob,
+        source_face_detection_id
+      )
+      VALUES(?,?,?,?,?)
+    `);
+    const insertMatch = db.prepare(`
+      INSERT INTO ignored_person_matches(
+        face_detection_id,
+        identity_id,
+        match_source,
+        similarity,
+        updated_at
+      )
+      VALUES(?,?,'USER_REJECTED',NULL,CURRENT_TIMESTAMP)
+      ON CONFLICT(face_detection_id) DO UPDATE SET
+        identity_id=excluded.identity_id,
+        match_source='USER_REJECTED',
+        similarity=NULL,
+        updated_at=CURRENT_TIMESTAMP
+    `);
+
+    let faceCount = 0;
+    for (const member of members) {
+      const faceDetectionId = Number(member.face_detection_id);
+      const embedding = embeddingQuery.get(faceDetectionId);
+      if (!embedding) continue;
+
+      insertReference.run(
+        ignoredIdentityId,
+        String(embedding.model_version),
+        Number(embedding.dimension),
+        embedding.vector_blob,
+        faceDetectionId
+      );
+      insertMatch.run(faceDetectionId, ignoredIdentityId);
+      faceCount += 1;
+    }
+
+    if (faceCount === 0) {
+      throw new Error(
+        "Für die Personengruppe konnten keine SFace-Merkmale als dauerhafte Ignore-Referenz gespeichert werden."
+      );
+    }
+
+    db.prepare(`
+      UPDATE ignored_person_identities
+      SET updated_at=CURRENT_TIMESTAMP
+      WHERE id=?
+    `).run(ignoredIdentityId);
+
+    db.prepare("DELETE FROM person_candidates WHERE id=?").run(resolvedCandidateId);
+
+    db.exec("COMMIT");
+    return {
+      ignoredIdentityId,
+      faceCount,
+      extendedExisting
+    };
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
 }
 
 function confirmPersonCandidate(
