@@ -21,6 +21,8 @@ import type {
   CatalogWatchSnapshot,
   ConfirmPersonResult,
   ConfirmPetResult,
+  IgnorePersonResult,
+  IgnorePetResult,
   DuplicateGroup,
   FaceCropInfo,
   MediaPreviewInfo,
