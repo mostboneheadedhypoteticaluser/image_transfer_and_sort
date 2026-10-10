@@ -439,6 +439,39 @@ db.exec(`
     PRIMARY KEY(pet_id, pet_detection_id)
   );
 
+  CREATE TABLE IF NOT EXISTS ignored_pet_identities (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    pet_class TEXT NOT NULL CHECK(pet_class IN ('dog','cat')),
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE TABLE IF NOT EXISTS ignored_pet_references (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    identity_id INTEGER NOT NULL REFERENCES ignored_pet_identities(id) ON DELETE CASCADE,
+    model_version TEXT NOT NULL,
+    dimension INTEGER NOT NULL,
+    vector_blob BLOB NOT NULL,
+    source_pet_detection_id INTEGER,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(identity_id, source_pet_detection_id)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_ignored_pet_reference_identity
+    ON ignored_pet_references(identity_id);
+
+  CREATE TABLE IF NOT EXISTS ignored_pet_matches (
+    pet_detection_id INTEGER PRIMARY KEY REFERENCES pet_fused_detections(id) ON DELETE CASCADE,
+    identity_id INTEGER NOT NULL REFERENCES ignored_pet_identities(id) ON DELETE CASCADE,
+    match_source TEXT NOT NULL CHECK(match_source IN ('USER_REJECTED','AUTO_HIGH_CONFIDENCE')),
+    similarity REAL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_ignored_pet_match_identity
+    ON ignored_pet_matches(identity_id);
+
   CREATE TABLE IF NOT EXISTS persons (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
@@ -504,6 +537,38 @@ db.exec(`
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY(person_id, face_detection_id)
   );
+
+  CREATE TABLE IF NOT EXISTS ignored_person_identities (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE TABLE IF NOT EXISTS ignored_person_references (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    identity_id INTEGER NOT NULL REFERENCES ignored_person_identities(id) ON DELETE CASCADE,
+    model_version TEXT NOT NULL,
+    dimension INTEGER NOT NULL,
+    vector_blob BLOB NOT NULL,
+    source_face_detection_id INTEGER,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(identity_id, source_face_detection_id)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_ignored_person_reference_identity
+    ON ignored_person_references(identity_id);
+
+  CREATE TABLE IF NOT EXISTS ignored_person_matches (
+    face_detection_id INTEGER PRIMARY KEY REFERENCES face_detections(id) ON DELETE CASCADE,
+    identity_id INTEGER NOT NULL REFERENCES ignored_person_identities(id) ON DELETE CASCADE,
+    match_source TEXT NOT NULL CHECK(match_source IN ('USER_REJECTED','AUTO_HIGH_CONFIDENCE')),
+    similarity REAL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_ignored_person_match_identity
+    ON ignored_person_matches(identity_id);
 `);
 
 function tableHasColumn(table: string, column: string): boolean {
@@ -8724,6 +8789,9 @@ function resetCatalog(): { reset: true } {
       "person_cluster_exclusions",
       "person_face_exclusions",
       "person_face_assignments",
+      "ignored_person_matches",
+      "ignored_person_references",
+      "ignored_person_identities",
       "persons",
       "pet_candidate_items",
       "pet_candidates",
@@ -8731,6 +8799,9 @@ function resetCatalog(): { reset: true } {
       "pet_cluster_exclusions",
       "pet_assignment_exclusions",
       "pet_assignments",
+      "ignored_pet_matches",
+      "ignored_pet_references",
+      "ignored_pet_identities",
       "pets",
       "pet_embeddings",
       "pet_fused_detections",
