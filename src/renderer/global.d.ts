@@ -78,6 +78,13 @@ declare global {
           expectedFaceCount?: number,
           expectedMemberSignature?: string
         ): Promise<ConfirmPersonResult>;
+        ignoreCandidate(
+          candidateId: number,
+          fallbackFaceDetectionId?: number,
+          expectedFaceCount?: number,
+          expectedMemberSignature?: string,
+          ignoredIdentityId?: number
+        ): Promise<IgnorePersonResult>;
         removeCandidateFace(
           candidateId: number,
           faceDetectionId: number
@@ -106,6 +113,13 @@ declare global {
           expectedDetectionCount?: number,
           expectedMemberSignature?: string
         ): Promise<ConfirmPetResult>;
+        ignoreCandidate(
+          candidateId: number,
+          fallbackPetDetectionId?: number,
+          expectedDetectionCount?: number,
+          expectedMemberSignature?: string,
+          ignoredIdentityId?: number
+        ): Promise<IgnorePetResult>;
         removeCandidatePet(
           candidateId: number,
           petDetectionId: number
