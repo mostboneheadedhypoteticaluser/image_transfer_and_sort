@@ -6348,7 +6348,12 @@ function autoAssignKnownPetCandidates(sourceId: number) {
   return { assignedCandidates, assignedPets };
 }
 
-function listPetCandidates(sourceId: number, requestedLimit: number) {
+function listPetCandidates(
+  sourceId: number,
+  requestedLimit: number,
+  ignoreDefiniteThreshold = 0.68,
+  ignoreDoubtThreshold = 0.60
+) {
   const limit = Math.max(1, Math.min(2000, Math.trunc(requestedLimit || 500)));
 
   const candidates = db.prepare(`
@@ -6418,6 +6423,23 @@ function listPetCandidates(sourceId: number, requestedLimit: number) {
   `);
 
   const knownPets = knownPetCentroids(sourceId);
+  const ignoredIdentities = ignoredPetVectorIdentities();
+  const insertIgnoredMatch = db.prepare(`
+    INSERT INTO ignored_pet_matches(
+      pet_detection_id,
+      identity_id,
+      match_source,
+      similarity,
+      updated_at
+    )
+    VALUES(?,?,'AUTO_HIGH_CONFIDENCE',?,CURRENT_TIMESTAMP)
+    ON CONFLICT(pet_detection_id) DO UPDATE SET
+      identity_id=excluded.identity_id,
+      match_source=excluded.match_source,
+      similarity=excluded.similarity,
+      updated_at=CURRENT_TIMESTAMP
+  `);
+  const deleteCandidate = db.prepare("DELETE FROM pet_candidates WHERE id=?");
 
   return candidates.map((candidate) => {
     const candidateId = Number(candidate.id);
@@ -6425,11 +6447,31 @@ function listPetCandidates(sourceId: number, requestedLimit: number) {
       ? null
       : Number(candidate.representative_pet_id);
 
-    const candidateVector = centroid(
-      embeddingQuery.all(candidateId).map((row) =>
-        vectorFromBlob(row.vector_blob, Number(row.dimension))
-      )
+    const embeddingRows = embeddingQuery.all(candidateId);
+    const candidateVectors = embeddingRows.map((row) =>
+      vectorFromBlob(row.vector_blob, Number(row.dimension))
     );
+    const candidateVector = centroid(candidateVectors);
+
+    const ignoredMatch = classifyIgnoredVectors(
+      candidateVectors,
+      ignoredIdentities,
+      ignoreDefiniteThreshold,
+      ignoreDoubtThreshold,
+      String(candidate.pet_class)
+    );
+
+    if (ignoredMatch?.definite) {
+      for (const row of embeddingRows) {
+        insertIgnoredMatch.run(
+          Number(row.pet_detection_id),
+          ignoredMatch.identityId,
+          ignoredMatch.similarity
+        );
+      }
+      deleteCandidate.run(candidateId);
+      return null;
+    }
 
     let suggestedPetId: number | null = null;
     let suggestedPetName: string | null = null;
@@ -6467,6 +6509,8 @@ function listPetCandidates(sourceId: number, requestedLimit: number) {
       suggestedPetId,
       suggestedPetName,
       suggestedPetSimilarity,
+      ignoredIdentityId: ignoredMatch?.identityId ?? null,
+      ignoredSimilarity: ignoredMatch?.similarity ?? null,
       pets: itemQuery.all(
         candidateId,
         representativePetId ?? -1
@@ -6477,7 +6521,7 @@ function listPetCandidates(sourceId: number, requestedLimit: number) {
         similarity: Number(row.similarity)
       }))
     };
-  });
+  }).filter((candidate) => candidate !== null);
 }
 
 function listPets(sourceId: number) {
@@ -7671,7 +7715,12 @@ function replacePersonCandidates(
   }
 }
 
-function listPersonCandidates(sourceId: number, requestedLimit: number) {
+function listPersonCandidates(
+  sourceId: number,
+  requestedLimit: number,
+  ignoreDefiniteThreshold = 0.62,
+  ignoreDoubtThreshold = 0.55
+) {
   const limit = Math.max(1, Math.min(2000, Math.trunc(requestedLimit || 500)));
 
   const candidates = db.prepare(`
@@ -7689,8 +7738,6 @@ function listPersonCandidates(sourceId: number, requestedLimit: number) {
     WHERE pc.source_id=?
     GROUP BY pc.id
     HAVING COUNT(DISTINCT m.sha256 || ':' || fd.detection_index) >= 2
-    -- Bestätigung ist nach Gruppengröße priorisiert; bei Gleichstand kommt
-    -- die Gruppe mit dem jüngsten Gesicht zuerst.
     ORDER BY face_count DESC, pc.average_similarity DESC, newest_face_id DESC
     LIMIT ?
   `).all(sourceId, limit);
@@ -7719,24 +7766,80 @@ function listPersonCandidates(sourceId: number, requestedLimit: number) {
     LIMIT 48
   `);
 
+  const embeddingQuery = db.prepare(`
+    SELECT
+      pcf.face_detection_id,
+      fe.dimension,
+      fe.vector_blob
+    FROM person_candidate_faces pcf
+    JOIN face_embeddings fe ON fe.face_detection_id=pcf.face_detection_id
+    WHERE pcf.candidate_id=?
+      AND fe.model_version='SFace 2021dec'
+    ORDER BY pcf.face_detection_id
+  `);
+
+  const ignoredIdentities = ignoredPersonVectorIdentities();
+  const insertIgnoredMatch = db.prepare(`
+    INSERT INTO ignored_person_matches(
+      face_detection_id,
+      identity_id,
+      match_source,
+      similarity,
+      updated_at
+    )
+    VALUES(?,?,'AUTO_HIGH_CONFIDENCE',?,CURRENT_TIMESTAMP)
+    ON CONFLICT(face_detection_id) DO UPDATE SET
+      identity_id=excluded.identity_id,
+      match_source=excluded.match_source,
+      similarity=excluded.similarity,
+      updated_at=CURRENT_TIMESTAMP
+  `);
+  const deleteCandidate = db.prepare("DELETE FROM person_candidates WHERE id=?");
+
   return candidates.map((candidate) => {
+    const candidateId = Number(candidate.id);
     const representativeFaceId = candidate.representative_face_id === null
       ? null
       : Number(candidate.representative_face_id);
 
+    const embeddingRows = embeddingQuery.all(candidateId);
+    const vectors = embeddingRows.map((row) =>
+      vectorFromBlob(row.vector_blob, Number(row.dimension))
+    );
+    const ignoredMatch = classifyIgnoredVectors(
+      vectors,
+      ignoredIdentities,
+      ignoreDefiniteThreshold,
+      ignoreDoubtThreshold
+    );
+
+    if (ignoredMatch?.definite) {
+      for (const row of embeddingRows) {
+        insertIgnoredMatch.run(
+          Number(row.face_detection_id),
+          ignoredMatch.identityId,
+          ignoredMatch.similarity
+        );
+      }
+      deleteCandidate.run(candidateId);
+      return null;
+    }
+
     return {
-      id: Number(candidate.id),
+      id: candidateId,
       faceCount: Number(candidate.face_count),
       newestFaceId: Number(candidate.newest_face_id),
       memberSignature: memberSignatureQuery
-        .all(Number(candidate.id))
+        .all(candidateId)
         .map((row) => Number(row.face_detection_id))
         .join(","),
       representativeFaceId,
       averageSimilarity: Number(candidate.average_similarity),
       minSimilarity: Number(candidate.min_similarity),
+      ignoredIdentityId: ignoredMatch?.identityId ?? null,
+      ignoredSimilarity: ignoredMatch?.similarity ?? null,
       faces: faceQuery.all(
-        Number(candidate.id),
+        candidateId,
         representativeFaceId ?? -1
       ).map((row) => ({
         faceDetectionId: Number(row.face_detection_id),
@@ -7745,7 +7848,7 @@ function listPersonCandidates(sourceId: number, requestedLimit: number) {
         similarity: Number(row.similarity)
       }))
     };
-  });
+  }).filter((candidate) => candidate !== null);
 }
 
 function listPersons(sourceId: number) {
