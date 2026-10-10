@@ -556,6 +556,7 @@ export type CatalogStats = {
 export type MediaRecord = {
   id: number;
   relativePath: string;
+  sourcePath?: string | null;
   extension: string;
   sizeBytes: number;
   availability: "AVAILABLE" | "MISSING";
@@ -598,12 +599,18 @@ export type SearchFilter = {
 };
 
 export type SearchFacets = {
-  persons: Array<{ id: number; name: string; mediaCount: number }>;
+  persons: Array<{
+    id: number;
+    name: string;
+    mediaCount: number;
+    representativeFaceId: number | null;
+  }>;
   pets: Array<{
     id: number;
     name: string;
     petClass: "dog" | "cat";
     mediaCount: number;
+    representativePetId: number | null;
   }>;
   objects: Array<{ label: string; mediaCount: number }>;
 };
