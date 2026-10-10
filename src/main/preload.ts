@@ -207,10 +207,10 @@ const api = {
       ipcRenderer.invoke("catalog:getWatchSnapshot"),
     listMedia: (sourceId: number, limit = 500): Promise<MediaRecord[]> =>
       ipcRenderer.invoke("catalog:listMedia", sourceId, limit),
-    getSearchFacets: (sourceId: number): Promise<SearchFacets> =>
+    getSearchFacets: (sourceId?: number): Promise<SearchFacets> =>
       ipcRenderer.invoke("catalog:getSearchFacets", sourceId),
     searchMedia: (
-      sourceId: number,
+      sourceId: number | undefined,
       filter: SearchFilter,
       limit = 500
     ): Promise<MediaRecord[]> =>
