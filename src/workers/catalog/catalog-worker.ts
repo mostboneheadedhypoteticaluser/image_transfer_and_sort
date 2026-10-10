@@ -5626,9 +5626,11 @@ function completeSemanticEmbeddingJob(jobId: number, result: unknown) {
 
 function getPetEmbeddingsForClustering(
   sourceId: number,
-  algorithmVersion: string
+  algorithmVersion: string,
+  ignoreDefiniteThreshold: number,
+  ignoreDoubtThreshold: number
 ) {
-  const rows = db.prepare(`
+  const rawRows = db.prepare(`
     SELECT
       pd.id AS pet_detection_id,
       pd.detection_index,
@@ -5642,6 +5644,7 @@ function getPetEmbeddingsForClustering(
     JOIN pet_fused_detections pd ON pd.id=pe.pet_detection_id
     JOIN media_items m ON m.id=pe.media_id
     LEFT JOIN pet_assignments pa ON pa.pet_detection_id=pd.id
+    LEFT JOIN ignored_pet_matches ipm ON ipm.pet_detection_id=pd.id
     WHERE m.source_id=?
       AND m.availability='AVAILABLE'
       AND pe.model_version='DogReID DINOv2-B14 0.2.0'
@@ -5649,8 +5652,46 @@ function getPetEmbeddingsForClustering(
       AND pd.input_sha256=m.sha256
       AND pd.pet_class='dog'
       AND pa.pet_detection_id IS NULL
+      AND ipm.pet_detection_id IS NULL
     ORDER BY pd.id ASC
   `).all(sourceId);
+
+  const ignoredIdentities = ignoredPetVectorIdentities();
+  const insertIgnoredMatch = db.prepare(`
+    INSERT INTO ignored_pet_matches(
+      pet_detection_id,
+      identity_id,
+      match_source,
+      similarity,
+      updated_at
+    )
+    VALUES(?,?,'AUTO_HIGH_CONFIDENCE',?,CURRENT_TIMESTAMP)
+    ON CONFLICT(pet_detection_id) DO UPDATE SET
+      identity_id=excluded.identity_id,
+      match_source=excluded.match_source,
+      similarity=excluded.similarity,
+      updated_at=CURRENT_TIMESTAMP
+  `);
+
+  const rows = rawRows.filter((row) => {
+    const vector = vectorFromBlob(row.vector_blob, Number(row.dimension));
+    const match = classifyIgnoredVectors(
+      [vector],
+      ignoredIdentities,
+      ignoreDefiniteThreshold,
+      ignoreDoubtThreshold,
+      String(row.pet_class)
+    );
+
+    if (!match?.definite) return true;
+
+    insertIgnoredMatch.run(
+      Number(row.pet_detection_id),
+      match.identityId,
+      match.similarity
+    );
+    return false;
+  });
 
   const ids = rows.map((row) => Number(row.pet_detection_id));
   const maxUpdatedAt = rows.reduce(
@@ -5712,7 +5753,8 @@ function getPetEmbeddingsForClustering(
     idSum,
     maxUpdatedAt,
     Number(assignmentCount?.count ?? 0),
-    cannotLinkSignature
+    cannotLinkSignature,
+    ignoredIdentityRevision("pet")
   ].join(":");
 
   const previousRun = db.prepare(`
@@ -7312,9 +7354,11 @@ function vectorFromBlob(value: unknown, dimension: number): number[] {
 
 function getFaceEmbeddingsForClustering(
   sourceId: number,
-  algorithmVersion: string
+  algorithmVersion: string,
+  ignoreDefiniteThreshold: number,
+  ignoreDoubtThreshold: number
 ) {
-  const rows = db.prepare(`
+  const rawRows = db.prepare(`
     SELECT
       fd.id AS face_detection_id,
       fd.detection_index,
@@ -7328,14 +7372,53 @@ function getFaceEmbeddingsForClustering(
     JOIN media_items m ON m.id=fe.media_id
     LEFT JOIN person_face_assignments pfa
       ON pfa.face_detection_id=fd.id
+    LEFT JOIN ignored_person_matches ipm
+      ON ipm.face_detection_id=fd.id
     WHERE m.source_id=?
       AND m.availability='AVAILABLE'
       AND fe.model_version='SFace 2021dec'
       AND fe.input_sha256=m.sha256
       AND fd.input_sha256=m.sha256
       AND pfa.face_detection_id IS NULL
+      AND ipm.face_detection_id IS NULL
     ORDER BY fd.id ASC
   `).all(sourceId);
+
+  const ignoredIdentities = ignoredPersonVectorIdentities();
+  const insertIgnoredMatch = db.prepare(`
+    INSERT INTO ignored_person_matches(
+      face_detection_id,
+      identity_id,
+      match_source,
+      similarity,
+      updated_at
+    )
+    VALUES(?,?,'AUTO_HIGH_CONFIDENCE',?,CURRENT_TIMESTAMP)
+    ON CONFLICT(face_detection_id) DO UPDATE SET
+      identity_id=excluded.identity_id,
+      match_source=excluded.match_source,
+      similarity=excluded.similarity,
+      updated_at=CURRENT_TIMESTAMP
+  `);
+
+  const rows = rawRows.filter((row) => {
+    const vector = vectorFromBlob(row.vector_blob, Number(row.dimension));
+    const match = classifyIgnoredVectors(
+      [vector],
+      ignoredIdentities,
+      ignoreDefiniteThreshold,
+      ignoreDoubtThreshold
+    );
+
+    if (!match?.definite) return true;
+
+    insertIgnoredMatch.run(
+      Number(row.face_detection_id),
+      match.identityId,
+      match.similarity
+    );
+    return false;
+  });
 
   const faceIds = rows.map((row) => Number(row.face_detection_id));
   const maxUpdatedAt = rows.reduce(
@@ -7397,7 +7480,8 @@ function getFaceEmbeddingsForClustering(
     idSum,
     maxUpdatedAt,
     Number(assignmentCount?.count ?? 0),
-    cannotLinkSignature
+    cannotLinkSignature,
+    ignoredIdentityRevision("person")
   ].join(":");
 
   const previousRun = db.prepare(`
