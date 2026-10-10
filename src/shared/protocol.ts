@@ -101,6 +101,17 @@ export type AnalysisQueueStats = {
   unavailable: number;
 };
 
+export type ShutdownStatus = {
+  phase:
+    | "PREPARING"
+    | "WAITING"
+    | "STOPPING_WORKERS"
+    | "SAVING"
+    | "DONE"
+    | "FALLBACK";
+  message: string;
+};
+
 export type PipelineStatus = {
   technical: AnalysisQueueStats;
   thumbnails: AnalysisQueueStats;
@@ -750,6 +761,7 @@ export type CatalogMethod =
   | "scanSource"
   | "reconcileSourceChanges"
   | "restoreMedia"
+  | "prepareForShutdown"
   | "resetCatalog";
 
 export type WorkerRequest = {
