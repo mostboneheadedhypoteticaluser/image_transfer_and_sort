@@ -2367,6 +2367,20 @@ function renderPersonOverview(overview: PersonOverview): void {
         `Minimum ${candidate.minSimilarity.toFixed(3)}`;
 
       titleBlock.append(title, similarity);
+
+      if (
+        candidate.ignoredIdentityId !== null &&
+        candidate.ignoredSimilarity !== null
+      ) {
+        const warning = document.createElement("p");
+        warning.className = "ignore-warning";
+        warning.textContent =
+          "Hinweis: Diese Gruppe ähnelt einer bereits dauerhaft verworfenen Person " +
+          "(Ähnlichkeit " + candidate.ignoredSimilarity.toFixed(3) + "). " +
+          "Wenn es doch eine andere Person ist, kannst du sie trotzdem hinzufügen.";
+        titleBlock.appendChild(warning);
+      }
+
       heading.appendChild(titleBlock);
 
       const confirmRow = document.createElement("div");
@@ -2381,7 +2395,10 @@ function renderPersonOverview(overview: PersonOverview): void {
       const button = document.createElement("button");
       button.className = "primary person-confirm";
       button.type = "button";
-      button.textContent = "Bestätigen";
+      button.textContent =
+        candidate.ignoredIdentityId !== null
+          ? "Trotzdem hinzufügen"
+          : "Bestätigen";
 
       const confirm = async () => {
         const name = input.value.trim();
@@ -2433,12 +2450,58 @@ function renderPersonOverview(overview: PersonOverview): void {
         }
       };
 
+      const ignoreButton = document.createElement("button");
+      ignoreButton.className = "ghost ignore-candidate-button";
+      ignoreButton.type = "button";
+      ignoreButton.textContent =
+        candidate.ignoredIdentityId !== null
+          ? "Ebenfalls dauerhaft ignorieren"
+          : "Dauerhaft ignorieren";
+      ignoreButton.title =
+        "Diese Person nicht als Identität speichern und bei eindeutigen zukünftigen Treffern nicht erneut anzeigen.";
+
+      ignoreButton.addEventListener("click", () => {
+        const message =
+          candidate.ignoredIdentityId !== null
+            ? "Diese Gruppe der bereits verworfenen Person zuordnen und künftig bei eindeutigen Treffern automatisch ausblenden?"
+            : "Diese Person dauerhaft ignorieren? Die Merkmale werden nur in der Ignore-Liste gespeichert, damit sie künftig nicht erneut angeboten wird.";
+
+        if (!window.confirm(message)) return;
+
+        void runSafely(async () => {
+          input.disabled = true;
+          button.disabled = true;
+          ignoreButton.disabled = true;
+          ignoreButton.textContent = "Wird ignoriert …";
+
+          const fallbackFaceDetectionId =
+            candidate.representativeFaceId ??
+            candidate.faces[0]?.faceDetectionId;
+
+          const result = await window.imageSorter.people.ignoreCandidate(
+            candidate.id,
+            fallbackFaceDetectionId,
+            candidate.faceCount,
+            candidate.memberSignature,
+            candidate.ignoredIdentityId ?? undefined
+          );
+
+          progressText.textContent =
+            result.faceCount.toLocaleString("de-DE") +
+            " Gesichter dauerhaft ignoriert. Eindeutige zukünftige Treffer werden automatisch ausgeblendet.";
+
+          const sourceId = selectedSourceId();
+          if (sourceId !== null) await loadPersonOverview(sourceId);
+          await refreshIdentityTabStats();
+        });
+      });
+
       button.addEventListener("click", () => void confirm());
       input.addEventListener("keydown", (event) => {
         if (event.key === "Enter") void confirm();
       });
 
-      confirmRow.append(input, button);
+      confirmRow.append(input, button, ignoreButton);
       if (candidate.faceCount > candidate.faces.length) {
         const hiddenNote = document.createElement("small");
         hiddenNote.className = "person-hidden-note";
@@ -2838,6 +2901,19 @@ function renderPetOverview(overview: PetOverview): void {
         titleBlock.appendChild(suggestion);
       }
 
+      if (
+        candidate.ignoredIdentityId !== null &&
+        candidate.ignoredSimilarity !== null
+      ) {
+        const warning = document.createElement("p");
+        warning.className = "ignore-warning";
+        warning.textContent =
+          "Hinweis: Diese Hundegruppe ähnelt einem bereits dauerhaft verworfenen Hund " +
+          "(Ähnlichkeit " + candidate.ignoredSimilarity.toFixed(3) + "). " +
+          "Wenn es doch ein anderer Hund ist, kannst du ihn trotzdem hinzufügen.";
+        titleBlock.appendChild(warning);
+      }
+
       heading.appendChild(titleBlock);
 
       const confirmRow = document.createElement("div");
@@ -2856,6 +2932,14 @@ function renderPetOverview(overview: PetOverview): void {
 
       const updateConfirmLabel = () => {
         const entered = input.value.trim();
+
+        if (candidate.ignoredIdentityId !== null) {
+          button.textContent = entered
+            ? "Trotzdem als " + entered + " hinzufügen"
+            : "Trotzdem hinzufügen";
+          return;
+        }
+
         if (!entered) {
           button.textContent = "Bestätigen";
           return;
@@ -2937,12 +3021,58 @@ function renderPetOverview(overview: PetOverview): void {
         }
       };
 
+      const ignoreButton = document.createElement("button");
+      ignoreButton.className = "ghost ignore-candidate-button";
+      ignoreButton.type = "button";
+      ignoreButton.textContent =
+        candidate.ignoredIdentityId !== null
+          ? "Ebenfalls dauerhaft ignorieren"
+          : "Dauerhaft ignorieren";
+      ignoreButton.title =
+        "Diesen Hund nicht als Haustier speichern und bei eindeutigen zukünftigen Treffern nicht erneut anzeigen.";
+
+      ignoreButton.addEventListener("click", () => {
+        const message =
+          candidate.ignoredIdentityId !== null
+            ? "Diese Gruppe dem bereits verworfenen Hund zuordnen und künftig bei eindeutigen Treffern automatisch ausblenden?"
+            : "Diesen Hund dauerhaft ignorieren? Die Merkmale werden nur in der Ignore-Liste gespeichert, damit er künftig nicht erneut angeboten wird.";
+
+        if (!window.confirm(message)) return;
+
+        void runSafely(async () => {
+          input.disabled = true;
+          button.disabled = true;
+          ignoreButton.disabled = true;
+          ignoreButton.textContent = "Wird ignoriert …";
+
+          const fallbackPetDetectionId =
+            candidate.representativePetId ??
+            candidate.pets[0]?.petDetectionId;
+
+          const result = await window.imageSorter.pets.ignoreCandidate(
+            candidate.id,
+            fallbackPetDetectionId,
+            candidate.detectionCount,
+            candidate.memberSignature,
+            candidate.ignoredIdentityId ?? undefined
+          );
+
+          progressText.textContent =
+            result.detectionCount.toLocaleString("de-DE") +
+            " Hundefundstellen dauerhaft ignoriert. Eindeutige zukünftige Treffer werden automatisch ausgeblendet.";
+
+          const sourceId = selectedSourceId();
+          if (sourceId !== null) await loadPetOverview(sourceId);
+          await refreshIdentityTabStats();
+        });
+      });
+
       button.addEventListener("click", () => void confirm());
       input.addEventListener("keydown", (event) => {
         if (event.key === "Enter") void confirm();
       });
 
-      confirmRow.append(input, button);
+      confirmRow.append(input, button, ignoreButton);
 
       if (candidate.detectionCount > candidate.pets.length) {
         const hiddenNote = document.createElement("small");
