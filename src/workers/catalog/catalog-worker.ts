@@ -8610,6 +8610,44 @@ function getMediaPath(mediaId: number) {
   };
 }
 
+function prepareForShutdown() {
+  if (scanRunning) {
+    return {
+      ready: false,
+      requeued: 0,
+      reason: "SCAN_RUNNING"
+    };
+  }
+
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const result = db.prepare(`
+      UPDATE analysis_jobs
+      SET
+        status='PENDING',
+        started_at=NULL,
+        error_message=NULL,
+        updated_at=CURRENT_TIMESTAMP
+      WHERE status='RUNNING'
+    `).run();
+
+    db.exec("COMMIT");
+
+    // Alle bis hierhin bestätigten SQLite-Änderungen auch aus dem WAL in die
+    // Datenbankdatei überführen, bevor der Katalogprozess beendet wird.
+    db.exec("PRAGMA wal_checkpoint(TRUNCATE);");
+
+    return {
+      ready: true,
+      requeued: Number(result.changes),
+      reason: null
+    };
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+}
+
 function resetCatalog(): { reset: true } {
   if (scanRunning) {
     throw new Error("Während eines laufenden Scans kann der Katalog nicht zurückgesetzt werden.");
@@ -9024,6 +9062,8 @@ async function dispatch(method: CatalogMethod, payload: Record<string, unknown> 
       );
     case "restoreMedia":
       return restoreMedia(asNumber(payload.mediaId, "mediaId"));
+    case "prepareForShutdown":
+      return prepareForShutdown();
     case "resetCatalog":
       return resetCatalog();
   }
