@@ -122,6 +122,21 @@ const api = {
         expectedFaceCount,
         expectedMemberSignature
       ),
+    ignoreCandidate: (
+      candidateId: number,
+      fallbackFaceDetectionId?: number,
+      expectedFaceCount?: number,
+      expectedMemberSignature?: string,
+      ignoredIdentityId?: number
+    ): Promise<IgnorePersonResult> =>
+      ipcRenderer.invoke(
+        "people:ignoreCandidate",
+        candidateId,
+        fallbackFaceDetectionId,
+        expectedFaceCount,
+        expectedMemberSignature,
+        ignoredIdentityId
+      ),
     removeCandidateFace: (
       candidateId: number,
       faceDetectionId: number
@@ -167,6 +182,21 @@ const api = {
         fallbackPetDetectionId,
         expectedDetectionCount,
         expectedMemberSignature
+      ),
+    ignoreCandidate: (
+      candidateId: number,
+      fallbackPetDetectionId?: number,
+      expectedDetectionCount?: number,
+      expectedMemberSignature?: string,
+      ignoredIdentityId?: number
+    ): Promise<IgnorePetResult> =>
+      ipcRenderer.invoke(
+        "pets:ignoreCandidate",
+        candidateId,
+        fallbackPetDetectionId,
+        expectedDetectionCount,
+        expectedMemberSignature,
+        ignoredIdentityId
       ),
     removeCandidatePet: (
       candidateId: number,
