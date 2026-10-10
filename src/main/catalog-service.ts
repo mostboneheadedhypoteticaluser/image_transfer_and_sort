@@ -43,6 +43,8 @@ export class CatalogService {
     });
 
     child.on("exit", (code) => {
+      if (this.child !== child) return;
+
       const error = new Error(`Katalog-Worker wurde beendet (Code ${code ?? "unbekannt"}).`);
       for (const pending of this.pending.values()) pending.reject(error);
       this.pending.clear();
@@ -70,7 +72,15 @@ export class CatalogService {
   }
 
   stop(): void {
-    this.child?.kill();
+    const child = this.child;
+    if (!child) return;
+
     this.child = null;
+
+    const error = new Error("Katalog-Worker wurde wegen App-Beendigung gestoppt.");
+    for (const pending of this.pending.values()) pending.reject(error);
+    this.pending.clear();
+
+    child.kill();
   }
 }
