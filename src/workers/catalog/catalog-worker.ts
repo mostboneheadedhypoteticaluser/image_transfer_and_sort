@@ -9506,6 +9506,9 @@ function resetCatalog(): { reset: true } {
       DELETE FROM person_cluster_exclusions;
       DELETE FROM person_face_exclusions;
       DELETE FROM person_face_assignments;
+      DELETE FROM ignored_person_matches;
+      DELETE FROM ignored_person_references;
+      DELETE FROM ignored_person_identities;
       DELETE FROM persons;
 
       DELETE FROM pet_candidate_items;
@@ -9514,6 +9517,9 @@ function resetCatalog(): { reset: true } {
       DELETE FROM pet_cluster_exclusions;
       DELETE FROM pet_assignment_exclusions;
       DELETE FROM pet_assignments;
+      DELETE FROM ignored_pet_matches;
+      DELETE FROM ignored_pet_references;
+      DELETE FROM ignored_pet_identities;
       DELETE FROM pets;
       DELETE FROM pet_embeddings;
       DELETE FROM pet_fused_detections;
