@@ -129,6 +129,7 @@ export class PetService {
       this.catalog.request<PetCandidate[]>("listPetCandidates", {
         sourceId,
         limit: 500,
+        ignoreDefiniteThreshold: CLUSTER_THRESHOLD,
         ignoreDoubtThreshold: VERIFICATION_THRESHOLD
       }),
       this.catalog.request<PetRecord[]>("listPets", { sourceId }),
