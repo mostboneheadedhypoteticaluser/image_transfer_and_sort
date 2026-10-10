@@ -6088,6 +6088,13 @@ function listPetCandidates(sourceId: number, requestedLimit: number) {
     LIMIT 24
   `);
 
+  const memberSignatureQuery = db.prepare(`
+    SELECT pet_detection_id
+    FROM pet_candidate_items
+    WHERE candidate_id=?
+    ORDER BY pet_detection_id
+  `);
+
   const embeddingQuery = db.prepare(`
     SELECT
       pci.pet_detection_id,
@@ -6150,6 +6157,10 @@ function listPetCandidates(sourceId: number, requestedLimit: number) {
       petClass: String(candidate.pet_class),
       detectionCount: Number(candidate.detection_count),
       newestPetId: Number(candidate.newest_pet_id),
+      memberSignature: memberSignatureQuery
+        .all(candidateId)
+        .map((row) => Number(row.pet_detection_id))
+        .join(","),
       representativePetId,
       averageSimilarity: Number(candidate.average_similarity),
       minSimilarity: Number(candidate.min_similarity),
@@ -6236,7 +6247,8 @@ function confirmPetCandidate(
   rawName: unknown,
   rejectedPetId?: number,
   fallbackPetDetectionId?: number,
-  expectedDetectionCount?: number
+  expectedDetectionCount?: number,
+  expectedMemberSignature?: string
 ) {
   const name = typeof rawName === "string" ? rawName.trim() : "";
   if (!name) throw new Error("Bitte einen Namen für das Haustier eingeben.");
@@ -6312,6 +6324,20 @@ function confirmPetCandidate(
       " → " +
       members.length +
       " Fundstellen). Bitte die Ansicht aktualisieren und die Gruppe erneut prüfen."
+    );
+  }
+
+  const currentMemberSignature = members
+    .map((member) => Number(member.pet_detection_id))
+    .join(",");
+  if (
+    typeof expectedMemberSignature === "string" &&
+    expectedMemberSignature.length > 0 &&
+    currentMemberSignature !== expectedMemberSignature
+  ) {
+    throw new Error(
+      "Die Zusammensetzung der Hundegruppe hat sich während der Analyse geändert. " +
+      "Bitte die Ansicht aktualisieren und die Gruppe erneut prüfen."
     );
   }
 
@@ -7325,6 +7351,13 @@ function listPersonCandidates(sourceId: number, requestedLimit: number) {
     LIMIT ?
   `).all(sourceId, limit);
 
+  const memberSignatureQuery = db.prepare(`
+    SELECT face_detection_id
+    FROM person_candidate_faces
+    WHERE candidate_id=?
+    ORDER BY face_detection_id
+  `);
+
   const faceQuery = db.prepare(`
     SELECT
       pcf.face_detection_id,
@@ -7351,6 +7384,10 @@ function listPersonCandidates(sourceId: number, requestedLimit: number) {
       id: Number(candidate.id),
       faceCount: Number(candidate.face_count),
       newestFaceId: Number(candidate.newest_face_id),
+      memberSignature: memberSignatureQuery
+        .all(Number(candidate.id))
+        .map((row) => Number(row.face_detection_id))
+        .join(","),
       representativeFaceId,
       averageSimilarity: Number(candidate.average_similarity),
       minSimilarity: Number(candidate.min_similarity),
@@ -7749,7 +7786,8 @@ function confirmPersonCandidate(
   candidateId: number,
   rawName: unknown,
   fallbackFaceDetectionId?: number,
-  expectedFaceCount?: number
+  expectedFaceCount?: number,
+  expectedMemberSignature?: string
 ) {
   const name = typeof rawName === "string" ? rawName.trim() : "";
   if (!name) throw new Error("Bitte einen Namen für die Person eingeben.");
@@ -7831,6 +7869,20 @@ function confirmPersonCandidate(
       " → " +
       members.length +
       " Gesichter). Bitte die Ansicht aktualisieren und die Gruppe erneut prüfen."
+    );
+  }
+
+  const currentMemberSignature = members
+    .map((member) => Number(member.face_detection_id))
+    .join(",");
+  if (
+    typeof expectedMemberSignature === "string" &&
+    expectedMemberSignature.length > 0 &&
+    currentMemberSignature !== expectedMemberSignature
+  ) {
+    throw new Error(
+      "Die Zusammensetzung der Personengruppe hat sich während der Analyse geändert. " +
+      "Bitte die Ansicht aktualisieren und die Gruppe erneut prüfen."
     );
   }
 
@@ -8854,7 +8906,10 @@ async function dispatch(method: CatalogMethod, payload: Record<string, unknown> 
           : asNumber(payload.fallbackPetDetectionId, "fallbackPetDetectionId"),
         payload.expectedDetectionCount === undefined
           ? undefined
-          : asNumber(payload.expectedDetectionCount, "expectedDetectionCount")
+          : asNumber(payload.expectedDetectionCount, "expectedDetectionCount"),
+        typeof payload.expectedMemberSignature === "string"
+          ? payload.expectedMemberSignature
+          : undefined
       );
     case "removePetFromCandidate":
       return removePetFromCandidate(
@@ -8925,7 +8980,10 @@ async function dispatch(method: CatalogMethod, payload: Record<string, unknown> 
           : asNumber(payload.fallbackFaceDetectionId, "fallbackFaceDetectionId"),
         payload.expectedFaceCount === undefined
           ? undefined
-          : asNumber(payload.expectedFaceCount, "expectedFaceCount")
+          : asNumber(payload.expectedFaceCount, "expectedFaceCount"),
+        typeof payload.expectedMemberSignature === "string"
+          ? payload.expectedMemberSignature
+          : undefined
       );
     case "removeFaceFromPersonCandidate":
       return removeFaceFromPersonCandidate(
