@@ -5934,6 +5934,172 @@ function centroid(vectors: number[][]): number[] | null {
   return result.map((value) => value / norm);
 }
 
+type IgnoredVectorIdentity = {
+  id: number;
+  petClass: string | null;
+  vectors: number[][];
+  centroid: number[];
+};
+
+type IgnoredIdentityMatch = {
+  identityId: number;
+  similarity: number;
+  definite: boolean;
+};
+
+function ignoredPersonVectorIdentities(): IgnoredVectorIdentity[] {
+  const rows = db.prepare(`
+    SELECT
+      ii.id AS identity_id,
+      ir.dimension,
+      ir.vector_blob
+    FROM ignored_person_identities ii
+    JOIN ignored_person_references ir ON ir.identity_id=ii.id
+    WHERE ir.model_version='SFace 2021dec'
+    ORDER BY ii.id, ir.id
+  `).all();
+
+  const grouped = new Map<number, number[][]>();
+  for (const row of rows) {
+    const id = Number(row.identity_id);
+    const vectors = grouped.get(id) ?? [];
+    vectors.push(vectorFromBlob(row.vector_blob, Number(row.dimension)));
+    grouped.set(id, vectors);
+  }
+
+  const result: IgnoredVectorIdentity[] = [];
+  for (const [id, vectors] of grouped) {
+    const center = centroid(vectors);
+    if (!center) continue;
+    result.push({ id, petClass: null, vectors, centroid: center });
+  }
+  return result;
+}
+
+function ignoredPetVectorIdentities(): IgnoredVectorIdentity[] {
+  const rows = db.prepare(`
+    SELECT
+      ii.id AS identity_id,
+      ii.pet_class,
+      ir.dimension,
+      ir.vector_blob
+    FROM ignored_pet_identities ii
+    JOIN ignored_pet_references ir ON ir.identity_id=ii.id
+    WHERE ir.model_version='DogReID DINOv2-B14 0.2.0'
+    ORDER BY ii.id, ir.id
+  `).all();
+
+  const grouped = new Map<number, {
+    petClass: string;
+    vectors: number[][];
+  }>();
+
+  for (const row of rows) {
+    const id = Number(row.identity_id);
+    const entry = grouped.get(id) ?? {
+      petClass: String(row.pet_class),
+      vectors: []
+    };
+    entry.vectors.push(vectorFromBlob(row.vector_blob, Number(row.dimension)));
+    grouped.set(id, entry);
+  }
+
+  const result: IgnoredVectorIdentity[] = [];
+  for (const [id, entry] of grouped) {
+    const center = centroid(entry.vectors);
+    if (!center) continue;
+    result.push({
+      id,
+      petClass: entry.petClass,
+      vectors: entry.vectors,
+      centroid: center
+    });
+  }
+  return result;
+}
+
+function classifyIgnoredVectors(
+  vectors: number[][],
+  identities: IgnoredVectorIdentity[],
+  definiteThreshold: number,
+  doubtThreshold: number,
+  petClass?: string
+): IgnoredIdentityMatch | null {
+  const candidateCentroid = centroid(vectors);
+  if (!candidateCentroid || vectors.length === 0) return null;
+
+  let best: IgnoredIdentityMatch | null = null;
+
+  for (const identity of identities) {
+    if (petClass && identity.petClass !== petClass) continue;
+    if (identity.vectors.length === 0) continue;
+
+    const centroidSimilarity = cosineSimilarity(
+      candidateCentroid,
+      identity.centroid
+    );
+    const allReferenceSimilarities = vectors.flatMap((vector) =>
+      identity.vectors.map((reference) =>
+        cosineSimilarity(vector, reference)
+      )
+    );
+    const minimumReferenceSimilarity =
+      allReferenceSimilarities.length > 0
+        ? Math.min(...allReferenceSimilarities)
+        : -1;
+    const maximumReferenceSimilarity =
+      allReferenceSimilarities.length > 0
+        ? Math.max(...allReferenceSimilarities)
+        : -1;
+
+    const definite =
+      centroidSimilarity >= definiteThreshold &&
+      minimumReferenceSimilarity >= doubtThreshold;
+    const possible =
+      definite ||
+      centroidSimilarity >= doubtThreshold ||
+      maximumReferenceSimilarity >= doubtThreshold;
+
+    if (!possible) continue;
+
+    const score = Math.max(centroidSimilarity, maximumReferenceSimilarity);
+    if (
+      !best ||
+      (definite && !best.definite) ||
+      (definite === best.definite && score > best.similarity)
+    ) {
+      best = {
+        identityId: identity.id,
+        similarity: score,
+        definite
+      };
+    }
+  }
+
+  return best;
+}
+
+function ignoredIdentityRevision(kind: "person" | "pet"): string {
+  const table =
+    kind === "person"
+      ? "ignored_person_references"
+      : "ignored_pet_references";
+  const identityTable =
+    kind === "person"
+      ? "ignored_person_identities"
+      : "ignored_pet_identities";
+
+  const row = db.prepare(`
+    SELECT
+      COUNT(*) AS reference_count,
+      COALESCE(MAX(i.updated_at), '') AS updated_at
+    FROM ${identityTable} i
+    LEFT JOIN ${table} r ON r.identity_id=i.id
+  `).get();
+
+  return `${Number(row?.reference_count ?? 0)}:${String(row?.updated_at ?? "")}`;
+}
+
 function knownPetCentroids(sourceId: number) {
   const rows = db.prepare(`
     SELECT
