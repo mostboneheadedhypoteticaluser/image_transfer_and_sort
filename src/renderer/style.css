@@ -2283,3 +2283,61 @@ td .badge + .badge {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 }
+
+
+.shutdown-overlay[hidden] {
+  display: none;
+}
+
+.shutdown-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  display: grid;
+  place-items: center;
+  padding: 32px;
+  background: rgba(244, 246, 248, 0.92);
+  backdrop-filter: blur(4px);
+}
+
+.shutdown-card {
+  width: min(560px, 100%);
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: 18px;
+  padding: 24px;
+  border: 1px solid #dce2e7;
+  border-radius: 14px;
+  background: #fff;
+  box-shadow: 0 18px 60px rgba(20, 30, 40, 0.16);
+}
+
+.shutdown-card strong {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 18px;
+}
+
+.shutdown-card p {
+  margin: 0 0 8px;
+  color: #43505d;
+  line-height: 1.45;
+}
+
+.shutdown-card small {
+  color: #7a8590;
+}
+
+.shutdown-spinner {
+  width: 32px;
+  height: 32px;
+  border: 3px solid #dce2e7;
+  border-top-color: #17202a;
+  border-radius: 50%;
+  animation: shutdown-spin .8s linear infinite;
+}
+
+@keyframes shutdown-spin {
+  to { transform: rotate(360deg); }
+}
