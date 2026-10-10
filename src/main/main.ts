@@ -42,7 +42,8 @@ import type {
   ScanResult,
   SourceRecord,
   ThumbnailInfo,
-  PipelineStatus
+  PipelineStatus,
+  ShutdownStatus
 } from "../shared/protocol";
 
 let windowRef: BrowserWindow | null = null;
@@ -60,6 +61,9 @@ let personRefreshRunning = false;
 const groupedFaceEmbeddingCounts = new Map<number, number>();
 const groupedPetEmbeddingCounts = new Map<number, number>();
 let isQuitting = false;
+let shutdownInProgress = false;
+let allowQuit = false;
+let shutdownPromise: Promise<void> | null = null;
 let qwenBenchmarkMode = false;
 let qwenBenchmarkPreparing: Promise<void> | null = null;
 
@@ -138,6 +142,37 @@ function sendToRenderer(channel: string, payload: unknown): void {
   win.webContents.send(channel, payload);
 }
 
+function publishShutdownStatus(
+  phase: ShutdownStatus["phase"],
+  message: string
+): void {
+  sendToRenderer("app:shutdownStatus", { phase, message } satisfies ShutdownStatus);
+  analysis?.logDiagnostic("APP_SHUTDOWN_STATUS", { phase, message });
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise<void>((resolve) => setTimeout(resolve, ms));
+}
+
+async function settlesWithin(
+  operation: Promise<unknown>,
+  timeoutMs: number
+): Promise<boolean> {
+  let timer: NodeJS.Timeout | null = null;
+
+  try {
+    return await Promise.race([
+      operation.then(() => true).catch(() => false),
+      new Promise<boolean>((resolve) => {
+        timer = setTimeout(() => resolve(false), timeoutMs);
+        timer.unref();
+      })
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 async function getIdentityEmbeddingCounts(): Promise<Array<{
   sourceId: number;
   faces: number;
@@ -180,6 +215,7 @@ async function waitForIdentityRefreshIdle(timeoutMs = 15000): Promise<void> {
 function schedulePersonRefresh(): void {
   if (
     isQuitting ||
+    shutdownInProgress ||
     (!personService && !petService) ||
     personRefreshRunning ||
     personRefreshTimer
@@ -356,6 +392,13 @@ function createWindow(): BrowserWindow {
   } else {
     void win.loadFile(path.join(__dirname, "..", "renderer", "index.html"));
   }
+
+  win.on("close", (event) => {
+    if (allowQuit) return;
+
+    event.preventDefault();
+    void beginGracefulShutdown();
+  });
 
   win.on("closed", () => {
     if (windowRef === win) windowRef = null;
@@ -1346,13 +1389,176 @@ app.whenReady().then(() => {
 });
 
 app.on("window-all-closed", () => {
-  if (process.platform !== "darwin") app.quit();
+  if (process.platform !== "darwin" && allowQuit) app.quit();
 });
+
+async function prepareCatalogForShutdown(): Promise<boolean> {
+  if (!catalog) return true;
+
+  const deadline = Date.now() + 12000;
+
+  while (Date.now() < deadline) {
+    const resultPromise = catalog.request<{
+      ready: boolean;
+      requeued: number;
+      reason: string | null;
+    }>("prepareForShutdown");
+
+    const settled = await Promise.race([
+      resultPromise
+        .then((result) => ({ settled: true as const, result }))
+        .catch(() => ({ settled: false as const, result: null })),
+      delay(1500).then(() => ({ settled: false as const, result: null }))
+    ]);
+
+    if (!settled.settled) {
+      await delay(150);
+      continue;
+    }
+
+    if (settled.result?.ready) {
+      analysis?.logDiagnostic("APP_SHUTDOWN_CATALOG_READY", {
+        requeued: settled.result.requeued
+      });
+      return true;
+    }
+
+    if (settled.result?.reason !== "SCAN_RUNNING") {
+      return false;
+    }
+
+    publishShutdownStatus(
+      "WAITING",
+      "Ein laufender Dateiscan wird noch sauber abgeschlossen …"
+    );
+    await delay(250);
+  }
+
+  return false;
+}
+
+async function performGracefulShutdown(): Promise<void> {
+  shutdownInProgress = true;
+  publishShutdownStatus(
+    "PREPARING",
+    "App wird sicher beendet. Neue Analysejobs und Dateiscans werden angehalten …"
+  );
+
+  if (personRefreshTimer) {
+    clearTimeout(personRefreshTimer);
+    personRefreshTimer = null;
+  }
+
+  catalogWatchService?.stop();
+  analysisCoordinator?.prepareForShutdown();
+  thumbnailCoordinator?.prepareForShutdown();
+  analysisCoordinator?.endBenchmarkPause();
+  qwenBenchmarkMode = false;
+
+  publishShutdownStatus(
+    "WAITING",
+    "Laufende Ergebnisse und Datenbank-Schreibvorgänge werden abgeschlossen …"
+  );
+
+  const [analysisIdle, thumbnailsIdle, identitiesIdle, watchIdle] =
+    await Promise.all([
+      analysisCoordinator
+        ? settlesWithin(analysisCoordinator.waitUntilIdle(5000), 5200)
+        : Promise.resolve(true),
+      thumbnailCoordinator
+        ? settlesWithin(thumbnailCoordinator.waitUntilIdle(5000), 5200)
+        : Promise.resolve(true),
+      settlesWithin(waitForIdentityRefreshIdle(5000), 5200),
+      catalogWatchService
+        ? settlesWithin(catalogWatchService.waitUntilIdle(5000), 5200)
+        : Promise.resolve(true)
+    ]);
+
+  if (!analysisIdle || !identitiesIdle) {
+    publishShutdownStatus(
+      "STOPPING_WORKERS",
+      "Lange KI-Berechnung wird angehalten und für den nächsten Start vorgemerkt …"
+    );
+    analysis?.stopImmediately();
+
+    if (analysisCoordinator) {
+      await settlesWithin(analysisCoordinator.waitUntilIdle(5000), 5200);
+    }
+    await settlesWithin(waitForIdentityRefreshIdle(5000), 5200);
+  }
+
+  if (!thumbnailsIdle) {
+    thumbnailService?.stop();
+    if (thumbnailCoordinator) {
+      await settlesWithin(thumbnailCoordinator.waitUntilIdle(3000), 3200);
+    }
+  }
+
+  if (!watchIdle) {
+    publishShutdownStatus(
+      "WAITING",
+      "Dateikatalog wird in einen wiederaufnehmbaren Zustand gebracht …"
+    );
+  }
+
+  publishShutdownStatus(
+    "SAVING",
+    "Datenbank wird gesichert und laufende Jobs werden für den nächsten Start vorgemerkt …"
+  );
+
+  const catalogReady = await prepareCatalogForShutdown();
+  if (!catalogReady) {
+    publishShutdownStatus(
+      "FALLBACK",
+      "Ein Restvorgang konnte nicht rechtzeitig abgeschlossen werden. Er wird beim nächsten Start automatisch wieder aufgenommen."
+    );
+    analysis?.logDiagnostic("APP_SHUTDOWN_CATALOG_FALLBACK");
+  }
+
+  // Ab hier darf nichts mehr neue Arbeit erzeugen. Die Analyse wird auch dann
+  // beendet, wenn sie während der Grace-Phase bereits natürlich fertig wurde.
+  analysis?.stopImmediately();
+  thumbnailService?.stop();
+
+  publishShutdownStatus(
+    "DONE",
+    "Alle gespeicherten Daten sind gesichert. App wird geschlossen …"
+  );
+
+  // Ein kurzer Paint-Zyklus macht den finalen Status noch sichtbar.
+  await delay(120);
+
+  isQuitting = true;
+  catalog?.stop();
+
+  allowQuit = true;
+  app.quit();
+}
+
+function beginGracefulShutdown(): Promise<void> {
+  if (shutdownPromise) return shutdownPromise;
+
+  shutdownPromise = performGracefulShutdown().catch((error) => {
+    analysis?.logDiagnostic("APP_SHUTDOWN_ERROR", {
+      error: error instanceof Error ? error.message : String(error)
+    });
+
+    // Auch bei einem unerwarteten Shutdownfehler bleiben RUNNING-Jobs durch
+    // die Startmigration wiederaufnehmbar. Als letztes Sicherheitsnetz werden
+    // nur unsere eigenen Worker hart beendet.
+    analysis?.stopImmediately();
+    thumbnailService?.stop();
+    catalog?.stop();
+    isQuitting = true;
+    allowQuit = true;
+    app.quit();
+  });
+
+  return shutdownPromise;
+}
 
 function shutdownServicesImmediately(): void {
   if (isQuitting) {
-    // Der Analyse-Service ist idempotent; ein zweiter Aufruf ist als
-    // Sicherheitsnetz erlaubt, falls will-quit nach before-quit folgt.
     analysis?.stopImmediately();
     return;
   }
@@ -1367,31 +1573,28 @@ function shutdownServicesImmediately(): void {
   catalogWatchService?.stop();
   analysisCoordinator?.stop();
   thumbnailCoordinator?.stop();
-
-  // Wichtig: zuerst den speicherintensiven Python/Qwen-Prozessbaum synchron
-  // beenden. Erst danach dürfen Electron/Katalog/Thumbnail-Prozesse schließen.
   analysis?.stopImmediately();
-
   thumbnailService?.stop();
   catalog?.stop();
 }
 
-app.on("before-quit", () => {
-  shutdownServicesImmediately();
+app.on("before-quit", (event) => {
+  if (allowQuit) return;
+
+  event.preventDefault();
+  void beginGracefulShutdown();
 });
 
 app.on("will-quit", () => {
   shutdownServicesImmediately();
 });
 
-// Auch beim Beenden des Dev-Prozesses per Ctrl+C/SIGTERM muss llama.cpp
-// verschwinden. Sonst bleibt dessen GGUF-Modell im Hauptspeicher liegen.
+// Dev-Prozess und Betriebssystem-Signale nutzen ebenfalls den sicheren Pfad.
+// Ein zweites Signal beendet Node notfalls weiterhin über das Betriebssystem.
 process.once("SIGINT", () => {
-  shutdownServicesImmediately();
-  app.quit();
+  void beginGracefulShutdown();
 });
 
 process.once("SIGTERM", () => {
-  shutdownServicesImmediately();
-  app.quit();
+  void beginGracefulShutdown();
 });
