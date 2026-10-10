@@ -543,6 +543,17 @@
       </div>
     </dialog>
 
+    <div id="shutdownOverlay" class="shutdown-overlay" hidden aria-live="assertive">
+      <div class="shutdown-card" role="status" aria-label="App wird sicher beendet">
+        <div class="shutdown-spinner" aria-hidden="true"></div>
+        <div>
+          <strong>App wird sicher beendet …</strong>
+          <p id="shutdownMessage">Laufende Ergebnisse werden gesichert.</p>
+          <small>Bitte das Programm währenddessen nicht über den Task-Manager beenden.</small>
+        </div>
+      </div>
+    </div>
+
     <script type="module" src="/src/renderer/main.ts"></script>
   </body>
 </html>
