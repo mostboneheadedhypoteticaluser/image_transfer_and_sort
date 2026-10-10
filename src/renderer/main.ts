@@ -2352,7 +2352,8 @@ function renderPersonOverview(overview: PersonOverview): void {
             candidate.id,
             name,
             fallbackFaceDetectionId,
-            candidate.faceCount
+            candidate.faceCount,
+            candidate.memberSignature
           );
           button.textContent = "Bestätigt ✓";
           progressText.textContent =
@@ -2853,7 +2854,8 @@ function renderPetOverview(overview: PetOverview): void {
             name,
             rejectedPetId,
             fallbackPetDetectionId,
-            candidate.detectionCount
+            candidate.detectionCount,
+            candidate.memberSignature
           );
 
           button.textContent = "Bestätigt ✓";
