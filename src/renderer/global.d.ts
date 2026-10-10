@@ -71,7 +71,8 @@ declare global {
           candidateId: number,
           name: string,
           fallbackFaceDetectionId?: number,
-          expectedFaceCount?: number
+          expectedFaceCount?: number,
+          expectedMemberSignature?: string
         ): Promise<ConfirmPersonResult>;
         removeCandidateFace(
           candidateId: number,
@@ -98,7 +99,8 @@ declare global {
           name: string,
           rejectedPetId?: number,
           fallbackPetDetectionId?: number,
-          expectedDetectionCount?: number
+          expectedDetectionCount?: number,
+          expectedMemberSignature?: string
         ): Promise<ConfirmPetResult>;
         removeCandidatePet(
           candidateId: number,
