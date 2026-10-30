@@ -9,6 +9,7 @@ import type {
   CatalogStats,
   CatalogWatchEvent,
   CatalogWatchSnapshot,
+  FolderTreeNode,
   ConfirmPersonResult,
   ConfirmPetResult,
   IgnorePersonResult,
@@ -37,6 +38,7 @@ declare global {
   interface Window {
     imageSorter: {
       pickSource(): Promise<string | null>;
+      openSourceManager(): Promise<{ opened: true }>;
       lifecycle: {
         onShutdownStatus(listener: (status: ShutdownStatus) => void): () => void;
       };
@@ -147,6 +149,8 @@ declare global {
       catalog: {
         listSources(): Promise<SourceRecord[]>;
         addSource(sourcePath: string): Promise<SourceRecord>;
+        disableSource(sourceId: number): Promise<SourceRecord>;
+        getFolderTree(rootPath: string): Promise<FolderTreeNode>;
         getStats(sourceId: number): Promise<CatalogStats>;
         getWatchSnapshot(): Promise<CatalogWatchSnapshot>;
         listMedia(sourceId: number, limit?: number): Promise<MediaRecord[]>;
