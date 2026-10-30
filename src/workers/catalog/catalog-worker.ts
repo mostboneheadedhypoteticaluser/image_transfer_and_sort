@@ -799,6 +799,153 @@ function listSources() {
     }));
 }
 
+function pathIsSameOrInside(candidatePath: string, rootPath: string): boolean {
+  const candidate = normalizeForComparison(candidatePath);
+  const root = normalizeForComparison(rootPath);
+  return candidate === root || candidate.startsWith(root.endsWith(path.sep) ? root : root + path.sep);
+}
+
+function relativePathFromRoot(rootPath: string, absolutePath: string): string {
+  return path.relative(rootPath, absolutePath).split(path.sep).join("/");
+}
+
+function consolidateContainedSources(targetSourceId: number, targetRoot: string): number[] {
+  const childSources = db.prepare(`
+    SELECT id, path
+    FROM media_sources
+    WHERE enabled=1
+      AND id<>?
+    ORDER BY length(path) ASC, id ASC
+  `).all(targetSourceId)
+    .filter((row) => pathIsSameOrInside(String(row.path), targetRoot));
+
+  if (childSources.length === 0) return [];
+
+  const migratedSourceIds: number[] = [];
+  db.exec("BEGIN IMMEDIATE");
+
+  try {
+    const findTargetMedia = db.prepare(`
+      SELECT id, sha256, size_bytes
+      FROM media_items
+      WHERE source_id=? AND relative_path=?
+      LIMIT 1
+    `);
+    const updateMedia = db.prepare(`
+      UPDATE media_items
+      SET source_id=?, relative_path=?
+      WHERE id=?
+    `);
+    const deleteMedia = db.prepare("DELETE FROM media_items WHERE id=?");
+
+    const findTargetDirectory = db.prepare(`
+      SELECT id
+      FROM media_directories
+      WHERE source_id=? AND relative_path=?
+      LIMIT 1
+    `);
+    const updateDirectory = db.prepare(`
+      UPDATE media_directories
+      SET source_id=?, relative_path=?
+      WHERE id=?
+    `);
+    const deleteDirectory = db.prepare("DELETE FROM media_directories WHERE id=?");
+
+    for (const source of childSources) {
+      const childId = Number(source.id);
+
+      const mediaRows = db.prepare(`
+        SELECT id, absolute_path, sha256, size_bytes
+        FROM media_items
+        WHERE source_id=?
+        ORDER BY id
+      `).all(childId);
+
+      for (const media of mediaRows) {
+        const absolutePath = String(media.absolute_path);
+        const relativePath = relativePathFromRoot(targetRoot, absolutePath);
+
+        // Nur Datensätze übernehmen, die tatsächlich unterhalb des neuen
+        // Stammordners liegen. So bleibt die Konsolidierung auch bei alten,
+        // inzwischen umbenannten Pfaden defensiv.
+        if (relativePath === ".." || relativePath.startsWith("../")) {
+          continue;
+        }
+
+        const existing = findTargetMedia.get(targetSourceId, relativePath);
+        if (existing) {
+          const sameContent =
+            String(existing.sha256) === String(media.sha256) &&
+            Number(existing.size_bytes) === Number(media.size_bytes);
+
+          if (sameContent) {
+            // Derselbe physische Inhalt war bereits über eine andere
+            // überlappende Quelle katalogisiert. Ein Datensatz genügt.
+            deleteMedia.run(Number(media.id));
+            continue;
+          }
+
+          throw new Error(
+            "Quellen konnten nicht zusammengeführt werden: Pfadkonflikt bei " +
+            relativePath
+          );
+        }
+
+        updateMedia.run(targetSourceId, relativePath, Number(media.id));
+      }
+
+      const directories = db.prepare(`
+        SELECT id, absolute_path
+        FROM media_directories
+        WHERE source_id=?
+        ORDER BY length(relative_path) ASC, id ASC
+      `).all(childId);
+
+      for (const directory of directories) {
+        const absolutePath = String(directory.absolute_path);
+        const relativePath = relativePathFromRoot(targetRoot, absolutePath);
+        if (relativePath === ".." || relativePath.startsWith("../")) {
+          continue;
+        }
+
+        const existing = findTargetDirectory.get(targetSourceId, relativePath);
+        if (existing) {
+          deleteDirectory.run(Number(directory.id));
+          continue;
+        }
+
+        updateDirectory.run(targetSourceId, relativePath, Number(directory.id));
+      }
+
+      db.prepare("UPDATE person_candidates SET source_id=? WHERE source_id=?")
+        .run(targetSourceId, childId);
+      db.prepare("UPDATE pet_candidates SET source_id=? WHERE source_id=?")
+        .run(targetSourceId, childId);
+
+      // Ein gemeinsamer Stamm verändert die Menge möglicher Clusterpartner.
+      // Die nächsten Hintergrundläufe sollen deshalb neu clustern.
+      db.prepare("DELETE FROM person_cluster_runs WHERE source_id IN (?,?)")
+        .run(targetSourceId, childId);
+      db.prepare("DELETE FROM pet_cluster_runs WHERE source_id IN (?,?)")
+        .run(targetSourceId, childId);
+
+      db.prepare(`
+        UPDATE media_sources
+        SET enabled=0, updated_at=CURRENT_TIMESTAMP
+        WHERE id=?
+      `).run(childId);
+
+      migratedSourceIds.push(childId);
+    }
+
+    db.exec("COMMIT");
+    return migratedSourceIds;
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+}
+
 async function addSource(sourcePath: unknown) {
   if (typeof sourcePath !== "string" || sourcePath.trim() === "") {
     throw new Error("Quellpfad fehlt.");
@@ -806,6 +953,31 @@ async function addSource(sourcePath: unknown) {
 
   const canonical = path.resolve(sourcePath.trim());
   const identity = await readPathIdentity(canonical);
+
+  const activeSources = db.prepare(`
+    SELECT id, path, enabled
+    FROM media_sources
+    WHERE enabled=1
+    ORDER BY length(path) ASC, id ASC
+  `).all();
+
+  // Ist der gewünschte Ordner bereits Teil einer aktiven übergeordneten
+  // Quelle, keine zweite überlappende Quelle anlegen.
+  const coveringSource = activeSources.find((row) => {
+    const existingPath = String(row.path);
+    return (
+      normalizeForComparison(existingPath) !== normalizeForComparison(canonical) &&
+      pathIsSameOrInside(canonical, existingPath)
+    );
+  });
+
+  if (coveringSource) {
+    return {
+      id: Number(coveringSource.id),
+      path: String(coveringSource.path),
+      enabled: Boolean(coveringSource.enabled)
+    };
+  }
 
   db.prepare(`
     INSERT INTO media_sources(path, enabled, device_id, inode)
@@ -823,6 +995,8 @@ async function addSource(sourcePath: unknown) {
 
   const row = db.prepare("SELECT id, path, enabled FROM media_sources WHERE path=?").get(canonical);
   if (!row) throw new Error("Quelle konnte nicht gespeichert werden.");
+
+  consolidateContainedSources(Number(row.id), canonical);
 
   return {
     id: Number(row.id),
