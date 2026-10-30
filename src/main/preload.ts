@@ -13,6 +13,7 @@ import type {
   ExplorerFolderNode,
   ExplorerRoot,
   FolderTreeNode,
+  GeoMediaPoint,
   ConfirmPersonResult,
   ConfirmPetResult,
   IgnorePersonResult,
@@ -252,6 +253,8 @@ const api = {
       ipcRenderer.invoke("catalog:getWatchSnapshot"),
     listMedia: (sourceId: number, limit = 500): Promise<MediaRecord[]> =>
       ipcRenderer.invoke("catalog:listMedia", sourceId, limit),
+    listGeoMedia: (sourceId?: number): Promise<GeoMediaPoint[]> =>
+      ipcRenderer.invoke("catalog:listGeoMedia", sourceId),
     getSearchFacets: (sourceId?: number): Promise<SearchFacets> =>
       ipcRenderer.invoke("catalog:getSearchFacets", sourceId),
     searchMedia: (
