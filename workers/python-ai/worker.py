@@ -21,6 +21,13 @@ from dataclasses import asdict, dataclass
 from datetime import datetime
 from typing import Any
 
+_spellchecker_import_error = None
+try:
+    from spellchecker import SpellChecker
+except Exception as exc:
+    SpellChecker = None
+    _spellchecker_import_error = str(exc)
+
 # Das JSON-Protokoll zwischen Electron und Python ist UTF-8. Unter Windows
 # übernimmt Python für umgeleitete stdin/stdout/stderr sonst je nach Umgebung
 # die aktive ANSI-Codepage (z. B. cp1252). Modellantworten können aber beliebige
@@ -237,6 +244,7 @@ _qwen_server_log_handle = None
 _vision_server_model = None
 _llama_server_cached = None
 _llama_server_searched = False
+_german_spellchecker = None
 QWEN_SERVER_LOG = os.path.join(WORKER_DIR, "llama-qwen3vl.log")
 MINICPM_SERVER_LOG = os.path.join(WORKER_DIR, "llama-minicpm-v46.log")
 QWEN3VL2B_SERVER_LOG = os.path.join(WORKER_DIR, "llama-qwen3vl-2b.log")
@@ -3806,6 +3814,176 @@ def semantic_response_value(output: str, model_label: str) -> tuple[dict, bool]:
     return repaired, True
 
 
+_GERMAN_SEMANTIC_PROTECTED_WORDS = {
+    "drk",
+    "qwen",
+    "siglip",
+    "dogreid",
+    "dinov2",
+    "nanodet",
+    "yolox",
+    "rettungshund",
+    "rettungshunde",
+    "rettungshundestaffel",
+    "rettungsausrüstung",
+    "einsatzfahrzeug",
+    "einsatzfahrzeuge",
+    "hundestaffel",
+}
+
+# Beobachtete, eindeutig falsche Modellformen dürfen gezielt korrigiert werden.
+# Diese kleine Liste bleibt absichtlich eng und ergänzt nur die allgemeine,
+# konservative Wörterbuchprüfung.
+_GERMAN_SEMANTIC_KNOWN_CORRECTIONS = {
+    "teppachen": "teppichen",
+}
+
+
+def german_semantic_spellchecker():
+    global _german_spellchecker
+
+    if _german_spellchecker is not None:
+        return _german_spellchecker
+    if SpellChecker is None:
+        if _spellchecker_import_error:
+            dev_log(
+                "SEMANTIC_SPELLCHECK_UNAVAILABLE",
+                error=_spellchecker_import_error,
+            )
+        return None
+
+    try:
+        checker = SpellChecker(language="de", distance=1)
+        checker.word_frequency.load_words(_GERMAN_SEMANTIC_PROTECTED_WORDS)
+        _german_spellchecker = checker
+        return checker
+    except Exception as exc:
+        dev_log("SEMANTIC_SPELLCHECK_INIT_ERROR", error=str(exc))
+        return None
+
+
+def _restore_word_case(original: str, replacement: str) -> str:
+    if original.isupper():
+        return replacement.upper()
+    if original[:1].isupper():
+        return replacement[:1].upper() + replacement[1:]
+    return replacement
+
+
+def _semantic_word_candidate(
+    word: str,
+    checker,
+) -> str | None:
+    lowered = word.lower()
+
+    if (
+        len(lowered) < 5
+        or lowered in _GERMAN_SEMANTIC_PROTECTED_WORDS
+        or any(ch.isdigit() for ch in lowered)
+        or "-" in lowered
+        or not lowered.isalpha()
+    ):
+        return None
+
+    known = checker.known([lowered])
+    if known:
+        return None
+
+    forced = _GERMAN_SEMANTIC_KNOWN_CORRECTIONS.get(lowered)
+    if forced:
+        return _restore_word_case(word, forced)
+
+    try:
+        candidates = {
+            str(value).lower()
+            for value in (checker.candidates(lowered) or set())
+            if value and str(value).lower() != lowered
+        }
+    except Exception:
+        return None
+
+    if not candidates:
+        return None
+
+    # pyspellchecker läuft absichtlich nur mit Edit-Distanz 1. Zusätzlich
+    # korrigieren wir nur dann automatisch, wenn das Wörterbuch einen klaren
+    # Favoriten hat. So bleiben Eigennamen, Fachbegriffe und seltene Komposita
+    # im Zweifel unverändert.
+    ranked = sorted(
+        (
+            (
+                candidate,
+                int(checker.word_frequency.dictionary.get(candidate, 0)),
+            )
+            for candidate in candidates
+        ),
+        key=lambda item: (-item[1], item[0]),
+    )
+    best_word, best_count = ranked[0]
+    second_count = ranked[1][1] if len(ranked) > 1 else 0
+
+    if best_count <= 0:
+        return None
+
+    if len(ranked) == 1:
+        # Bei einem einzigen Wörterbuchtreffer genügt eine kleine Mindesthäufigkeit.
+        if best_count < 8:
+            return None
+    else:
+        # Bei mehreren möglichen Wörtern nur einen sehr deutlichen Favoriten
+        # übernehmen. 8:1 verhindert aggressive "Verbesserungen".
+        if best_count < 20 or best_count < max(1, second_count) * 8:
+            return None
+
+    return _restore_word_case(word, best_word)
+
+
+def correct_german_semantic_text(text: str) -> str:
+    checker = german_semantic_spellchecker()
+    normalized = " ".join(str(text or "").strip().split())
+    if not normalized or checker is None:
+        return normalized
+
+    corrections: list[tuple[str, str]] = []
+
+    def replace(match: re.Match) -> str:
+        original = match.group(0)
+        replacement = _semantic_word_candidate(original, checker)
+        if not replacement or replacement == original:
+            return original
+
+        corrections.append((original, replacement))
+        return replacement
+
+    corrected = re.sub(
+        r"[A-Za-zÄÖÜäöüß]+(?:-[A-Za-zÄÖÜäöüß]+)*",
+        replace,
+        normalized,
+    )
+
+    if corrections:
+        dev_log(
+            "SEMANTIC_SPELLCHECK_CORRECTED",
+            corrections=[
+                {"from": source, "to": target}
+                for source, target in corrections
+            ],
+        )
+
+    return corrected
+
+
+def correct_german_semantic_list(values, limit: int) -> list[str]:
+    cleaned = minicpm_clean_list(values, limit)
+    corrected = [
+        correct_german_semantic_text(value)
+        for value in cleaned
+    ]
+    # Nach der Korrektur erneut normalisieren/deduplizieren, weil zwei vorher
+    # unterschiedliche Tippfehler auf denselben Begriff fallen können.
+    return minicpm_clean_list(corrected, limit)
+
+
 def minicpm_semantic_region(
     image,
     progress_request_id: str | None,
@@ -3821,6 +3999,10 @@ eindeutig sichtbar sind. Nenne konkrete Gegenstände, Tiere, Personen, Handlunge
 den Umgebungstyp und deutlich lesbaren Text.
 Verwende nur gebräuchliche, allgemein verständliche deutsche Begriffe.
 Erfinde keine neuen zusammengesetzten Wörter, Gerätebezeichnungen oder Funktionen.
+Achte auf korrekte deutsche Rechtschreibung und Grammatik. Prüfe insbesondere
+description, subjects, actions, scenes, tags und concepts vor der Ausgabe auf
+Tippfehler. Wenn du bei der Schreibweise eines Begriffs unsicher bist, verwende
+eine einfachere, sicher geschriebene Formulierung.
 Wenn ein Gegenstand nicht eindeutig bestimmbar ist, benenne ihn neutral und
 beschreibe nur seine sichtbare Form oder Funktion.
 
@@ -3855,13 +4037,17 @@ Leere Kategorien als [] zurückgeben. Begriffe nicht unnötig doppeln.
     value, repaired = semantic_response_value(output, "MiniCPM-V 4.6")
 
     return {
-        "description": " ".join(str(value.get("description", "")).strip().split())[:500],
-        "subjects": minicpm_clean_list(value.get("subjects"), 24),
-        "actions": minicpm_clean_list(value.get("actions"), 16),
-        "scenes": minicpm_clean_list(value.get("scenes"), 12),
+        "description": correct_german_semantic_text(
+            str(value.get("description", ""))
+        )[:500],
+        "subjects": correct_german_semantic_list(value.get("subjects"), 24),
+        "actions": correct_german_semantic_list(value.get("actions"), 16),
+        "scenes": correct_german_semantic_list(value.get("scenes"), 12),
+        # Sichtbarer Text ist OCR-/Bildinhalt und wird absichtlich NICHT
+        # "verbessert", damit Logos, Namen und Schreibweisen im Bild erhalten bleiben.
         "visibleText": minicpm_clean_list(value.get("visibleText"), 24),
-        "tags": minicpm_clean_list(value.get("tags"), 30),
-        "concepts": minicpm_clean_list(value.get("concepts"), 16),
+        "tags": correct_german_semantic_list(value.get("tags"), 30),
+        "concepts": correct_german_semantic_list(value.get("concepts"), 16),
         "repaired": repaired,
     }
 
@@ -4426,6 +4612,10 @@ eindeutig sichtbar sind. Nenne konkrete Gegenstände, Tiere, Personen, Handlunge
 den Umgebungstyp und deutlich lesbaren Text.
 Verwende nur gebräuchliche, allgemein verständliche deutsche Begriffe.
 Erfinde keine neuen zusammengesetzten Wörter, Gerätebezeichnungen oder Funktionen.
+Achte auf korrekte deutsche Rechtschreibung und Grammatik. Prüfe insbesondere
+description, subjects, actions, scenes, tags und concepts vor der Ausgabe auf
+Tippfehler. Wenn du bei der Schreibweise eines Begriffs unsicher bist, verwende
+eine einfachere, sicher geschriebene Formulierung.
 Wenn ein Gegenstand nicht eindeutig bestimmbar ist, benenne ihn neutral und
 beschreibe nur seine sichtbare Form oder Funktion.
 
@@ -4460,13 +4650,17 @@ Leere Kategorien als [] zurückgeben. Begriffe nicht unnötig doppeln.
     value, repaired = semantic_response_value(output, "Qwen3-VL 2B")
 
     return {
-        "description": " ".join(str(value.get("description", "")).strip().split())[:500],
-        "subjects": minicpm_clean_list(value.get("subjects"), 24),
-        "actions": minicpm_clean_list(value.get("actions"), 16),
-        "scenes": minicpm_clean_list(value.get("scenes"), 12),
+        "description": correct_german_semantic_text(
+            str(value.get("description", ""))
+        )[:500],
+        "subjects": correct_german_semantic_list(value.get("subjects"), 24),
+        "actions": correct_german_semantic_list(value.get("actions"), 16),
+        "scenes": correct_german_semantic_list(value.get("scenes"), 12),
+        # Sichtbarer Text ist OCR-/Bildinhalt und wird absichtlich NICHT
+        # "verbessert", damit Logos, Namen und Schreibweisen im Bild erhalten bleiben.
         "visibleText": minicpm_clean_list(value.get("visibleText"), 24),
-        "tags": minicpm_clean_list(value.get("tags"), 30),
-        "concepts": minicpm_clean_list(value.get("concepts"), 16),
+        "tags": correct_german_semantic_list(value.get("tags"), 30),
+        "concepts": correct_german_semantic_list(value.get("concepts"), 16),
         "repaired": repaired,
     }
 
@@ -4997,6 +5191,10 @@ eindeutig sichtbar sind. Nenne konkrete Gegenstände, Tiere, Personen, Handlunge
 den Umgebungstyp und deutlich lesbaren Text.
 Verwende nur gebräuchliche, allgemein verständliche deutsche Begriffe.
 Erfinde keine neuen zusammengesetzten Wörter, Gerätebezeichnungen oder Funktionen.
+Achte auf korrekte deutsche Rechtschreibung und Grammatik. Prüfe insbesondere
+description, subjects, actions, scenes, tags und concepts vor der Ausgabe auf
+Tippfehler. Wenn du bei der Schreibweise eines Begriffs unsicher bist, verwende
+eine einfachere, sicher geschriebene Formulierung.
 Wenn ein Gegenstand nicht eindeutig bestimmbar ist, benenne ihn neutral und
 beschreibe nur seine sichtbare Form oder Funktion.
 
@@ -5031,13 +5229,17 @@ Leere Kategorien als [] zurückgeben. Begriffe nicht unnötig doppeln.
     value, repaired = semantic_response_value(output, "Qwen3-VL 4B")
 
     return {
-        "description": " ".join(str(value.get("description", "")).strip().split())[:500],
-        "subjects": minicpm_clean_list(value.get("subjects"), 24),
-        "actions": minicpm_clean_list(value.get("actions"), 16),
-        "scenes": minicpm_clean_list(value.get("scenes"), 12),
+        "description": correct_german_semantic_text(
+            str(value.get("description", ""))
+        )[:500],
+        "subjects": correct_german_semantic_list(value.get("subjects"), 24),
+        "actions": correct_german_semantic_list(value.get("actions"), 16),
+        "scenes": correct_german_semantic_list(value.get("scenes"), 12),
+        # Sichtbarer Text ist OCR-/Bildinhalt und wird absichtlich NICHT
+        # "verbessert", damit Logos, Namen und Schreibweisen im Bild erhalten bleiben.
         "visibleText": minicpm_clean_list(value.get("visibleText"), 24),
-        "tags": minicpm_clean_list(value.get("tags"), 30),
-        "concepts": minicpm_clean_list(value.get("concepts"), 16),
+        "tags": correct_german_semantic_list(value.get("tags"), 30),
+        "concepts": correct_german_semantic_list(value.get("concepts"), 16),
         "repaired": repaired,
     }
 
