@@ -10,6 +10,8 @@ import type {
   CatalogStats,
   CatalogWatchEvent,
   CatalogWatchSnapshot,
+  ExplorerFolderNode,
+  ExplorerRoot,
   FolderTreeNode,
   ConfirmPersonResult,
   ConfirmPetResult,
@@ -241,6 +243,10 @@ const api = {
       ipcRenderer.invoke("catalog:disableSource", sourceId),
     getFolderTree: (rootPath: string): Promise<FolderTreeNode> =>
       ipcRenderer.invoke("catalog:getFolderTree", rootPath),
+    listExplorerRoots: (): Promise<ExplorerRoot[]> =>
+      ipcRenderer.invoke("catalog:listExplorerRoots"),
+    getExplorerChildren: (folderPath: string): Promise<ExplorerFolderNode[]> =>
+      ipcRenderer.invoke("catalog:getExplorerChildren", folderPath),
     getStats: (sourceId: number): Promise<CatalogStats> => ipcRenderer.invoke("catalog:getStats", sourceId),
     getWatchSnapshot: (): Promise<CatalogWatchSnapshot> =>
       ipcRenderer.invoke("catalog:getWatchSnapshot"),
