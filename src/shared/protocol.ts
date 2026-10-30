@@ -338,6 +338,13 @@ export type PetCandidateItem = {
   similarity: number;
 };
 
+export type PetMatchSuggestion = {
+  petId: number;
+  petName: string;
+  similarity: number;
+  representativePetId: number | null;
+};
+
 export type PetCandidate = {
   id: number;
   petClass: "dog" | "cat";
@@ -350,6 +357,7 @@ export type PetCandidate = {
   suggestedPetId: number | null;
   suggestedPetName: string | null;
   suggestedPetSimilarity: number | null;
+  suggestedPets: PetMatchSuggestion[];
   ignoredIdentityId: number | null;
   ignoredSimilarity: number | null;
   pets: PetCandidateItem[];
@@ -450,6 +458,13 @@ export type PersonCandidateFace = {
   similarity: number;
 };
 
+export type PersonMatchSuggestion = {
+  personId: number;
+  personName: string;
+  similarity: number;
+  representativeFaceId: number | null;
+};
+
 export type PersonCandidate = {
   id: number;
   faceCount: number;
@@ -458,6 +473,7 @@ export type PersonCandidate = {
   representativeFaceId: number | null;
   averageSimilarity: number;
   minSimilarity: number;
+  suggestedPersons: PersonMatchSuggestion[];
   ignoredIdentityId: number | null;
   ignoredSimilarity: number | null;
   faces: PersonCandidateFace[];
