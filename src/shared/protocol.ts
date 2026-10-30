@@ -230,6 +230,16 @@ export type MediaDetailAnalysisJob = {
   updatedAt: string;
 };
 
+export type GeoMediaPoint = {
+  mediaId: number;
+  sourceId: number;
+  relativePath: string;
+  latitude: number;
+  longitude: number;
+  capturedAt: string | null;
+  thumbnailVersion: string | null;
+};
+
 export type MediaDetails = {
   mediaId: number;
   sourceId: number;
@@ -773,6 +783,7 @@ export type CatalogMethod =
   | "disableSource"
   | "getStats"
   | "listMedia"
+  | "listGeoMedia"
   | "getSearchFacets"
   | "searchMedia"
   | "listDuplicateGroups"
