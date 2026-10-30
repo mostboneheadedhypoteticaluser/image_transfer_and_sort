@@ -565,9 +565,9 @@ async function leaveQwenBenchmarkMode(): Promise<void> {
 function registerIpc(): void {
   ipcMain.handle("dialog:pickSource", async (event) => {
     const owner = BrowserWindow.fromWebContents(event.sender) ?? windowRef ?? undefined;
-    const options = {
+    const options: OpenDialogOptions = {
       title: "Festplatte oder Medienordner auswählen",
-      properties: ["openDirectory"] as const
+      properties: ["openDirectory"]
     };
     const result = owner
       ? await dialog.showOpenDialog(owner, options)
