@@ -21,3 +21,9 @@ workers/python-ai/models/siglip2-so400m-patch16-naflex/
 workers/python-ai/models/qwen3-vl-8b-thinking/
 
 workers/python-ai/models/qwen3-vl-8b-thinking-gguf/
+
+# Große lokal heruntergeladene Vision-Modelle niemals von Git-Cleanup erfassen.
+workers/python-ai/models/minicpm-v-4.6-gguf/
+workers/python-ai/models/qwen3-vl-2b-instruct-gguf/
+workers/python-ai/models/qwen3-vl-4b-instruct-gguf/
+workers/python-ai/models/.cache/
