@@ -1007,6 +1007,28 @@ async function addSource(sourcePath: unknown) {
   };
 }
 
+function disableSource(sourceId: number) {
+  const source = db.prepare(
+    "SELECT id, path, enabled FROM media_sources WHERE id=?"
+  ).get(sourceId);
+
+  if (!source) {
+    throw new Error("Medienquelle wurde nicht gefunden.");
+  }
+
+  db.prepare(`
+    UPDATE media_sources
+    SET enabled=0, updated_at=CURRENT_TIMESTAMP
+    WHERE id=?
+  `).run(sourceId);
+
+  return {
+    id: Number(source.id),
+    path: String(source.path),
+    enabled: false
+  };
+}
+
 function sourceSamples(sourceId: number): string[] {
   return db.prepare(`
     SELECT relative_path
@@ -9919,6 +9941,8 @@ async function dispatch(method: CatalogMethod, payload: Record<string, unknown> 
       return listSources();
     case "addSource":
       return addSource(payload.path);
+    case "disableSource":
+      return disableSource(asNumber(payload.sourceId, "sourceId"));
     case "getStats":
       return getStats(asNumber(payload.sourceId, "sourceId"));
     case "listMedia":
