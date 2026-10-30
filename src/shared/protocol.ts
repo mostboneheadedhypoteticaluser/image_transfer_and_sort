@@ -564,6 +564,10 @@ export type SourceRecord = {
 export type ExplorerRoot = {
   name: string;
   path: string;
+  directImages: number;
+  directVideos: number;
+  hasChildren: boolean;
+  readError: string | null;
 };
 
 export type ExplorerFolderNode = {
