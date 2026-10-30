@@ -928,12 +928,17 @@ td .badge + .badge {
 }
 
 .person-candidate-card {
+  position: relative;
   display: grid;
   grid-template-columns: minmax(260px, 420px) minmax(300px, 1fr);
   border: 1px solid #e3e7eb;
   border-radius: 10px;
   background: #fff;
-  overflow: hidden;
+  overflow: visible;
+}
+
+.person-candidate-card:focus-within {
+  z-index: 40;
 }
 
 .person-face-strip {
