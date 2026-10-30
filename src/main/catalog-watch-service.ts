@@ -42,6 +42,13 @@ export class CatalogWatchService {
       full: boolean;
     }
   >();
+  private readonly scanWaiters = new Map<
+    number,
+    Array<{
+      resolve: (result: ScanResult) => void;
+      reject: (error: Error) => void;
+    }>
+  >();
   private processingScans = false;
   private safetyTimer: NodeJS.Timeout | null = null;
   private stopped = true;
@@ -92,6 +99,12 @@ export class CatalogWatchService {
 
     this.sources.clear();
     this.pendingScans.clear();
+
+    const error = new Error("Dateiscan wurde wegen App-Beendigung abgebrochen.");
+    for (const waiters of this.scanWaiters.values()) {
+      for (const waiter of waiters) waiter.reject(error);
+    }
+    this.scanWaiters.clear();
   }
 
   clearHistory(): void {
@@ -165,6 +178,21 @@ export class CatalogWatchService {
   async sourceAdded(sourceId: number): Promise<void> {
     await this.syncSources();
     this.requestScan(sourceId, "neue Quelle", true);
+  }
+
+  requestManualScan(sourceId: number): Promise<ScanResult> {
+    if (this.stopped || !this.sources.has(sourceId)) {
+      return Promise.reject(new Error("Medienquelle wird aktuell nicht überwacht."));
+    }
+
+    const result = new Promise<ScanResult>((resolve, reject) => {
+      const waiters = this.scanWaiters.get(sourceId) ?? [];
+      waiters.push({ resolve, reject });
+      this.scanWaiters.set(sourceId, waiters);
+    });
+
+    this.requestScan(sourceId, "manuell", false);
+    return result;
   }
 
   requestScan(
@@ -452,6 +480,22 @@ export class CatalogWatchService {
     }
   }
 
+  private resolveScanWaiters(sourceId: number, result: ScanResult): void {
+    if (this.pendingScans.has(sourceId)) return;
+
+    const waiters = this.scanWaiters.get(sourceId);
+    if (!waiters || waiters.length === 0) return;
+    this.scanWaiters.delete(sourceId);
+    for (const waiter of waiters) waiter.resolve(result);
+  }
+
+  private rejectScanWaiters(sourceId: number, error: Error): void {
+    const waiters = this.scanWaiters.get(sourceId);
+    if (!waiters || waiters.length === 0) return;
+    this.scanWaiters.delete(sourceId);
+    for (const waiter of waiters) waiter.reject(error);
+  }
+
   private async performScan(
     sourceId: number,
     trigger: string,
@@ -518,6 +562,7 @@ export class CatalogWatchService {
         automatic,
         scanResult: result
       });
+      this.resolveScanWaiters(sourceId, result);
     } catch (error) {
       source.scanning = false;
       const message = error instanceof Error ? error.message : String(error);
@@ -544,6 +589,10 @@ export class CatalogWatchService {
         automatic,
         scanResult: null
       });
+      this.rejectScanWaiters(
+        sourceId,
+        error instanceof Error ? error : new Error(message)
+      );
     }
   }
 
