@@ -790,7 +790,9 @@ function pathAffectedByReadError(filePath: string, errorPaths: string[]): boolea
 }
 
 function listSources() {
-  return db.prepare("SELECT id, path, enabled FROM media_sources ORDER BY id")
+  return db.prepare(
+    "SELECT id, path, enabled FROM media_sources WHERE enabled=1 ORDER BY id"
+  )
     .all()
     .map((row) => ({
       id: Number(row.id),
