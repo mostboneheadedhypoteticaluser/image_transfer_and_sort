@@ -813,6 +813,168 @@ function petCropUrl(petDetectionId: number): string {
   return `image-sorter-pet://pet/${petDetectionId}`;
 }
 
+type IdentityNameOption = {
+  id: number;
+  name: string;
+  count: number;
+  previewUrl: string | null;
+};
+
+type IdentitySimilarityOption = {
+  id: number;
+  name: string;
+  similarity: number;
+  previewUrl: string | null;
+};
+
+function normalizedIdentityName(value: string): string {
+  return value.trim().toLocaleLowerCase("de-DE");
+}
+
+function createIdentityNameField(
+  input: HTMLInputElement,
+  options: IdentityNameOption[]
+): HTMLDivElement {
+  const field = document.createElement("div");
+  field.className = "identity-name-field";
+
+  const menu = document.createElement("div");
+  menu.className = "identity-name-menu";
+  menu.hidden = true;
+
+  const render = () => {
+    const query = normalizedIdentityName(input.value);
+    menu.replaceChildren();
+
+    if (!query) {
+      menu.hidden = true;
+      return;
+    }
+
+    const matches = options
+      .map((option) => ({
+        option,
+        normalized: normalizedIdentityName(option.name)
+      }))
+      .filter(({ normalized }) => normalized.includes(query))
+      .sort((left, right) => {
+        const leftPrefix = left.normalized.startsWith(query) ? 0 : 1;
+        const rightPrefix = right.normalized.startsWith(query) ? 0 : 1;
+        if (leftPrefix !== rightPrefix) return leftPrefix - rightPrefix;
+        return left.option.name.localeCompare(right.option.name, "de");
+      })
+      .slice(0, 8);
+
+    if (matches.length === 0) {
+      menu.hidden = true;
+      return;
+    }
+
+    for (const { option } of matches) {
+      const choice = document.createElement("button");
+      choice.type = "button";
+      choice.className = "identity-name-option";
+
+      if (option.previewUrl) {
+        const img = document.createElement("img");
+        img.src = option.previewUrl;
+        img.alt = "";
+        img.loading = "lazy";
+        choice.appendChild(img);
+      }
+
+      const text = document.createElement("span");
+      const strong = document.createElement("strong");
+      strong.textContent = option.name;
+      const small = document.createElement("small");
+      small.textContent =
+        option.count.toLocaleString("de-DE") +
+        (option.count === 1 ? " bestätigter Treffer" : " bestätigte Treffer");
+      text.append(strong, small);
+      choice.appendChild(text);
+
+      choice.addEventListener("mousedown", (event) => {
+        // Verhindert, dass blur das Menü vor dem Klick schließt.
+        event.preventDefault();
+      });
+      choice.addEventListener("click", () => {
+        input.value = option.name;
+        menu.hidden = true;
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+        input.focus();
+      });
+
+      menu.appendChild(choice);
+    }
+
+    menu.hidden = false;
+  };
+
+  input.addEventListener("input", render);
+  input.addEventListener("focus", render);
+  input.addEventListener("blur", () => {
+    window.setTimeout(() => {
+      menu.hidden = true;
+    }, 120);
+  });
+
+  field.append(input, menu);
+  return field;
+}
+
+function createIdentitySimilarityList(
+  title: string,
+  options: IdentitySimilarityOption[],
+  input: HTMLInputElement
+): HTMLDivElement | null {
+  if (options.length === 0) return null;
+
+  const block = document.createElement("div");
+  block.className = "identity-similarity-block";
+
+  const label = document.createElement("small");
+  label.className = "identity-similarity-label";
+  label.textContent = title;
+
+  const list = document.createElement("div");
+  list.className = "identity-similarity-list";
+
+  for (const option of options) {
+    const choice = document.createElement("button");
+    choice.type = "button";
+    choice.className = "identity-similarity-option";
+    choice.title =
+      option.name + " auswählen · Ähnlichkeit " + option.similarity.toFixed(3);
+
+    if (option.previewUrl) {
+      const img = document.createElement("img");
+      img.src = option.previewUrl;
+      img.alt = "";
+      img.loading = "lazy";
+      choice.appendChild(img);
+    }
+
+    const text = document.createElement("span");
+    const strong = document.createElement("strong");
+    strong.textContent = option.name;
+    const small = document.createElement("small");
+    small.textContent = "Ähnlichkeit " + option.similarity.toFixed(3);
+    text.append(strong, small);
+    choice.appendChild(text);
+
+    choice.addEventListener("click", () => {
+      input.value = option.name;
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      input.focus();
+    });
+
+    list.appendChild(choice);
+  }
+
+  block.append(label, list);
+  return block;
+}
+
 function fullPreviewUrl(mediaId: number): string {
   return `image-sorter-preview://media/${mediaId}`;
 }
@@ -2392,13 +2554,65 @@ function renderPersonOverview(overview: PersonOverview): void {
       input.placeholder = "Name der Person";
       input.autocomplete = "off";
 
+      const nameField = createIdentityNameField(
+        input,
+        overview.persons.map((person) => ({
+          id: person.id,
+          name: person.name,
+          count: person.faceCount,
+          previewUrl:
+            person.representativeFaceId === null
+              ? null
+              : faceCropUrl(person.representativeFaceId)
+        }))
+      );
+
+      const similarityMatches = createIdentitySimilarityList(
+        "Ähnlichste bereits bestätigte Personen",
+        candidate.suggestedPersons.map((suggestion) => ({
+          id: suggestion.personId,
+          name: suggestion.personName,
+          similarity: suggestion.similarity,
+          previewUrl:
+            suggestion.representativeFaceId === null
+              ? null
+              : faceCropUrl(suggestion.representativeFaceId)
+        })),
+        input
+      );
+
       const button = document.createElement("button");
       button.className = "primary person-confirm";
       button.type = "button";
-      button.textContent =
-        candidate.ignoredIdentityId !== null
-          ? "Trotzdem hinzufügen"
-          : "Bestätigen";
+
+      const updateConfirmLabel = () => {
+        const entered = input.value.trim();
+        if (!entered) {
+          button.textContent =
+            candidate.ignoredIdentityId !== null
+              ? "Trotzdem hinzufügen"
+              : "Bestätigen";
+          return;
+        }
+
+        const existing = overview.persons.find(
+          (person) =>
+            normalizedIdentityName(person.name) === normalizedIdentityName(entered)
+        );
+
+        if (candidate.ignoredIdentityId !== null) {
+          button.textContent = existing
+            ? "Trotzdem " + existing.name + " zuordnen"
+            : "Trotzdem als " + entered + " hinzufügen";
+        } else {
+          button.textContent = existing
+            ? existing.name + " zuordnen"
+            : "Als " + entered + " bestätigen";
+        }
+      };
+
+      updateConfirmLabel();
+      input.addEventListener("input", updateConfirmLabel);
 
       const confirm = async () => {
         const name = input.value.trim();
@@ -2446,7 +2660,7 @@ function renderPersonOverview(overview: PersonOverview): void {
           personStatus.textContent = "Bestätigung fehlgeschlagen: " + message;
           input.disabled = false;
           button.disabled = false;
-          button.textContent = "Erneut versuchen";
+          updateConfirmLabel();
         }
       };
 
@@ -2501,16 +2715,20 @@ function renderPersonOverview(overview: PersonOverview): void {
         if (event.key === "Enter") void confirm();
       });
 
-      confirmRow.append(input, button, ignoreButton);
+      confirmRow.append(nameField, button, ignoreButton);
       if (candidate.faceCount > candidate.faces.length) {
         const hiddenNote = document.createElement("small");
         hiddenNote.className = "person-hidden-note";
         hiddenNote.textContent =
           "Es werden " + candidate.faces.length + " von " +
           candidate.faceCount + " Fundstellen angezeigt.";
-        body.append(heading, hiddenNote, confirmRow);
+        body.append(heading);
+        if (similarityMatches) body.appendChild(similarityMatches);
+        body.append(hiddenNote, confirmRow);
       } else {
-        body.append(heading, confirmRow);
+        body.append(heading);
+        if (similarityMatches) body.appendChild(similarityMatches);
+        body.append(confirmRow);
       }
       card.append(faceStrip, body);
       fragment.appendChild(card);
@@ -2890,18 +3108,6 @@ function renderPetOverview(overview: PetOverview): void {
       titleBlock.append(title, similarity);
 
       if (
-        candidate.suggestedPetName &&
-        candidate.suggestedPetSimilarity !== null
-      ) {
-        const suggestion = document.createElement("p");
-        suggestion.className = "pet-suggestion";
-        suggestion.textContent =
-          "Vermutlich „" + candidate.suggestedPetName + "“ · Referenzähnlichkeit " +
-          candidate.suggestedPetSimilarity.toFixed(3);
-        titleBlock.appendChild(suggestion);
-      }
-
-      if (
         candidate.ignoredIdentityId !== null &&
         candidate.ignoredSimilarity !== null
       ) {
@@ -2924,7 +3130,36 @@ function renderPetOverview(overview: PetOverview): void {
       input.maxLength = 120;
       input.placeholder = "Name des Hundes";
       input.autocomplete = "off";
-      input.value = candidate.suggestedPetName ?? "";
+
+      const matchingPets = overview.pets.filter(
+        (pet) => pet.petClass === candidate.petClass
+      );
+      const nameField = createIdentityNameField(
+        input,
+        matchingPets.map((pet) => ({
+          id: pet.id,
+          name: pet.name,
+          count: pet.detectionCount,
+          previewUrl:
+            pet.representativePetId === null
+              ? null
+              : petCropUrl(pet.representativePetId)
+        }))
+      );
+
+      const similarityMatches = createIdentitySimilarityList(
+        "Ähnlichste bereits bestätigte Hunde",
+        candidate.suggestedPets.map((suggestion) => ({
+          id: suggestion.petId,
+          name: suggestion.petName,
+          similarity: suggestion.similarity,
+          previewUrl:
+            suggestion.representativePetId === null
+              ? null
+              : petCropUrl(suggestion.representativePetId)
+        })),
+        input
+      );
 
       const button = document.createElement("button");
       button.className = "primary person-confirm";
@@ -2932,27 +3167,28 @@ function renderPetOverview(overview: PetOverview): void {
 
       const updateConfirmLabel = () => {
         const entered = input.value.trim();
+        if (!entered) {
+          button.textContent =
+            candidate.ignoredIdentityId !== null
+              ? "Trotzdem hinzufügen"
+              : "Bestätigen";
+          return;
+        }
+
+        const existing = matchingPets.find(
+          (pet) =>
+            normalizedIdentityName(pet.name) === normalizedIdentityName(entered)
+        );
 
         if (candidate.ignoredIdentityId !== null) {
-          button.textContent = entered
-            ? "Trotzdem als " + entered + " hinzufügen"
-            : "Trotzdem hinzufügen";
-          return;
+          button.textContent = existing
+            ? "Trotzdem " + existing.name + " zuordnen"
+            : "Trotzdem als " + entered + " hinzufügen";
+        } else {
+          button.textContent = existing
+            ? existing.name + " zuordnen"
+            : "Als " + entered + " bestätigen";
         }
-
-        if (!entered) {
-          button.textContent = "Bestätigen";
-          return;
-        }
-
-        const matchesSuggestion =
-          candidate.suggestedPetName !== null &&
-          entered.toLocaleLowerCase("de-DE") ===
-            candidate.suggestedPetName.toLocaleLowerCase("de-DE");
-
-        button.textContent = matchesSuggestion
-          ? candidate.suggestedPetName + " bestätigen"
-          : "Als " + entered + " bestätigen";
       };
 
       updateConfirmLabel();
@@ -3072,7 +3308,7 @@ function renderPetOverview(overview: PetOverview): void {
         if (event.key === "Enter") void confirm();
       });
 
-      confirmRow.append(input, button, ignoreButton);
+      confirmRow.append(nameField, button, ignoreButton);
 
       if (candidate.detectionCount > candidate.pets.length) {
         const hiddenNote = document.createElement("small");
@@ -3080,9 +3316,13 @@ function renderPetOverview(overview: PetOverview): void {
         hiddenNote.textContent =
           "Es werden " + candidate.pets.length + " von " +
           candidate.detectionCount + " Fundstellen angezeigt.";
-        body.append(heading, hiddenNote, confirmRow);
+        body.append(heading);
+        if (similarityMatches) body.appendChild(similarityMatches);
+        body.append(hiddenNote, confirmRow);
       } else {
-        body.append(heading, confirmRow);
+        body.append(heading);
+        if (similarityMatches) body.appendChild(similarityMatches);
+        body.append(confirmRow);
       }
 
       card.append(cropStrip, body);
