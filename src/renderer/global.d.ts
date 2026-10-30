@@ -12,6 +12,7 @@ import type {
   ExplorerFolderNode,
   ExplorerRoot,
   FolderTreeNode,
+  GeoMediaPoint,
   ConfirmPersonResult,
   ConfirmPetResult,
   IgnorePersonResult,
@@ -158,6 +159,7 @@ declare global {
         getStats(sourceId: number): Promise<CatalogStats>;
         getWatchSnapshot(): Promise<CatalogWatchSnapshot>;
         listMedia(sourceId: number, limit?: number): Promise<MediaRecord[]>;
+        listGeoMedia(sourceId?: number): Promise<GeoMediaPoint[]>;
         getSearchFacets(sourceId?: number): Promise<SearchFacets>;
         searchMedia(
           sourceId: number | undefined,
