@@ -10,6 +10,7 @@ import type {
   CatalogStats,
   CatalogWatchEvent,
   CatalogWatchSnapshot,
+  FolderTreeNode,
   ConfirmPersonResult,
   ConfirmPetResult,
   IgnorePersonResult,
@@ -36,6 +37,8 @@ import type {
 
 const api = {
   pickSource: (): Promise<string | null> => ipcRenderer.invoke("dialog:pickSource"),
+  openSourceManager: (): Promise<{ opened: true }> =>
+    ipcRenderer.invoke("window:openSourceManager"),
   lifecycle: {
     onShutdownStatus: (listener: (status: ShutdownStatus) => void) => {
       const handler = (
@@ -234,6 +237,10 @@ const api = {
   catalog: {
     listSources: (): Promise<SourceRecord[]> => ipcRenderer.invoke("catalog:listSources"),
     addSource: (sourcePath: string): Promise<SourceRecord> => ipcRenderer.invoke("catalog:addSource", sourcePath),
+    disableSource: (sourceId: number): Promise<SourceRecord> =>
+      ipcRenderer.invoke("catalog:disableSource", sourceId),
+    getFolderTree: (rootPath: string): Promise<FolderTreeNode> =>
+      ipcRenderer.invoke("catalog:getFolderTree", rootPath),
     getStats: (sourceId: number): Promise<CatalogStats> => ipcRenderer.invoke("catalog:getStats", sourceId),
     getWatchSnapshot: (): Promise<CatalogWatchSnapshot> =>
       ipcRenderer.invoke("catalog:getWatchSnapshot"),
