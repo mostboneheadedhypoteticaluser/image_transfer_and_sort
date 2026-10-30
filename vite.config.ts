@@ -7,7 +7,10 @@ export default defineConfig({
     outDir: "dist/renderer",
     emptyOutDir: false,
     rollupOptions: {
-      input: resolve(__dirname, "index.html")
+      input: {
+        main: resolve(__dirname, "index.html"),
+        sourceManager: resolve(__dirname, "source-manager.html")
+      }
     }
   }
 });
