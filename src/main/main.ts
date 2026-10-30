@@ -20,6 +20,8 @@ import type {
   QwenBenchmarkStageResult,
   CatalogStats,
   CatalogWatchSnapshot,
+  ExplorerFolderNode,
+  ExplorerRoot,
   FolderTreeNode,
   ConfirmPersonResult,
   ConfirmPetResult,
@@ -440,6 +442,107 @@ async function buildFolderTree(folderPath: string): Promise<FolderTreeNode> {
   };
 }
 
+async function inspectExplorerFolder(folderPath: string): Promise<ExplorerFolderNode> {
+  const resolved = path.resolve(folderPath);
+  const name = path.basename(resolved) || resolved;
+
+  try {
+    const entries = await readdir(resolved, { withFileTypes: true });
+    let directImages = 0;
+    let directVideos = 0;
+    let hasChildren = false;
+
+    for (const entry of entries) {
+      if (entry.isSymbolicLink()) continue;
+      if (entry.isDirectory()) {
+        if (!IGNORED_DIRECTORY_NAMES.has(entry.name.toLowerCase())) {
+          hasChildren = true;
+        }
+        continue;
+      }
+      if (!entry.isFile()) continue;
+
+      const extension = path.extname(entry.name).toLowerCase();
+      if (IMAGE_EXTENSIONS.has(extension)) directImages += 1;
+      if (VIDEO_EXTENSIONS.has(extension)) directVideos += 1;
+    }
+
+    return {
+      name,
+      path: resolved,
+      directImages,
+      directVideos,
+      hasChildren,
+      readError: null
+    };
+  } catch (error) {
+    return {
+      name,
+      path: resolved,
+      directImages: 0,
+      directVideos: 0,
+      hasChildren: false,
+      readError: error instanceof Error ? error.message : String(error)
+    };
+  }
+}
+
+async function listExplorerRoots(): Promise<ExplorerRoot[]> {
+  if (process.platform === "win32") {
+    const roots: ExplorerRoot[] = [];
+    for (let code = 67; code <= 90; code += 1) {
+      const drive = String.fromCharCode(code) + ":\\";
+      try {
+        const node = await inspectExplorerFolder(drive);
+        if (node.readError) continue;
+        roots.push({
+          name: drive,
+          path: drive,
+          directImages: node.directImages,
+          directVideos: node.directVideos,
+          hasChildren: node.hasChildren,
+          readError: null
+        });
+      } catch {
+        // Nicht vorhandene oder nicht erreichbare Laufwerke werden ausgelassen.
+      }
+    }
+    return roots;
+  }
+
+  const root = await inspectExplorerFolder(path.parse(process.cwd()).root || "/");
+  return [{
+    name: root.path,
+    path: root.path,
+    directImages: root.directImages,
+    directVideos: root.directVideos,
+    hasChildren: root.hasChildren,
+    readError: root.readError
+  }];
+}
+
+async function getExplorerChildren(folderPath: string): Promise<ExplorerFolderNode[]> {
+  const resolved = path.resolve(folderPath);
+  const entries = await readdir(resolved, { withFileTypes: true });
+  const childPaths = entries
+    .filter(
+      (entry) =>
+        !entry.isSymbolicLink() &&
+        entry.isDirectory() &&
+        !IGNORED_DIRECTORY_NAMES.has(entry.name.toLowerCase())
+    )
+    .map((entry) => path.join(resolved, entry.name))
+    .sort((left, right) =>
+      left.localeCompare(right, "de", { sensitivity: "base" })
+    );
+
+  const children: ExplorerFolderNode[] = [];
+  for (const childPath of childPaths) {
+    children.push(await inspectExplorerFolder(childPath));
+  }
+  return children;
+}
+
 function createSourceManagerWindow(): BrowserWindow {
   const existing = sourceManagerWindowRef;
   if (existing && !existing.isDestroyed()) {
@@ -603,6 +706,15 @@ function registerIpc(): void {
       throw new Error("Ordnerpfad fehlt.");
     }
     return buildFolderTree(rootPath);
+  });
+
+  ipcMain.handle("catalog:listExplorerRoots", () => listExplorerRoots());
+
+  ipcMain.handle("catalog:getExplorerChildren", async (_event, folderPath: string) => {
+    if (typeof folderPath !== "string" || folderPath.trim() === "") {
+      throw new Error("Ordnerpfad fehlt.");
+    }
+    return getExplorerChildren(folderPath);
   });
 
   ipcMain.handle("catalog:getStats", (_event, sourceId: number) =>
