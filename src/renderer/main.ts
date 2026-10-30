@@ -156,9 +156,25 @@ const runSearchButton = document.querySelector<HTMLButtonElement>("#runSearch")!
 const resetSearchButton = document.querySelector<HTMLButtonElement>("#resetSearch")!;
 const searchSummary = document.querySelector<HTMLSpanElement>("#searchSummary")!;
 const searchScope = document.querySelector<HTMLSelectElement>("#searchScope")!;
+const identityBrowserPeopleTab = document.querySelector<HTMLButtonElement>("#identityBrowserPeopleTab")!;
+const identityBrowserPetsTab = document.querySelector<HTMLButtonElement>("#identityBrowserPetsTab")!;
+const identityBrowserListTitle = document.querySelector<HTMLElement>("#identityBrowserListTitle")!;
+const identityBrowserCount = document.querySelector<HTMLElement>("#identityBrowserCount")!;
+const identityBrowserList = document.querySelector<HTMLDivElement>("#identityBrowserList")!;
+const identityBrowserPlaceholder = document.querySelector<HTMLDivElement>("#identityBrowserPlaceholder")!;
+const identityBrowserDetail = document.querySelector<HTMLDivElement>("#identityBrowserDetail")!;
+const identityBrowserKind = document.querySelector<HTMLElement>("#identityBrowserKind")!;
+const identityBrowserName = document.querySelector<HTMLElement>("#identityBrowserName")!;
+const identityBrowserMeta = document.querySelector<HTMLElement>("#identityBrowserMeta")!;
+const identityWordCloud = document.querySelector<HTMLDivElement>("#identityWordCloud")!;
+const identityCloudHint = document.querySelector<HTMLElement>("#identityCloudHint")!;
+const identityTimelineCount = document.querySelector<HTMLElement>("#identityTimelineCount")!;
+const identityTimeline = document.querySelector<HTMLDivElement>("#identityTimeline")!;
 
 let sources: SourceRecord[] = [];
 let currentView: CatalogView = "media";
+let identityBrowserMode: "people" | "pets" = "people";
+let identityBrowserSelectionToken = 0;
 let scanning = false;
 let restoring = false;
 let resetting = false;
@@ -988,6 +1004,313 @@ function fullPreviewUrl(mediaId: number): string {
   return `image-sorter-preview://media/${mediaId}`;
 }
 
+type IdentityBrowserMediaRef = {
+  mediaId: number;
+  relativePath: string;
+};
+
+const IDENTITY_TERM_TRANSLATIONS: Record<string, string> = {
+  dog: "Hund",
+  dogs: "Hunde",
+  cat: "Katze",
+  cats: "Katzen",
+  bird: "Vogel",
+  birds: "Vögel",
+  person: "Person",
+  people: "Personen",
+  animal: "Tier",
+  animals: "Tiere",
+  outdoor: "Draußen",
+  outdoors: "Draußen",
+  indoor: "Innen",
+  indoors: "Innen",
+  vehicle: "Fahrzeug",
+  vehicles: "Fahrzeuge",
+  tree: "Baum",
+  trees: "Bäume",
+  grass: "Gras",
+  sky: "Himmel",
+  water: "Wasser",
+  building: "Gebäude",
+  street: "Straße",
+  road: "Straße",
+  forest: "Wald",
+  field: "Feld"
+};
+
+function germanIdentityTerm(value: string): string {
+  const cleaned = value.trim().replace(/^[\s,.;:!?()[\]{}"'“”„]+|[\s,.;:!?()[\]{}"'“”„]+$/g, "");
+  if (!cleaned) return "";
+  const key = cleaned.toLocaleLowerCase("de-DE");
+  return MOTIF_LABELS_DE[key] ?? IDENTITY_TERM_TRANSLATIONS[key] ?? cleaned;
+}
+
+function identityTermKey(value: string): string {
+  return germanIdentityTerm(value).toLocaleLowerCase("de-DE");
+}
+
+async function loadIdentityMediaDetails(
+  refs: IdentityBrowserMediaRef[],
+  token: number
+): Promise<MediaDetails[]> {
+  const unique = [...new Map(refs.map((ref) => [ref.mediaId, ref])).values()];
+  const details: MediaDetails[] = [];
+  const batchSize = 10;
+  for (let index = 0; index < unique.length; index += batchSize) {
+    if (token !== identityBrowserSelectionToken) return [];
+    const batch = unique.slice(index, index + batchSize);
+    const loaded = await Promise.all(
+      batch.map((ref) => window.imageSorter.catalog.getMediaDetails(ref.mediaId))
+    );
+    details.push(...loaded.filter((item): item is MediaDetails => item !== null));
+  }
+  return details;
+}
+
+function identityCaptureDate(details: MediaDetails): number {
+  const capturedAt = details.imageMetadata?.capturedAt;
+  if (capturedAt) {
+    const value = Date.parse(capturedAt);
+    if (Number.isFinite(value)) return value;
+  }
+  return details.mtimeMs;
+}
+
+function renderIdentityWordCloud(detailsList: MediaDetails[]): void {
+  const scores = new Map<string, { label: string; score: number; media: Set<number> }>();
+
+  const add = (raw: string, score: number, mediaId: number) => {
+    const label = germanIdentityTerm(raw);
+    const key = identityTermKey(raw);
+    if (!label || !key || label.length < 2) return;
+    const current = scores.get(key) ?? { label, score: 0, media: new Set<number>() };
+    current.score += Math.max(0.5, score);
+    current.media.add(mediaId);
+    scores.set(key, current);
+  };
+
+  for (const details of detailsList) {
+    const objectSeen = new Set<string>();
+    for (const object of details.objects) {
+      const key = identityTermKey(object.label);
+      if (!key || objectSeen.has(key)) continue;
+      objectSeen.add(key);
+      const engineWeight = Math.max(
+        1,
+        object.agreementCount ?? 0,
+        object.sources?.length ?? 0
+      );
+      add(object.label, engineWeight * Math.max(0.5, object.score), details.mediaId);
+    }
+
+    const semantic = details.semantic;
+    if (semantic) {
+      const semanticSeen = new Set<string>();
+      for (const term of [
+        ...semantic.tags,
+        ...semantic.subjects,
+        ...semantic.actions,
+        ...semantic.scenes,
+        ...semantic.concepts
+      ]) {
+        const key = identityTermKey(term);
+        if (!key || semanticSeen.has(key)) continue;
+        semanticSeen.add(key);
+        add(term, 1.15, details.mediaId);
+      }
+    }
+  }
+
+  const words = [...scores.values()]
+    .sort((a, b) => b.score - a.score || b.media.size - a.media.size)
+    .slice(0, 45);
+
+  identityWordCloud.replaceChildren();
+  if (words.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "identity-browser-empty";
+    empty.textContent = "Für diese Bilder sind noch keine beschreibenden Begriffe gespeichert.";
+    identityWordCloud.appendChild(empty);
+    identityCloudHint.textContent = "Noch keine verwertbaren Erkennungen vorhanden.";
+    return;
+  }
+
+  const min = Math.min(...words.map((word) => word.score));
+  const max = Math.max(...words.map((word) => word.score));
+  for (const word of words) {
+    const span = document.createElement("span");
+    span.className = "identity-cloud-word";
+    const normalized = max === min ? 0.55 : (word.score - min) / (max - min);
+    span.style.fontSize = (0.82 + normalized * 1.55).toFixed(2) + "rem";
+    span.style.fontWeight = String(Math.round(520 + normalized * 260));
+    span.textContent = word.label;
+    span.title =
+      word.media.size.toLocaleString("de-DE") +
+      (word.media.size === 1 ? " Bild" : " Bilder") +
+      " · Gewicht " + word.score.toFixed(1);
+    identityWordCloud.appendChild(span);
+  }
+  identityCloudHint.textContent =
+    "Doppelte Erkennungen sind zusammengeführt; Treffer mehrerer Engines werden stärker gewichtet.";
+}
+
+function renderIdentityTimeline(detailsList: MediaDetails[]): void {
+  const sorted = [...detailsList].sort(
+    (a, b) => identityCaptureDate(a) - identityCaptureDate(b)
+  );
+  identityTimeline.replaceChildren();
+  identityTimelineCount.textContent =
+    sorted.length.toLocaleString("de-DE") + (sorted.length === 1 ? " Bild" : " Bilder");
+
+  for (const details of sorted) {
+    const card = document.createElement("article");
+    card.className = "identity-timeline-card";
+
+    const image = document.createElement("img");
+    image.src = fullPreviewUrl(details.mediaId);
+    image.alt = details.relativePath;
+    image.loading = "lazy";
+    makePreviewable(image, details.mediaId, details.relativePath);
+
+    const info = document.createElement("div");
+    const date = document.createElement("strong");
+    const captured = details.imageMetadata?.capturedAt;
+    date.textContent = captured
+      ? new Date(captured).toLocaleString("de-DE")
+      : new Date(details.mtimeMs).toLocaleString("de-DE");
+    const path = document.createElement("small");
+    path.textContent = details.relativePath;
+    info.append(date, path);
+    card.append(image, info);
+    identityTimeline.appendChild(card);
+  }
+}
+
+async function selectIdentityBrowserEntry(
+  kind: "Person" | "Tier",
+  name: string,
+  refs: IdentityBrowserMediaRef[]
+): Promise<void> {
+  const token = ++identityBrowserSelectionToken;
+  identityBrowserPlaceholder.hidden = true;
+  identityBrowserDetail.hidden = false;
+  identityBrowserKind.textContent = kind;
+  identityBrowserName.textContent = name;
+  identityBrowserMeta.textContent =
+    refs.length.toLocaleString("de-DE") + (refs.length === 1 ? " zugeordnete Aufnahme" : " zugeordnete Aufnahmen");
+  identityWordCloud.replaceChildren();
+  identityTimeline.replaceChildren();
+  identityCloudHint.textContent = "Erkennungen werden zusammengeführt …";
+  identityTimelineCount.textContent = "Bilder werden geladen …";
+
+  const details = await loadIdentityMediaDetails(refs, token);
+  if (token !== identityBrowserSelectionToken) return;
+  renderIdentityWordCloud(details);
+  renderIdentityTimeline(details);
+}
+
+async function loadIdentityBrowser(): Promise<void> {
+  const sourceId = selectedSourceId() ?? 0;
+  identityBrowserPeopleTab.classList.toggle("active", identityBrowserMode === "people");
+  identityBrowserPetsTab.classList.toggle("active", identityBrowserMode === "pets");
+  identityBrowserListTitle.textContent =
+    identityBrowserMode === "people" ? "Bestätigte Personen" : "Bestätigte Tiere";
+  identityBrowserList.replaceChildren();
+  identityBrowserPlaceholder.hidden = false;
+  identityBrowserDetail.hidden = true;
+  identityBrowserSelectionToken++;
+
+  if (identityBrowserMode === "people") {
+    const overview = await window.imageSorter.people.getOverview(sourceId, false);
+    identityBrowserCount.textContent = overview.persons.length.toLocaleString("de-DE");
+    if (overview.persons.length === 0) {
+      identityBrowserList.innerHTML = '<div class="identity-browser-empty">Noch keine bestätigten Personen vorhanden.</div>';
+      return;
+    }
+    for (const person of overview.persons) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "identity-browser-entry";
+      if (person.representativeFaceId !== null) {
+        const image = document.createElement("img");
+        image.src = faceCropUrl(person.representativeFaceId);
+        image.alt = "";
+        image.loading = "lazy";
+        button.appendChild(image);
+      }
+      const text = document.createElement("span");
+      const title = document.createElement("strong");
+      title.textContent = person.name;
+      const count = document.createElement("small");
+      count.textContent = person.faceCount.toLocaleString("de-DE") + " Treffer";
+      text.append(title, count);
+      button.appendChild(text);
+      button.addEventListener("click", () => {
+        identityBrowserList.querySelectorAll(".identity-browser-entry").forEach((item) => item.classList.remove("active"));
+        button.classList.add("active");
+        void selectIdentityBrowserEntry(
+          "Person",
+          person.name,
+          person.faces.map((face) => ({ mediaId: face.mediaId, relativePath: face.relativePath }))
+        );
+      });
+      identityBrowserList.appendChild(button);
+    }
+    return;
+  }
+
+  const overview = await window.imageSorter.pets.getOverview(sourceId, false);
+  identityBrowserCount.textContent = overview.pets.length.toLocaleString("de-DE");
+  if (overview.pets.length === 0) {
+    identityBrowserList.innerHTML = '<div class="identity-browser-empty">Noch keine bestätigten Tiere vorhanden.</div>';
+    return;
+  }
+  for (const pet of overview.pets) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "identity-browser-entry";
+    if (pet.representativePetId !== null) {
+      const image = document.createElement("img");
+      image.src = petCropUrl(pet.representativePetId);
+      image.alt = "";
+      image.loading = "lazy";
+      button.appendChild(image);
+    }
+    const text = document.createElement("span");
+    const title = document.createElement("strong");
+    title.textContent = pet.name;
+    const count = document.createElement("small");
+    count.textContent =
+      (pet.petClass === "cat" ? "Katze" : "Hund") +
+      " · " + pet.detectionCount.toLocaleString("de-DE") + " Treffer";
+    text.append(title, count);
+    button.appendChild(text);
+    button.addEventListener("click", () => {
+      identityBrowserList.querySelectorAll(".identity-browser-entry").forEach((item) => item.classList.remove("active"));
+      button.classList.add("active");
+      void selectIdentityBrowserEntry(
+        "Tier",
+        pet.name,
+        pet.pets.map((item) => ({ mediaId: item.mediaId, relativePath: item.relativePath }))
+      );
+    });
+    identityBrowserList.appendChild(button);
+  }
+}
+
+identityBrowserPeopleTab.addEventListener("click", () => {
+  if (identityBrowserMode === "people") return;
+  identityBrowserMode = "people";
+  void runSafely(loadIdentityBrowser);
+});
+
+identityBrowserPetsTab.addEventListener("click", () => {
+  if (identityBrowserMode === "pets") return;
+  identityBrowserMode = "pets";
+  void runSafely(loadIdentityBrowser);
+});
+
+
 function detailText(value: unknown, fallback = "—"): string {
   if (value === null || value === undefined || value === "") return fallback;
   return String(value);
@@ -1680,6 +2003,8 @@ const MOTIF_LABELS_DE: Record<string, string> = {
   "parking meter": "Parkscheinautomat",
   bench: "Bank",
   bird: "Vogel",
+  cat: "Katze",
+  dog: "Hund",
   horse: "Pferd",
   sheep: "Schaf",
   cow: "Kuh",
@@ -4539,6 +4864,9 @@ async function showAppPage(page: string): Promise<void> {
   }
   if (page === "map") {
     await activateMapView();
+  }
+  if (page === "identities") {
+    await loadIdentityBrowser();
   }
 }
 
