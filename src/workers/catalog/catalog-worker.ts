@@ -6157,12 +6157,85 @@ function ignoredIdentityRevision(kind: "person" | "pet"): string {
   return `${Number(row?.reference_count ?? 0)}:${String(row?.updated_at ?? "")}`;
 }
 
-function knownPetCentroids(sourceId: number) {
+function knownPersonCentroids(sourceId?: number) {
+  const sourceFilter = sourceId === undefined ? "" : "AND m.source_id=?";
+  const sourceArgs = sourceId === undefined ? [] : [sourceId];
+
+  const rows = db.prepare(`
+    SELECT
+      p.id AS person_id,
+      p.name,
+      fd.id AS face_detection_id,
+      fe.dimension,
+      fe.vector_blob
+    FROM persons p
+    JOIN person_face_assignments pfa ON pfa.person_id=p.id
+    JOIN face_detections fd ON fd.id=pfa.face_detection_id
+    JOIN media_items m ON m.id=fd.media_id
+    JOIN face_embeddings fe ON fe.face_detection_id=fd.id
+    WHERE m.availability='AVAILABLE'
+      AND pfa.assignment_source='CONFIRMED'
+      AND fe.model_version='SFace 2021dec'
+      AND fe.input_sha256=m.sha256
+      AND fd.input_sha256=m.sha256
+      ${sourceFilter}
+    ORDER BY p.id, fd.id
+  `).all(...sourceArgs);
+
+  const grouped = new Map<number, {
+    id: number;
+    name: string;
+    representativeFaceId: number | null;
+    vectors: number[][];
+  }>();
+
+  for (const row of rows) {
+    const id = Number(row.person_id);
+    const entry = grouped.get(id) ?? {
+      id,
+      name: String(row.name),
+      representativeFaceId: null,
+      vectors: []
+    };
+
+    if (entry.representativeFaceId === null) {
+      entry.representativeFaceId = Number(row.face_detection_id);
+    }
+    entry.vectors.push(
+      vectorFromBlob(row.vector_blob, Number(row.dimension))
+    );
+    grouped.set(id, entry);
+  }
+
+  return [...grouped.values()]
+    .map((entry) => ({
+      id: entry.id,
+      name: entry.name,
+      representativeFaceId: entry.representativeFaceId,
+      referenceCount: entry.vectors.length,
+      vector: centroid(entry.vectors)
+    }))
+    .filter(
+      (entry): entry is {
+        id: number;
+        name: string;
+        representativeFaceId: number | null;
+        referenceCount: number;
+        vector: number[];
+      } => entry.vector !== null
+    );
+}
+
+function knownPetCentroids(sourceId?: number) {
+  const sourceFilter = sourceId === undefined ? "" : "AND m.source_id=?";
+  const sourceArgs = sourceId === undefined ? [] : [sourceId];
+
   const rows = db.prepare(`
     SELECT
       p.id AS pet_id,
       p.name,
       p.pet_class,
+      pd.id AS pet_detection_id,
       pe.dimension,
       pe.vector_blob
     FROM pets p
@@ -6170,19 +6243,20 @@ function knownPetCentroids(sourceId: number) {
     JOIN pet_fused_detections pd ON pd.id=pa.pet_detection_id
     JOIN media_items m ON m.id=pd.media_id
     JOIN pet_embeddings pe ON pe.pet_detection_id=pd.id
-    WHERE m.source_id=?
-      AND m.availability='AVAILABLE'
+    WHERE m.availability='AVAILABLE'
       AND pa.assignment_source='CONFIRMED'
       AND pe.model_version='DogReID DINOv2-B14 0.2.0'
       AND pe.input_sha256=m.sha256
       AND pd.input_sha256=m.sha256
+      ${sourceFilter}
     ORDER BY p.id, pd.id
-  `).all(sourceId);
+  `).all(...sourceArgs);
 
   const grouped = new Map<number, {
     id: number;
     name: string;
     petClass: string;
+    representativePetId: number | null;
     vectors: number[][];
   }>();
 
@@ -6192,9 +6266,13 @@ function knownPetCentroids(sourceId: number) {
       id,
       name: String(row.name),
       petClass: String(row.pet_class),
+      representativePetId: null,
       vectors: []
     };
 
+    if (entry.representativePetId === null) {
+      entry.representativePetId = Number(row.pet_detection_id);
+    }
     entry.vectors.push(
       vectorFromBlob(row.vector_blob, Number(row.dimension))
     );
@@ -6206,6 +6284,7 @@ function knownPetCentroids(sourceId: number) {
       id: entry.id,
       name: entry.name,
       petClass: entry.petClass,
+      representativePetId: entry.representativePetId,
       referenceCount: entry.vectors.length,
       vector: centroid(entry.vectors)
     }))
@@ -6214,6 +6293,7 @@ function knownPetCentroids(sourceId: number) {
         id: number;
         name: string;
         petClass: string;
+        representativePetId: number | null;
         referenceCount: number;
         vector: number[];
       } => entry.vector !== null
@@ -6429,7 +6509,7 @@ function listPetCandidates(
     LIMIT 1
   `);
 
-  const knownPets = knownPetCentroids(sourceId);
+  const knownPets = knownPetCentroids();
   const ignoredIdentities = ignoredPetVectorIdentities();
   const insertIgnoredMatch = db.prepare(`
     INSERT INTO ignored_pet_matches(
@@ -6480,26 +6560,24 @@ function listPetCandidates(
       return null;
     }
 
-    let suggestedPetId: number | null = null;
-    let suggestedPetName: string | null = null;
-    let suggestedPetSimilarity: number | null = null;
-
-    if (candidateVector) {
-      for (const known of knownPets) {
-        if (known.petClass !== String(candidate.pet_class)) continue;
-        if (exclusionQuery.get(candidateId, known.id)) continue;
-
-        const similarity = cosineSimilarity(candidateVector, known.vector);
-        if (
-          similarity >= 0.60 &&
-          (suggestedPetSimilarity === null || similarity > suggestedPetSimilarity)
-        ) {
-          suggestedPetId = known.id;
-          suggestedPetName = known.name;
-          suggestedPetSimilarity = similarity;
-        }
-      }
-    }
+    const suggestedPets = candidateVector
+      ? knownPets
+          .filter(
+            (known) =>
+              known.petClass === String(candidate.pet_class) &&
+              !exclusionQuery.get(candidateId, known.id)
+          )
+          .map((known) => ({
+            petId: known.id,
+            petName: known.name,
+            similarity: cosineSimilarity(candidateVector, known.vector),
+            representativePetId: known.representativePetId
+          }))
+          .filter((match) => match.similarity >= 0.60)
+          .sort((left, right) => right.similarity - left.similarity)
+          .slice(0, 3)
+      : [];
+    const bestPetSuggestion = suggestedPets[0] ?? null;
 
     return {
       id: candidateId,
@@ -6513,9 +6591,10 @@ function listPetCandidates(
       representativePetId,
       averageSimilarity: Number(candidate.average_similarity),
       minSimilarity: Number(candidate.min_similarity),
-      suggestedPetId,
-      suggestedPetName,
-      suggestedPetSimilarity,
+      suggestedPetId: bestPetSuggestion?.petId ?? null,
+      suggestedPetName: bestPetSuggestion?.petName ?? null,
+      suggestedPetSimilarity: bestPetSuggestion?.similarity ?? null,
+      suggestedPets,
       ignoredIdentityId: ignoredMatch?.identityId ?? null,
       ignoredSimilarity: ignoredMatch?.similarity ?? null,
       pets: itemQuery.all(
@@ -7988,6 +8067,17 @@ function listPersonCandidates(
     ORDER BY pcf.face_detection_id
   `);
 
+  const exclusionQuery = db.prepare(`
+    SELECT 1
+    FROM person_candidate_faces pcf
+    JOIN person_face_exclusions pfe
+      ON pfe.face_detection_id=pcf.face_detection_id
+    WHERE pcf.candidate_id=?
+      AND pfe.person_id=?
+    LIMIT 1
+  `);
+
+  const knownPersons = knownPersonCentroids();
   const ignoredIdentities = ignoredPersonVectorIdentities();
   const insertIgnoredMatch = db.prepare(`
     INSERT INTO ignored_person_matches(
@@ -8035,6 +8125,21 @@ function listPersonCandidates(
       return null;
     }
 
+    const candidateVector = centroid(vectors);
+    const suggestedPersons = candidateVector
+      ? knownPersons
+          .filter((known) => !exclusionQuery.get(candidateId, known.id))
+          .map((known) => ({
+            personId: known.id,
+            personName: known.name,
+            similarity: cosineSimilarity(candidateVector, known.vector),
+            representativeFaceId: known.representativeFaceId
+          }))
+          .filter((match) => match.similarity >= 0.55)
+          .sort((left, right) => right.similarity - left.similarity)
+          .slice(0, 3)
+      : [];
+
     return {
       id: candidateId,
       faceCount: Number(candidate.face_count),
@@ -8046,6 +8151,7 @@ function listPersonCandidates(
       representativeFaceId,
       averageSimilarity: Number(candidate.average_similarity),
       minSimilarity: Number(candidate.min_similarity),
+      suggestedPersons,
       ignoredIdentityId: ignoredMatch?.identityId ?? null,
       ignoredSimilarity: ignoredMatch?.similarity ?? null,
       faces: faceQuery.all(
