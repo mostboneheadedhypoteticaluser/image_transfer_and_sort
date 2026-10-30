@@ -8,16 +8,30 @@
   </head>
   <body>
     <div id="app">
-      <header class="topbar">
-        <div>
-          <h1>Medienkatalog</h1>
-          <p>Lokale Bilder und Videos katalogisieren – Analyse läuft getrennt von der Oberfläche.</p>
-        </div>
-        <span class="status-pill" id="workerState">Katalog-Worker wird gestartet …</span>
-      </header>
+      <div class="app-shell">
+        <aside class="app-sidebar">
+          <div class="sidebar-brand">
+            <span class="section-kicker">Image Sortierer</span>
+            <strong>Medienkatalog</strong>
+          </div>
+          <nav class="sidebar-nav" aria-label="Hauptnavigation">
+            <button class="sidebar-nav-item active" type="button" data-app-page="sources"><span>▣</span>Medienquellen</button>
+            <button class="sidebar-nav-item" type="button" data-app-page="analysis"><span>◫</span>Analyse &amp; KI</button>
+            <button class="sidebar-nav-item" type="button" data-app-page="media"><span>▤</span>Medien</button>
+            <button class="sidebar-nav-item" type="button" data-app-page="map"><span>⌖</span>Karte</button>
+          </nav>
+          <div class="sidebar-status">
+            <span class="status-pill" id="workerState">Katalog-Worker wird gestartet …</span>
+          </div>
+        </aside>
 
-      <main>
-        <section class="panel source-panel">
+        <main class="app-workspace">
+        <section class="workspace-page active" data-workspace-page="sources">
+          <div class="workspace-page-heading">
+            <div><span class="section-kicker">Katalog</span><h1>Medienquellen</h1></div>
+            <p>Laufwerke und Ordner auswählen, die rekursiv katalogisiert und überwacht werden sollen.</p>
+          </div>
+          <section class="panel source-panel">
           <div class="source-panel-heading">
             <div>
               <span class="section-kicker">Katalog</span>
@@ -46,17 +60,38 @@
               <div class="watch-history-empty">Noch keine Live-Änderungen erkannt.</div>
             </div>
           </details>
-        </section>
+          </section>
 
-        <section class="stats-grid">
+          <section class="stats-grid">
           <article class="stat"><span id="totalCount">0</span><small>Katalogisiert</small></article>
           <article class="stat"><span id="availableCount">0</span><small>Verfügbar</small></article>
           <article class="stat"><span id="missingCount">0</span><small>Fehlend</small></article>
           <article class="stat"><span id="recycleCount">0</span><small>Im Papierkorb</small></article>
           <article class="stat"><span id="lastScan">—</span><small>Letzter Scan</small></article>
+          </section>
+
+          <section class="embedded-source-explorer">
+            <aside class="embedded-source-list">
+              <div class="embedded-source-list-heading"><span>Aktiv überwacht</span><strong id="embeddedSourceCount">0</strong></div>
+              <div id="embeddedActiveSources" class="embedded-active-sources"></div>
+            </aside>
+            <section class="embedded-explorer-tree-panel">
+              <div class="embedded-explorer-toolbar">
+                <div><small>Dateisystem</small><strong>Dieser PC</strong></div>
+                <button id="embeddedRefreshExplorer" class="ghost" type="button">Aktualisieren</button>
+              </div>
+              <div id="embeddedTreeStatus" class="embedded-tree-status">Laufwerke werden geladen …</div>
+              <div id="embeddedFolderTree" class="embedded-folder-tree" hidden></div>
+            </section>
+          </section>
         </section>
 
-        <details class="panel analysis-panel" id="analysisPanel">
+        <section class="workspace-page" data-workspace-page="analysis" hidden>
+          <div class="workspace-page-heading">
+            <div><span class="section-kicker">Hintergrund</span><h1>Analyse &amp; KI</h1></div>
+            <p>Verarbeitung, Workerstatus und KI-Pipeline des Katalogs.</p>
+          </div>
+        <details class="panel analysis-panel" id="analysisPanel" open>
           <summary class="analysis-summary">
             <div>
               <span class="section-kicker">Hintergrund</span>
@@ -266,7 +301,13 @@
             </div>
           </div>
         </details>
+        </section>
 
+        <section class="workspace-page" data-workspace-page="media" hidden>
+          <div class="workspace-page-heading">
+            <div><span class="section-kicker">Bibliothek</span><h1>Medien</h1></div>
+            <p>Alle Medien, Suche, Dubletten, Personen, Haustiere und Papierkorb.</p>
+          </div>
         <section class="panel media-panel">
           <div class="panel-heading">
             <div>
@@ -447,7 +488,20 @@
             </section>
           </div>
         </section>
+        </section>
+
+        <section class="workspace-page map-workspace-page" data-workspace-page="map" hidden>
+          <div class="workspace-page-heading map-page-heading">
+            <div><span class="section-kicker">Geodaten</span><h1>Karte</h1></div>
+            <p><strong id="mapGeoCount">0</strong> georeferenzierte Medien · Punkte werden abhängig vom Zoom zusammengefasst.</p>
+          </div>
+          <section class="panel map-panel">
+            <div id="mapEmptyState" class="map-empty-state">Noch keine Medien mit GPS-Koordinaten im Katalog.</div>
+            <div id="mediaMap" class="media-map" aria-label="Karte der Aufnahmeorte"></div>
+          </section>
+        </section>
       </main>
+      </div>
     </div>
 
     <dialog id="qwenBenchmarkDialog" class="app-dialog qwen-benchmark-dialog">
