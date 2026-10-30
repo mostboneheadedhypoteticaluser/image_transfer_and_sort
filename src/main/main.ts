@@ -1,5 +1,5 @@
 import path from "node:path";
-import { readFile, rm } from "node:fs/promises";
+import { readFile, readdir, rm } from "node:fs/promises";
 import { app, BrowserWindow, clipboard, dialog, ipcMain, protocol, shell, type OpenDialogOptions } from "electron";
 import { CatalogService } from "./catalog-service";
 import { AnalysisService } from "./analysis-service";
@@ -9,6 +9,7 @@ import { ThumbnailCoordinator } from "./thumbnail-coordinator";
 import { PersonService } from "./person-service";
 import { PetService } from "./pet-service";
 import { CatalogWatchService } from "./catalog-watch-service";
+import { IMAGE_EXTENSIONS, VIDEO_EXTENSIONS, IGNORED_DIRECTORY_NAMES } from "../catalog/constants";
 import type {
   AnalysisErrorRecord,
   AnalysisQueueStats,
@@ -19,6 +20,7 @@ import type {
   QwenBenchmarkStageResult,
   CatalogStats,
   CatalogWatchSnapshot,
+  FolderTreeNode,
   ConfirmPersonResult,
   ConfirmPetResult,
   IgnorePersonResult,
@@ -49,6 +51,7 @@ import type {
 } from "../shared/protocol";
 
 let windowRef: BrowserWindow | null = null;
+let sourceManagerWindowRef: BrowserWindow | null = null;
 let catalog: CatalogService | null = null;
 let analysis: AnalysisService | null = null;
 let analysisCoordinator: AnalysisCoordinator | null = null;
@@ -373,6 +376,109 @@ function isInsideDirectory(candidatePath: string, rootPath: string): boolean {
   return candidate === root || candidate.startsWith(root + path.sep);
 }
 
+async function buildFolderTree(folderPath: string): Promise<FolderTreeNode> {
+  const resolved = path.resolve(folderPath);
+  const name = path.basename(resolved) || resolved;
+  let entries;
+
+  try {
+    entries = await readdir(resolved, { withFileTypes: true });
+  } catch (error) {
+    return {
+      name,
+      path: resolved,
+      directImages: 0,
+      directVideos: 0,
+      images: 0,
+      videos: 0,
+      children: [],
+      readError: error instanceof Error ? error.message : String(error)
+    };
+  }
+
+  let directImages = 0;
+  let directVideos = 0;
+  const childDirectories = [];
+
+  for (const entry of entries) {
+    if (entry.isSymbolicLink()) continue;
+
+    if (entry.isDirectory()) {
+      if (IGNORED_DIRECTORY_NAMES.has(entry.name.toLowerCase())) continue;
+      childDirectories.push(path.join(resolved, entry.name));
+      continue;
+    }
+
+    if (!entry.isFile()) continue;
+    const extension = path.extname(entry.name).toLowerCase();
+    if (IMAGE_EXTENSIONS.has(extension)) directImages += 1;
+    if (VIDEO_EXTENSIONS.has(extension)) directVideos += 1;
+  }
+
+  const children: FolderTreeNode[] = [];
+  let images = directImages;
+  let videos = directVideos;
+
+  for (const childPath of childDirectories.sort((a, b) =>
+    a.localeCompare(b, "de", { sensitivity: "base" })
+  )) {
+    const child = await buildFolderTree(childPath);
+    children.push(child);
+    images += child.images;
+    videos += child.videos;
+  }
+
+  return {
+    name,
+    path: resolved,
+    directImages,
+    directVideos,
+    images,
+    videos,
+    children,
+    readError: null
+  };
+}
+
+function createSourceManagerWindow(): BrowserWindow {
+  const existing = sourceManagerWindowRef;
+  if (existing && !existing.isDestroyed()) {
+    existing.show();
+    existing.focus();
+    return existing;
+  }
+
+  const win = new BrowserWindow({
+    width: 1100,
+    height: 760,
+    minWidth: 820,
+    minHeight: 560,
+    backgroundColor: "#f4f6f8",
+    parent: windowRef ?? undefined,
+    webPreferences: {
+      preload: path.join(__dirname, "preload.js"),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true
+    }
+  });
+
+  sourceManagerWindowRef = win;
+  const devUrl = process.env.VITE_DEV_SERVER_URL;
+  if (devUrl) {
+    const base = devUrl.endsWith("/") ? devUrl : devUrl + "/";
+    void win.loadURL(new URL("source-manager.html", base).toString());
+  } else {
+    void win.loadFile(path.join(__dirname, "..", "renderer", "source-manager.html"));
+  }
+
+  win.on("closed", () => {
+    if (sourceManagerWindowRef === win) sourceManagerWindowRef = null;
+  });
+
+  return win;
+}
+
 function createWindow(): BrowserWindow {
   const win = new BrowserWindow({
     width: 1280,
@@ -457,12 +563,21 @@ async function leaveQwenBenchmarkMode(): Promise<void> {
 }
 
 function registerIpc(): void {
-  ipcMain.handle("dialog:pickSource", async () => {
-    const result = await dialog.showOpenDialog(windowRef!, {
+  ipcMain.handle("dialog:pickSource", async (event) => {
+    const owner = BrowserWindow.fromWebContents(event.sender) ?? windowRef ?? undefined;
+    const options = {
       title: "Festplatte oder Medienordner auswählen",
-      properties: ["openDirectory"]
-    });
+      properties: ["openDirectory"] as const
+    };
+    const result = owner
+      ? await dialog.showOpenDialog(owner, options)
+      : await dialog.showOpenDialog(options);
     return result.canceled ? null : result.filePaths[0] ?? null;
+  });
+
+  ipcMain.handle("window:openSourceManager", () => {
+    createSourceManagerWindow();
+    return { opened: true as const };
   });
 
   ipcMain.handle("catalog:listSources", () =>
@@ -475,6 +590,19 @@ function registerIpc(): void {
     });
     await catalogWatchService?.sourceAdded(source.id);
     return source;
+  });
+
+  ipcMain.handle("catalog:disableSource", async (_event, sourceId: number) => {
+    const source = await catalog!.request<SourceRecord>("disableSource", { sourceId });
+    await catalogWatchService?.syncSources();
+    return source;
+  });
+
+  ipcMain.handle("catalog:getFolderTree", async (_event, rootPath: string) => {
+    if (typeof rootPath !== "string" || rootPath.trim() === "") {
+      throw new Error("Ordnerpfad fehlt.");
+    }
+    return buildFolderTree(rootPath);
   });
 
   ipcMain.handle("catalog:getStats", (_event, sourceId: number) =>
