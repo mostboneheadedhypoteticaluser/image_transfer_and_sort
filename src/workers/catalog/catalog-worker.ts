@@ -1920,6 +1920,41 @@ function listMedia(
   return mapped.slice(0, limit);
 }
 
+function listGeoMedia(sourceId?: number) {
+  const rows = db.prepare(`
+    SELECT
+      m.id AS media_id,
+      m.source_id,
+      m.relative_path,
+      md.gps_latitude,
+      md.gps_longitude,
+      md.captured_at,
+      t.input_sha256 AS thumbnail_version
+    FROM media_items m
+    JOIN media_sources ms ON ms.id=m.source_id
+    JOIN media_image_metadata md ON md.media_id=m.id
+    LEFT JOIN media_thumbnails t ON t.media_id=m.id
+    WHERE ms.enabled=1
+      AND m.availability='AVAILABLE'
+      AND md.gps_latitude IS NOT NULL
+      AND md.gps_longitude IS NOT NULL
+      AND md.gps_latitude BETWEEN -90 AND 90
+      AND md.gps_longitude BETWEEN -180 AND 180
+      AND (? IS NULL OR m.source_id=?)
+    ORDER BY COALESCE(md.captured_at, m.last_seen_at) DESC, m.id DESC
+  `).all(sourceId ?? null, sourceId ?? null);
+
+  return rows.map((row) => ({
+    mediaId: Number(row.media_id),
+    sourceId: Number(row.source_id),
+    relativePath: String(row.relative_path),
+    latitude: Number(row.gps_latitude),
+    longitude: Number(row.gps_longitude),
+    capturedAt: row.captured_at ? String(row.captured_at) : null,
+    thumbnailVersion: row.thumbnail_version ? String(row.thumbnail_version) : null
+  }));
+}
+
 function getSearchFacets(sourceId?: number): SearchFacets {
   const sourceFilter = sourceId === undefined ? "" : "AND m.source_id=?";
   const sourceArgs = sourceId === undefined ? [] : [sourceId];
@@ -9949,6 +9984,12 @@ async function dispatch(method: CatalogMethod, payload: Record<string, unknown> 
       return listMedia(
         asNumber(payload.sourceId, "sourceId"),
         payload.limit === undefined ? 500 : asNumber(payload.limit, "limit")
+      );
+    case "listGeoMedia":
+      return listGeoMedia(
+        payload.sourceId === undefined
+          ? undefined
+          : asNumber(payload.sourceId, "sourceId")
       );
     case "getSearchFacets":
       return getSearchFacets(
