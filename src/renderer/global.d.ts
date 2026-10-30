@@ -9,6 +9,8 @@ import type {
   CatalogStats,
   CatalogWatchEvent,
   CatalogWatchSnapshot,
+  ExplorerFolderNode,
+  ExplorerRoot,
   FolderTreeNode,
   ConfirmPersonResult,
   ConfirmPetResult,
@@ -151,6 +153,8 @@ declare global {
         addSource(sourcePath: string): Promise<SourceRecord>;
         disableSource(sourceId: number): Promise<SourceRecord>;
         getFolderTree(rootPath: string): Promise<FolderTreeNode>;
+        listExplorerRoots(): Promise<ExplorerRoot[]>;
+        getExplorerChildren(folderPath: string): Promise<ExplorerFolderNode[]>;
         getStats(sourceId: number): Promise<CatalogStats>;
         getWatchSnapshot(): Promise<CatalogWatchSnapshot>;
         listMedia(sourceId: number, limit?: number): Promise<MediaRecord[]>;
