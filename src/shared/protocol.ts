@@ -561,6 +561,17 @@ export type SourceRecord = {
   enabled: boolean;
 };
 
+export type FolderTreeNode = {
+  name: string;
+  path: string;
+  directImages: number;
+  directVideos: number;
+  images: number;
+  videos: number;
+  children: FolderTreeNode[];
+  readError: string | null;
+};
+
 export type CatalogStats = {
   total: number;
   available: number;
@@ -741,6 +752,7 @@ export type ScanProgress = {
 export type CatalogMethod =
   | "listSources"
   | "addSource"
+  | "disableSource"
   | "getStats"
   | "listMedia"
   | "getSearchFacets"
