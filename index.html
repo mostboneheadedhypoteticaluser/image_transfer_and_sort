@@ -18,10 +18,17 @@
 
       <main>
         <section class="panel source-panel">
-          <label for="sourceSelect">Medienquelle</label>
+          <div class="source-panel-heading">
+            <div>
+              <span class="section-kicker">Katalog</span>
+              <h2>Medienquellen</h2>
+            </div>
+            <small>Auswahl und Ordnerstruktur werden in einem eigenen Fenster verwaltet.</small>
+          </div>
+          <label class="visually-hidden" for="sourceSelect">Medienquelle</label>
           <div class="source-row">
             <select id="sourceSelect"></select>
-            <button id="addSource" class="secondary">Quelle hinzufügen</button>
+            <button id="addSource" class="secondary">Medienquellen verwalten</button>
             <button id="scanSource" class="primary">Jetzt scannen</button>
             <button id="resetCatalog" class="danger">Datenbank zurücksetzen</button>
           </div>
@@ -49,7 +56,15 @@
           <article class="stat"><span id="lastScan">—</span><small>Letzter Scan</small></article>
         </section>
 
-        <section class="panel analysis-panel">
+        <details class="panel analysis-panel" id="analysisPanel">
+          <summary class="analysis-summary">
+            <div>
+              <span class="section-kicker">Hintergrund</span>
+              <strong>Analyse & KI</strong>
+              <small>Worker, Verarbeitung und technische Details</small>
+            </div>
+            <span class="analysis-summary-hint">Details anzeigen</span>
+          </summary>
           <div class="analysis-heading">
             <div>
               <h2>Analyse-Worker</h2>
@@ -88,7 +103,7 @@
           <div class="pipeline-stages">
             <article class="pipeline-stage">
               <div>
-                <small>Stufe 1</small>
+                <small>Schnell · Technik</small>
                 <strong>Technische Prüfung</strong>
               </div>
               <div class="pipeline-stage-status">
@@ -99,7 +114,7 @@
 
             <article class="pipeline-stage">
               <div>
-                <small>Stufe 2</small>
+                <small>Schnell · Vorschau</small>
                 <strong>Thumbnails</strong>
               </div>
               <div class="pipeline-stage-status">
@@ -110,7 +125,7 @@
 
             <article class="pipeline-stage">
               <div>
-                <small>Stufe 3</small>
+                <small>Schnell · Metadaten</small>
                 <strong>Bildmetadaten</strong>
               </div>
               <div class="pipeline-stage-status">
@@ -121,7 +136,7 @@
 
             <article class="pipeline-stage">
               <div>
-                <small>Stufe 4</small>
+                <small>Personen · Erkennung</small>
                 <strong>Gesichter erkennen</strong>
               </div>
               <div class="pipeline-stage-status">
@@ -132,7 +147,7 @@
 
             <article class="pipeline-stage">
               <div>
-                <small>Stufe 5</small>
+                <small>Personen · Merkmale</small>
                 <strong>Gesichtsmerkmale</strong>
               </div>
               <div class="pipeline-stage-status">
@@ -143,7 +158,7 @@
 
             <article class="pipeline-stage">
               <div>
-                <small>Stufe 6</small>
+                <small>Haustiere · Erkennung</small>
                 <strong>Haustierdetektion · NanoDet + YOLOX-S</strong>
               </div>
               <div class="pipeline-stage-status">
@@ -154,7 +169,7 @@
 
             <article class="pipeline-stage">
               <div>
-                <small>Stufe 7</small>
+                <small>Haustiere · Zusammenführen</small>
                 <strong>Haustier-Ergebnisse fusionieren</strong>
               </div>
               <div class="pipeline-stage-status">
@@ -165,7 +180,7 @@
 
             <article class="pipeline-stage">
               <div>
-                <small>Stufe 8</small>
+                <small>Haustiere · Merkmale</small>
                 <strong>Individuelle Hundemerkmale</strong>
               </div>
               <div class="pipeline-stage-status">
@@ -176,7 +191,7 @@
 
             <article class="pipeline-stage">
               <div>
-                <small>Stufe 9</small>
+                <small>Personen · Bestätigung</small>
                 <strong>Personen bestätigen</strong>
               </div>
               <div class="pipeline-stage-status">
@@ -187,7 +202,7 @@
 
             <article class="pipeline-stage">
               <div>
-                <small>Stufe 10</small>
+                <small>Haustiere · Bestätigung</small>
                 <strong>Haustiere bestätigen</strong>
               </div>
               <div class="pipeline-stage-status">
@@ -198,7 +213,7 @@
 
             <article class="pipeline-stage">
               <div>
-                <small>Stufe 11 · rechenintensiv</small>
+                <small>KI · Semantik</small>
                 <strong>Semantikanalyse · SigLIP2 So400m NaFlex</strong>
               </div>
               <div class="pipeline-stage-status">
@@ -209,7 +224,7 @@
 
             <article class="pipeline-stage">
               <div>
-                <small>Stufe 12 · rechenintensiv · zuletzt</small>
+                <small>KI · Bildverständnis</small>
                 <strong>Kataloginhalt · Qwen3-VL 4B · Gesamtbild + 4 Teilbilder</strong>
               </div>
               <div class="pipeline-stage-status">
@@ -250,7 +265,7 @@
               <span class="analysis-note">Neue Bilder durchlaufen zuerst die schnellen technischen, Gesichts-, Haustier- und SigLIP2-Stufen. Erst danach läuft automatisch als letzte Rechenstufe Qwen3-VL 4B Instruct Q4_K_M. Pro Bild werden genau das Gesamtbild und vier überlappende 2×2-Teilbilder analysiert. Gespeichert werden Beschreibung, Motive, Handlungen, Szene, sichtbarer Text, Suchbegriffe und abgeleitete Suchkonzepte.</span>
             </div>
           </div>
-        </section>
+        </details>
 
         <section class="panel media-panel">
           <div class="panel-heading">
