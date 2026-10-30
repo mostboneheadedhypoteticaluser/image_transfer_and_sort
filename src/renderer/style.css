@@ -2621,3 +2621,154 @@ td .badge + .badge {
 @keyframes shutdown-spin {
   to { transform: rotate(360deg); }
 }
+
+
+/* Kompakte Medienquellen- und Analyseoberfläche */
+.visually-hidden {
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  padding: 0 !important;
+  margin: -1px !important;
+  overflow: hidden !important;
+  clip: rect(0, 0, 0, 0) !important;
+  white-space: nowrap !important;
+  border: 0 !important;
+}
+
+.source-panel-heading {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 18px;
+  margin-bottom: 12px;
+}
+
+.source-panel-heading h2 {
+  margin: 2px 0 0;
+  font-size: 18px;
+  letter-spacing: -0.02em;
+}
+
+.source-panel-heading > small {
+  color: #7d8591;
+  text-align: right;
+}
+
+.section-kicker {
+  display: block;
+  color: #d72622;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
+.analysis-panel {
+  padding: 0;
+  overflow: hidden;
+}
+
+.analysis-summary {
+  min-height: 68px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 14px 18px;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+
+.analysis-summary::-webkit-details-marker {
+  display: none;
+}
+
+.analysis-summary > div {
+  min-width: 0;
+}
+
+.analysis-summary strong {
+  display: block;
+  margin-top: 2px;
+  font-size: 17px;
+}
+
+.analysis-summary small {
+  display: block;
+  margin-top: 2px;
+  color: #7d8591;
+  font-weight: 500;
+}
+
+.analysis-summary-hint {
+  flex: 0 0 auto;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: #f2f4f7;
+  color: #626c79;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.analysis-panel[open] .analysis-summary {
+  border-bottom: 1px solid #eceff2;
+}
+
+.analysis-panel[open] .analysis-summary-hint {
+  color: #8d1c19;
+  background: #fff0ef;
+}
+
+.analysis-panel[open] .analysis-summary-hint::before {
+  content: "Details ausblenden";
+  font-size: 0;
+}
+
+.analysis-panel > .analysis-heading,
+.analysis-panel > .analysis-grid,
+.analysis-panel > .pipeline-stages,
+.analysis-panel > .analysis-footer {
+  margin-left: 18px;
+  margin-right: 18px;
+}
+
+.analysis-panel > .analysis-heading {
+  margin-top: 16px;
+}
+
+.analysis-panel > .analysis-footer {
+  margin-bottom: 18px;
+}
+
+.pipeline-stages {
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 8px;
+}
+
+.pipeline-stage {
+  min-height: 74px;
+  padding: 10px 12px;
+  border-radius: 10px;
+}
+
+.pipeline-stage > div:first-child > small {
+  color: #8b94a0;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: .03em;
+  text-transform: uppercase;
+}
+
+@media (max-width: 900px) {
+  .source-panel-heading {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 5px;
+  }
+
+  .source-panel-heading > small {
+    text-align: left;
+  }
+}
