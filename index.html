@@ -18,6 +18,7 @@
             <button class="sidebar-nav-item active" type="button" data-app-page="sources"><span>▣</span>Medienquellen</button>
             <button class="sidebar-nav-item" type="button" data-app-page="analysis"><span>◫</span>Analyse &amp; KI</button>
             <button class="sidebar-nav-item" type="button" data-app-page="media"><span>▤</span>Medien</button>
+            <button class="sidebar-nav-item" type="button" data-app-page="identities"><span>●</span>Personen &amp; Tiere</button>
             <button class="sidebar-nav-item" type="button" data-app-page="map"><span>⌖</span>Karte</button>
           </nav>
           <div class="sidebar-status">
@@ -488,6 +489,68 @@
             </section>
           </div>
         </section>
+        </section>
+
+        <section class="workspace-page identity-browser-page" data-workspace-page="identities" hidden>
+          <div class="workspace-page-heading">
+            <div><span class="section-kicker">Erkannte Identitäten</span><h1>Personen &amp; Tiere</h1></div>
+            <p>Bestätigte Personen und Haustiere auswählen, chronologische Aufnahmen ansehen und typische Bildinhalte zusammengefasst erkennen.</p>
+          </div>
+
+          <section class="identity-browser-shell">
+            <aside class="identity-browser-sidebar">
+              <div class="identity-browser-toggle" role="tablist" aria-label="Identitätstyp">
+                <button id="identityBrowserPeopleTab" class="active" type="button">Personen</button>
+                <button id="identityBrowserPetsTab" type="button">Tiere</button>
+              </div>
+              <div class="identity-browser-list-heading">
+                <strong id="identityBrowserListTitle">Bestätigte Personen</strong>
+                <span id="identityBrowserCount">0</span>
+              </div>
+              <div id="identityBrowserList" class="identity-browser-list">
+                <div class="identity-browser-empty">Noch keine bestätigten Personen vorhanden.</div>
+              </div>
+            </aside>
+
+            <section class="identity-browser-content">
+              <div id="identityBrowserPlaceholder" class="identity-browser-placeholder">
+                <strong>Person oder Tier auswählen</strong>
+                <span>Danach erscheinen alle zugeordneten Aufnahmen chronologisch sowie die häufigsten erkannten Bildinhalte.</span>
+              </div>
+
+              <div id="identityBrowserDetail" hidden>
+                <header class="identity-browser-detail-heading">
+                  <div>
+                    <span id="identityBrowserKind" class="section-kicker">Person</span>
+                    <h2 id="identityBrowserName">—</h2>
+                    <p id="identityBrowserMeta">—</p>
+                  </div>
+                </header>
+
+                <section class="identity-cloud-panel">
+                  <div class="identity-section-heading">
+                    <div>
+                      <span class="section-kicker">Bildinhalte</span>
+                      <h3>Word Cloud</h3>
+                    </div>
+                    <small id="identityCloudHint">Erkennungen verschiedener Engines werden zusammengeführt.</small>
+                  </div>
+                  <div id="identityWordCloud" class="identity-word-cloud"></div>
+                </section>
+
+                <section class="identity-timeline-panel">
+                  <div class="identity-section-heading">
+                    <div>
+                      <span class="section-kicker">Aufnahmen</span>
+                      <h3>Chronologisch</h3>
+                    </div>
+                    <small id="identityTimelineCount">0 Bilder</small>
+                  </div>
+                  <div id="identityTimeline" class="identity-timeline"></div>
+                </section>
+              </div>
+            </section>
+          </section>
         </section>
 
         <section class="workspace-page map-workspace-page" data-workspace-page="map" hidden>
