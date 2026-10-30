@@ -3959,12 +3959,9 @@ async function restoreRow(row: MediaRecord, button: HTMLButtonElement): Promise<
 
 addSourceButton.addEventListener("click", () => {
   void runSafely(async () => {
-    const selected = await window.imageSorter.pickSource();
-    if (!selected) return;
-    const source = await window.imageSorter.catalog.addSource(selected);
-    await loadSources(source.id);
+    await window.imageSorter.openSourceManager();
     progressText.textContent =
-      "Quelle hinzugefügt. Live-Überwachung und erster automatischer Abgleich wurden gestartet.";
+      "Medienquellenverwaltung geöffnet. Änderungen werden beim Zurückkehren übernommen.";
   });
 });
 
@@ -4368,6 +4365,13 @@ imagePreviewDialog.addEventListener("close", () => {
   imagePreviewImage.removeAttribute("src");
   imagePreviewCaption.textContent = "";
   imagePreviewDetails.replaceChildren();
+});
+
+window.addEventListener("focus", () => {
+  const previousSourceId = selectedSourceId();
+  void runSafely(async () => {
+    await loadSources(previousSourceId ?? undefined);
+  });
 });
 
 sourceSelect.addEventListener("change", () => {
