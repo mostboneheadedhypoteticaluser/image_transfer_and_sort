@@ -804,7 +804,52 @@ export class AnalysisService {
       });
     });
 
-    child.stdin.write(JSON.stringify({ id, method, payload }) + "\n");
+    if (
+      !child.stdin.writable ||
+      child.stdin.destroyed ||
+      child.stdin.writableEnded ||
+      child.killed ||
+      this.stopping
+    ) {
+      const pending = this.pending.get(id);
+      if (pending) {
+        clearTimeout(pending.timeout);
+        this.pending.delete(id);
+        pending.reject(new Error("Analyse-Worker wird beendet oder ist nicht mehr schreibbar."));
+      }
+      return response;
+    }
+
+    child.stdin.write(
+      JSON.stringify({ id, method, payload }) + "\n",
+      (error) => {
+        if (!error) return;
+
+        const pending = this.pending.get(id);
+        if (pending) {
+          clearTimeout(pending.timeout);
+          this.pending.delete(id);
+          pending.reject(error);
+        }
+
+        // Beim App-Shutdown kann der Worker stdin bereits geschlossen haben.
+        // Fehler wie EPIPE/EOF dürfen dann nicht als uncaught exception enden.
+        if (this.stopping || child.killed || child.stdin.destroyed) {
+          this.devLog("REQUEST_WRITE_IGNORED_DURING_SHUTDOWN", {
+            requestId: id,
+            method,
+            error: error.message
+          });
+          return;
+        }
+
+        this.devLog("REQUEST_WRITE_ERROR", {
+          requestId: id,
+          method,
+          error: error.message
+        });
+      }
+    );
     return response;
   }
 
@@ -832,14 +877,27 @@ export class AnalysisService {
       return;
     }
 
-    try {
-      child.stdin.write(
-        JSON.stringify({ id: randomUUID(), method: "shutdown", payload: {} }) + "\n"
-      );
-    } catch {
+    if (
+      !child.stdin.writable ||
+      child.stdin.destroyed ||
+      child.stdin.writableEnded ||
+      child.killed
+    ) {
       this.killChild();
       return;
     }
+
+    child.stdin.write(
+      JSON.stringify({ id: randomUUID(), method: "shutdown", payload: {} }) + "\n",
+      (error) => {
+        if (!error) return;
+
+        this.devLog("STOP_GRACEFUL_WRITE_ERROR", {
+          error: error.message
+        });
+        if (this.child === child) this.killChild();
+      }
+    );
 
     const timer = setTimeout(() => {
       if (this.child === child) this.killChild();
