@@ -12,40 +12,39 @@
         <div>
           <span class="eyebrow">Medienkatalog</span>
           <h1>Medienquellen</h1>
-          <p>Ordner auswählen, Unterordner aufklappen und rekursiv in die Katalogüberwachung aufnehmen.</p>
+          <p>Laufwerke und Ordner wie im Explorer aufklappen. Haken setzen bedeutet: diesen Ordner rekursiv scannen und überwachen.</p>
         </div>
-        <button id="pickRoot" class="primary" type="button">Ordnerstruktur öffnen</button>
+        <button id="refreshExplorer" class="primary" type="button">Explorer aktualisieren</button>
       </header>
 
       <main class="manager-layout">
         <aside class="source-sidebar">
           <div class="sidebar-heading">
             <div>
-              <small>Aktive Quellen</small>
+              <small>Aktiv überwacht</small>
               <strong id="sourceCount">0</strong>
             </div>
-            <button id="refreshTree" class="icon-button" type="button" title="Aktualisieren" aria-label="Aktualisieren">↻</button>
           </div>
           <div id="activeSources" class="active-sources"></div>
           <div class="sidebar-note">
-            Ein ausgewählter Ordner wird immer rekursiv überwacht. Unterordner sind dann automatisch enthalten.
+            Bereits analysierte Daten bleiben erhalten, wenn du einen Haken entfernst. Nur die aktive Quelle und ihre Live-Überwachung werden deaktiviert.
           </div>
         </aside>
 
         <section class="tree-panel">
           <div class="tree-toolbar">
             <div>
-              <small>Geöffnete Ordnerstruktur</small>
-              <strong id="rootLabel">Noch kein Ordner geöffnet</strong>
+              <small>Dateisystem</small>
+              <strong>Dieser PC</strong>
             </div>
             <div class="legend">
-              <span><i class="dot image"></i>Bilder</span>
-              <span><i class="dot video"></i>Videos</span>
+              <span>☐ nicht ausgewählt</span>
+              <span>☑ rekursiv aktiv</span>
             </div>
           </div>
 
-          <div id="treeStatus" class="tree-status">
-            Wähle „Ordnerstruktur öffnen“, um einen Ordnerbaum anzuzeigen.
+          <div id="treeStatus" class="tree-status loading">
+            Laufwerke werden geladen …
           </div>
           <div id="folderTree" class="folder-tree" hidden></div>
         </section>
