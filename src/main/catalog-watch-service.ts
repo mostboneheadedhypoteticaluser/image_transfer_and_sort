@@ -100,13 +100,16 @@ export class CatalogWatchService {
 
   async waitUntilIdle(timeoutMs = 300000): Promise<void> {
     const deadline = Date.now() + timeoutMs;
-    while (this.processingScans && Date.now() < deadline) {
+    while (
+      (this.processingScans || this.pendingScans.size > 0) &&
+      Date.now() < deadline
+    ) {
       await new Promise<void>((resolve) => setTimeout(resolve, 100));
     }
 
-    if (this.processingScans) {
+    if (this.processingScans || this.pendingScans.size > 0) {
       throw new Error(
-        "Ein automatischer Dateiscan läuft noch. Der Datenbank-Reset wurde zur Sicherheit nicht gestartet."
+        "Ein automatischer Dateiscan läuft noch oder wartet bereits in der Scan-Warteschlange."
       );
     }
   }
