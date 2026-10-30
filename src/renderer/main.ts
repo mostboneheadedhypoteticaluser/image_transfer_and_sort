@@ -170,6 +170,12 @@ const identityWordCloud = document.querySelector<HTMLDivElement>("#identityWordC
 const identityCloudHint = document.querySelector<HTMLElement>("#identityCloudHint")!;
 const identityTimelineCount = document.querySelector<HTMLElement>("#identityTimelineCount")!;
 const identityTimeline = document.querySelector<HTMLDivElement>("#identityTimeline")!;
+const identityDateFrom = document.querySelector<HTMLInputElement>("#identityDateFrom")!;
+const identityDateTo = document.querySelector<HTMLInputElement>("#identityDateTo")!;
+const identityDateRangeLabel = document.querySelector<HTMLElement>("#identityDateRangeLabel")!;
+const identityDateFromLabel = document.querySelector<HTMLElement>("#identityDateFromLabel")!;
+const identityDateToLabel = document.querySelector<HTMLElement>("#identityDateToLabel")!;
+const identityRangeFill = document.querySelector<HTMLDivElement>("#identityRangeFill")!;
 
 let sources: SourceRecord[] = [];
 let currentView: CatalogView = "media";
@@ -1038,6 +1044,11 @@ const IDENTITY_TERM_TRANSLATIONS: Record<string, string> = {
   field: "Feld"
 };
 
+let identityBrowserDetails: MediaDetails[] = [];
+let identityBrowserActiveTerm: string | null = null;
+let identityBrowserMinDate = 0;
+let identityBrowserMaxDate = 0;
+
 function germanIdentityTerm(value: string): string {
   const cleaned = value.trim().replace(/^[\s,.;:!?()[\]{}"'“”„]+|[\s,.;:!?()[\]{}"'“”„]+$/g, "");
   if (!cleaned) return "";
@@ -1074,6 +1085,58 @@ function identityCaptureDate(details: MediaDetails): number {
     if (Number.isFinite(value)) return value;
   }
   return details.mtimeMs;
+}
+
+function identityDateText(timestamp: number): string {
+  return new Date(timestamp).toLocaleDateString("de-DE", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric"
+  });
+}
+
+function identityRangeTimestamp(value: number): number {
+  if (identityBrowserMaxDate <= identityBrowserMinDate) return identityBrowserMinDate;
+  return identityBrowserMinDate +
+    (identityBrowserMaxDate - identityBrowserMinDate) * (value / 1000);
+}
+
+function mediaHasIdentityTerm(details: MediaDetails, termKey: string): boolean {
+  for (const object of details.objects) {
+    if (identityTermKey(object.label) === termKey) return true;
+  }
+  const semantic = details.semantic;
+  if (!semantic) return false;
+  return [
+    ...semantic.tags,
+    ...semantic.subjects,
+    ...semantic.actions,
+    ...semantic.scenes,
+    ...semantic.concepts
+  ].some((term) => identityTermKey(term) === termKey);
+}
+
+function filteredIdentityDetailsByDate(): MediaDetails[] {
+  if (identityBrowserDetails.length === 0) return [];
+  const from = identityRangeTimestamp(Number(identityDateFrom.value));
+  const to = identityRangeTimestamp(Number(identityDateTo.value));
+  return identityBrowserDetails.filter((details) => {
+    const timestamp = identityCaptureDate(details);
+    return timestamp >= from && timestamp <= to;
+  });
+}
+
+function updateIdentityRangePresentation(): void {
+  const fromValue = Number(identityDateFrom.value);
+  const toValue = Number(identityDateTo.value);
+  const from = identityRangeTimestamp(fromValue);
+  const to = identityRangeTimestamp(toValue);
+  identityDateFromLabel.textContent = identityDateText(from);
+  identityDateToLabel.textContent = identityDateText(to);
+  identityDateRangeLabel.textContent =
+    identityDateText(from) + " – " + identityDateText(to);
+  identityRangeFill.style.left = (fromValue / 10).toFixed(1) + "%";
+  identityRangeFill.style.right = (100 - toValue / 10).toFixed(1) + "%";
 }
 
 function renderIdentityWordCloud(detailsList: MediaDetails[]): void {
@@ -1121,7 +1184,8 @@ function renderIdentityWordCloud(detailsList: MediaDetails[]): void {
     }
   }
 
-  const words = [...scores.values()]
+  const words = [...scores.entries()]
+    .map(([key, value]) => ({ key, ...value }))
     .sort((a, b) => b.score - a.score || b.media.size - a.media.size)
     .slice(0, 45);
 
@@ -1129,29 +1193,38 @@ function renderIdentityWordCloud(detailsList: MediaDetails[]): void {
   if (words.length === 0) {
     const empty = document.createElement("div");
     empty.className = "identity-browser-empty";
-    empty.textContent = "Für diese Bilder sind noch keine beschreibenden Begriffe gespeichert.";
+    empty.textContent = "Für diesen Zeitraum sind keine beschreibenden Begriffe gespeichert.";
     identityWordCloud.appendChild(empty);
-    identityCloudHint.textContent = "Noch keine verwertbaren Erkennungen vorhanden.";
+    identityCloudHint.textContent = "Keine verwertbaren Erkennungen im gewählten Zeitraum.";
     return;
   }
 
   const min = Math.min(...words.map((word) => word.score));
   const max = Math.max(...words.map((word) => word.score));
   for (const word of words) {
-    const span = document.createElement("span");
-    span.className = "identity-cloud-word";
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "identity-cloud-word";
+    button.classList.toggle("active", identityBrowserActiveTerm === word.key);
     const normalized = max === min ? 0.55 : (word.score - min) / (max - min);
-    span.style.fontSize = (0.82 + normalized * 1.55).toFixed(2) + "rem";
-    span.style.fontWeight = String(Math.round(520 + normalized * 260));
-    span.textContent = word.label;
-    span.title =
-      word.media.size.toLocaleString("de-DE") +
-      (word.media.size === 1 ? " Bild" : " Bilder") +
-      " · Gewicht " + word.score.toFixed(1);
-    identityWordCloud.appendChild(span);
+    button.style.fontSize = (0.82 + normalized * 1.55).toFixed(2) + "rem";
+    button.style.fontWeight = String(Math.round(520 + normalized * 260));
+    button.textContent = word.label;
+    button.title =
+      "Auf " + word.media.size.toLocaleString("de-DE") +
+      (word.media.size === 1 ? " Bild" : " Bildern") +
+      " erkannt · klicken zum Filtern";
+    button.addEventListener("click", () => {
+      identityBrowserActiveTerm =
+        identityBrowserActiveTerm === word.key ? null : word.key;
+      applyIdentityBrowserFilters();
+    });
+    identityWordCloud.appendChild(button);
   }
-  identityCloudHint.textContent =
-    "Doppelte Erkennungen sind zusammengeführt; Treffer mehrerer Engines werden stärker gewichtet.";
+
+  identityCloudHint.textContent = identityBrowserActiveTerm
+    ? "Wortfilter aktiv · erneut auf das markierte Wort klicken, um ihn aufzuheben."
+    : "Wort anklicken, um die Bilder zu filtern. Mehrfacherkennungen werden zusammengeführt und stärker gewichtet.";
 }
 
 function renderIdentityTimeline(detailsList: MediaDetails[]): void {
@@ -1161,6 +1234,14 @@ function renderIdentityTimeline(detailsList: MediaDetails[]): void {
   identityTimeline.replaceChildren();
   identityTimelineCount.textContent =
     sorted.length.toLocaleString("de-DE") + (sorted.length === 1 ? " Bild" : " Bilder");
+
+  if (sorted.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "identity-browser-empty";
+    empty.textContent = "Für die gewählten Filter gibt es keine Aufnahmen.";
+    identityTimeline.appendChild(empty);
+    return;
+  }
 
   for (const details of sorted) {
     const card = document.createElement("article");
@@ -1186,8 +1267,29 @@ function renderIdentityTimeline(detailsList: MediaDetails[]): void {
   }
 }
 
+function applyIdentityBrowserFilters(): void {
+  updateIdentityRangePresentation();
+  const dateFiltered = filteredIdentityDetailsByDate();
+  renderIdentityWordCloud(dateFiltered);
+  const finalDetails = identityBrowserActiveTerm
+    ? dateFiltered.filter((details) =>
+        mediaHasIdentityTerm(details, identityBrowserActiveTerm!)
+      )
+    : dateFiltered;
+  renderIdentityTimeline(finalDetails);
+}
+
+function configureIdentityDateRange(detailsList: MediaDetails[]): void {
+  const timestamps = detailsList.map(identityCaptureDate).filter(Number.isFinite);
+  identityBrowserMinDate = timestamps.length > 0 ? Math.min(...timestamps) : Date.now();
+  identityBrowserMaxDate = timestamps.length > 0 ? Math.max(...timestamps) : identityBrowserMinDate;
+  identityDateFrom.value = "0";
+  identityDateTo.value = "1000";
+  updateIdentityRangePresentation();
+}
+
 async function selectIdentityBrowserEntry(
-  kind: "Person" | "Tier",
+  kind: "Personen" | "Tiere",
   name: string,
   refs: IdentityBrowserMediaRef[]
 ): Promise<void> {
@@ -1202,11 +1304,14 @@ async function selectIdentityBrowserEntry(
   identityTimeline.replaceChildren();
   identityCloudHint.textContent = "Erkennungen werden zusammengeführt …";
   identityTimelineCount.textContent = "Bilder werden geladen …";
+  identityBrowserActiveTerm = null;
+  identityBrowserDetails = [];
 
   const details = await loadIdentityMediaDetails(refs, token);
   if (token !== identityBrowserSelectionToken) return;
-  renderIdentityWordCloud(details);
-  renderIdentityTimeline(details);
+  identityBrowserDetails = details;
+  configureIdentityDateRange(details);
+  applyIdentityBrowserFilters();
 }
 
 async function loadIdentityBrowser(): Promise<void> {
@@ -1216,9 +1321,11 @@ async function loadIdentityBrowser(): Promise<void> {
   identityBrowserListTitle.textContent =
     identityBrowserMode === "people" ? "Bestätigte Personen" : "Bestätigte Tiere";
   identityBrowserList.replaceChildren();
-  identityBrowserPlaceholder.hidden = false;
+  identityBrowserPlaceholder.hidden = true;
   identityBrowserDetail.hidden = true;
   identityBrowserSelectionToken++;
+  identityBrowserDetails = [];
+  identityBrowserActiveTerm = null;
 
   if (identityBrowserMode === "people") {
     const overview = await window.imageSorter.people.getOverview(sourceId, false);
@@ -1249,7 +1356,7 @@ async function loadIdentityBrowser(): Promise<void> {
         identityBrowserList.querySelectorAll(".identity-browser-entry").forEach((item) => item.classList.remove("active"));
         button.classList.add("active");
         void selectIdentityBrowserEntry(
-          "Person",
+          "Personen",
           person.name,
           person.faces.map((face) => ({ mediaId: face.mediaId, relativePath: face.relativePath }))
         );
@@ -1289,7 +1396,7 @@ async function loadIdentityBrowser(): Promise<void> {
       identityBrowserList.querySelectorAll(".identity-browser-entry").forEach((item) => item.classList.remove("active"));
       button.classList.add("active");
       void selectIdentityBrowserEntry(
-        "Tier",
+        "Tiere",
         pet.name,
         pet.pets.map((item) => ({ mediaId: item.mediaId, relativePath: item.relativePath }))
       );
@@ -1308,6 +1415,22 @@ identityBrowserPetsTab.addEventListener("click", () => {
   if (identityBrowserMode === "pets") return;
   identityBrowserMode = "pets";
   void runSafely(loadIdentityBrowser);
+});
+
+identityDateFrom.addEventListener("input", () => {
+  if (Number(identityDateFrom.value) > Number(identityDateTo.value)) {
+    identityDateFrom.value = identityDateTo.value;
+  }
+  identityBrowserActiveTerm = null;
+  applyIdentityBrowserFilters();
+});
+
+identityDateTo.addEventListener("input", () => {
+  if (Number(identityDateTo.value) < Number(identityDateFrom.value)) {
+    identityDateTo.value = identityDateFrom.value;
+  }
+  identityBrowserActiveTerm = null;
+  applyIdentityBrowserFilters();
 });
 
 
