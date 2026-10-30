@@ -23,6 +23,7 @@ import type {
   ExplorerFolderNode,
   ExplorerRoot,
   FolderTreeNode,
+  GeoMediaPoint,
   ConfirmPersonResult,
   ConfirmPetResult,
   IgnorePersonResult,
@@ -727,6 +728,13 @@ function registerIpc(): void {
 
   ipcMain.handle("catalog:listMedia", (_event, sourceId: number, limit: number) =>
     catalog!.request<MediaRecord[]>("listMedia", { sourceId, limit })
+  );
+
+  ipcMain.handle("catalog:listGeoMedia", (_event, sourceId?: number) =>
+    catalog!.request<GeoMediaPoint[]>(
+      "listGeoMedia",
+      sourceId === undefined ? {} : { sourceId }
+    )
   );
 
   ipcMain.handle("catalog:getSearchFacets", (_event, sourceId?: number) =>
