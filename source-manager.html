@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="de">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="stylesheet" href="/src/renderer/source-manager.css" />
+    <title>Medienquellen verwalten</title>
+  </head>
+  <body>
+    <div class="source-manager-app">
+      <header class="manager-header">
+        <div>
+          <span class="eyebrow">Medienkatalog</span>
+          <h1>Medienquellen</h1>
+          <p>Ordner auswählen, Unterordner aufklappen und rekursiv in die Katalogüberwachung aufnehmen.</p>
+        </div>
+        <button id="pickRoot" class="primary" type="button">Ordnerstruktur öffnen</button>
+      </header>
+
+      <main class="manager-layout">
+        <aside class="source-sidebar">
+          <div class="sidebar-heading">
+            <div>
+              <small>Aktive Quellen</small>
+              <strong id="sourceCount">0</strong>
+            </div>
+            <button id="refreshTree" class="icon-button" type="button" title="Aktualisieren" aria-label="Aktualisieren">↻</button>
+          </div>
+          <div id="activeSources" class="active-sources"></div>
+          <div class="sidebar-note">
+            Ein ausgewählter Ordner wird immer rekursiv überwacht. Unterordner sind dann automatisch enthalten.
+          </div>
+        </aside>
+
+        <section class="tree-panel">
+          <div class="tree-toolbar">
+            <div>
+              <small>Geöffnete Ordnerstruktur</small>
+              <strong id="rootLabel">Noch kein Ordner geöffnet</strong>
+            </div>
+            <div class="legend">
+              <span><i class="dot image"></i>Bilder</span>
+              <span><i class="dot video"></i>Videos</span>
+            </div>
+          </div>
+
+          <div id="treeStatus" class="tree-status">
+            Wähle „Ordnerstruktur öffnen“, um einen Ordnerbaum anzuzeigen.
+          </div>
+          <div id="folderTree" class="folder-tree" hidden></div>
+        </section>
+      </main>
+    </div>
+    <script type="module" src="/src/renderer/source-manager.ts"></script>
+  </body>
+</html>
