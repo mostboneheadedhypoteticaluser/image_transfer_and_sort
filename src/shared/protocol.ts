@@ -561,6 +561,20 @@ export type SourceRecord = {
   enabled: boolean;
 };
 
+export type ExplorerRoot = {
+  name: string;
+  path: string;
+};
+
+export type ExplorerFolderNode = {
+  name: string;
+  path: string;
+  directImages: number;
+  directVideos: number;
+  hasChildren: boolean;
+  readError: string | null;
+};
+
 export type FolderTreeNode = {
   name: string;
   path: string;
