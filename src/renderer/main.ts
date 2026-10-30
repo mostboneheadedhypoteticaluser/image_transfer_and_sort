@@ -1,3 +1,5 @@
+import { initEmbeddedSourceExplorer } from "./source-explorer";
+import { activateMapView, invalidateMapData } from "./map-view";
 import type {
   AnalysisErrorRecord,
   AnalysisWorkerStatus,
@@ -4442,6 +4444,7 @@ window.imageSorter.catalog.onWatchEvent((event) => {
   }
 
   if (event.kind === "SCAN_FINISHED") {
+    invalidateMapData();
     progressBar.classList.remove("active");
     progressText.textContent = event.message;
 
@@ -4517,6 +4520,36 @@ window.imageSorter.pets.onUpdated(() => {
     }
   });
 });
+
+const appNavItems = Array.from(
+  document.querySelectorAll<HTMLButtonElement>("[data-app-page]")
+);
+const workspacePages = Array.from(
+  document.querySelectorAll<HTMLElement>("[data-workspace-page]")
+);
+
+async function showAppPage(page: string): Promise<void> {
+  for (const item of appNavItems) {
+    item.classList.toggle("active", item.dataset.appPage === page);
+  }
+  for (const view of workspacePages) {
+    const active = view.dataset.workspacePage === page;
+    view.hidden = !active;
+    view.classList.toggle("active", active);
+  }
+  if (page === "map") {
+    await activateMapView();
+  }
+}
+
+for (const item of appNavItems) {
+  item.addEventListener("click", () => {
+    const page = item.dataset.appPage;
+    if (page) void showAppPage(page);
+  });
+}
+
+void initEmbeddedSourceExplorer();
 
 void window.imageSorter.analysis
   .getAutomaticQwenState()
