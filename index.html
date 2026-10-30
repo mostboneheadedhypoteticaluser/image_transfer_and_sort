@@ -492,11 +492,6 @@
         </section>
 
         <section class="workspace-page identity-browser-page" data-workspace-page="identities" hidden>
-          <div class="workspace-page-heading">
-            <div><span class="section-kicker">Erkannte Identitäten</span><h1>Personen &amp; Tiere</h1></div>
-            <p>Bestätigte Personen und Haustiere auswählen, chronologische Aufnahmen ansehen und typische Bildinhalte zusammengefasst erkennen.</p>
-          </div>
-
           <section class="identity-browser-shell">
             <aside class="identity-browser-sidebar">
               <div class="identity-browser-toggle" role="tablist" aria-label="Identitätstyp">
@@ -513,19 +508,30 @@
             </aside>
 
             <section class="identity-browser-content">
-              <div id="identityBrowserPlaceholder" class="identity-browser-placeholder">
-                <strong>Person oder Tier auswählen</strong>
-                <span>Danach erscheinen alle zugeordneten Aufnahmen chronologisch sowie die häufigsten erkannten Bildinhalte.</span>
-              </div>
+              <div id="identityBrowserPlaceholder" class="identity-browser-placeholder" aria-hidden="true"></div>
 
               <div id="identityBrowserDetail" hidden>
                 <header class="identity-browser-detail-heading">
-                  <div>
-                    <span id="identityBrowserKind" class="section-kicker">Person</span>
-                    <h2 id="identityBrowserName">—</h2>
-                    <p id="identityBrowserMeta">—</p>
-                  </div>
+                  <h2><span id="identityBrowserKind">Personen</span> · <span id="identityBrowserName">—</span></h2>
+                  <p id="identityBrowserMeta">—</p>
                 </header>
+
+                <section class="identity-date-filter">
+                  <div class="identity-date-filter-heading">
+                    <strong>Zeitraum</strong>
+                    <span id="identityDateRangeLabel">Alle Aufnahmen</span>
+                  </div>
+                  <div class="identity-range-slider" id="identityDateRange">
+                    <div class="identity-range-track"></div>
+                    <div id="identityRangeFill" class="identity-range-fill"></div>
+                    <input id="identityDateFrom" type="range" min="0" max="1000" value="0" step="1" aria-label="Zeitraum von" />
+                    <input id="identityDateTo" type="range" min="0" max="1000" value="1000" step="1" aria-label="Zeitraum bis" />
+                  </div>
+                  <div class="identity-date-filter-values">
+                    <span id="identityDateFromLabel">—</span>
+                    <span id="identityDateToLabel">—</span>
+                  </div>
+                </section>
 
                 <section class="identity-cloud-panel">
                   <div class="identity-section-heading">
