@@ -1028,6 +1028,132 @@ td .badge + .badge {
   border-color: #9ca6b0;
 }
 
+.identity-name-field {
+  position: relative;
+  min-width: 0;
+}
+
+.identity-name-field > input {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.identity-name-menu {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  max-height: 280px;
+  overflow-y: auto;
+  padding: 4px;
+  border: 1px solid #d6dce2;
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 10px 28px rgba(23, 32, 42, .16);
+}
+
+.identity-name-menu[hidden] {
+  display: none;
+}
+
+.identity-name-option {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #17202a;
+  text-align: left;
+  cursor: pointer;
+}
+
+.identity-name-option:hover,
+.identity-name-option:focus-visible {
+  background: #f1f4f6;
+}
+
+.identity-name-option img {
+  width: 34px;
+  height: 34px;
+  border-radius: 6px;
+  object-fit: cover;
+  background: #e9edf0;
+}
+
+.identity-name-option span,
+.identity-similarity-option span {
+  min-width: 0;
+}
+
+.identity-name-option strong,
+.identity-name-option small,
+.identity-similarity-option strong,
+.identity-similarity-option small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.identity-name-option small,
+.identity-similarity-option small {
+  margin-top: 2px;
+  color: #68717d;
+  font-size: 10px;
+}
+
+.identity-similarity-block {
+  display: grid;
+  gap: 6px;
+}
+
+.identity-similarity-label {
+  color: #68717d;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.identity-similarity-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.identity-similarity-option {
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr);
+  align-items: center;
+  gap: 7px;
+  min-width: 150px;
+  max-width: 230px;
+  padding: 5px 8px 5px 5px;
+  border: 1px solid #dce2e7;
+  border-radius: 8px;
+  background: #f8fafb;
+  color: #17202a;
+  text-align: left;
+  cursor: pointer;
+}
+
+.identity-similarity-option:hover,
+.identity-similarity-option:focus-visible {
+  border-color: #aeb8c1;
+  background: #eef2f5;
+}
+
+.identity-similarity-option img {
+  width: 36px;
+  height: 36px;
+  border-radius: 6px;
+  object-fit: cover;
+  background: #e9edf0;
+}
+
 .person-confirm {
   white-space: nowrap;
 }
@@ -1052,7 +1178,7 @@ td .badge + .badge {
     grid-template-columns: 1fr 1fr;
   }
 
-  .person-confirm-row input {
+  .identity-name-field {
     grid-column: 1 / -1;
   }
 }
