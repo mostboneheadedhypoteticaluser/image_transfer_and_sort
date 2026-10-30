@@ -925,7 +925,8 @@ function createIdentityNameField(
 function createIdentitySimilarityList(
   title: string,
   options: IdentitySimilarityOption[],
-  input: HTMLInputElement
+  input: HTMLInputElement,
+  onDirectAssign?: (option: IdentitySimilarityOption) => void
 ): HTMLDivElement | null {
   if (options.length === 0) return null;
 
@@ -965,6 +966,12 @@ function createIdentitySimilarityList(
     choice.addEventListener("click", () => {
       input.value = option.name;
       input.dispatchEvent(new Event("input", { bubbles: true }));
+
+      if (onDirectAssign) {
+        onDirectAssign(option);
+        return;
+      }
+
       input.focus();
     });
 
@@ -2567,6 +2574,10 @@ function renderPersonOverview(overview: PersonOverview): void {
         }))
       );
 
+      const button = document.createElement("button");
+      button.className = "primary person-confirm";
+      button.type = "button";
+
       const similarityMatches = createIdentitySimilarityList(
         "Ähnlichste bereits bestätigte Personen",
         candidate.suggestedPersons.map((suggestion) => ({
@@ -2578,12 +2589,13 @@ function renderPersonOverview(overview: PersonOverview): void {
               ? null
               : faceCropUrl(suggestion.representativeFaceId)
         })),
-        input
+        input,
+        () => {
+          window.setTimeout(() => {
+            button.click();
+          }, 0);
+        }
       );
-
-      const button = document.createElement("button");
-      button.className = "primary person-confirm";
-      button.type = "button";
 
       const updateConfirmLabel = () => {
         const entered = input.value.trim();
@@ -3147,6 +3159,10 @@ function renderPetOverview(overview: PetOverview): void {
         }))
       );
 
+      const button = document.createElement("button");
+      button.className = "primary person-confirm";
+      button.type = "button";
+
       const similarityMatches = createIdentitySimilarityList(
         "Ähnlichste bereits bestätigte Hunde",
         candidate.suggestedPets.map((suggestion) => ({
@@ -3158,12 +3174,13 @@ function renderPetOverview(overview: PetOverview): void {
               ? null
               : petCropUrl(suggestion.representativePetId)
         })),
-        input
+        input,
+        () => {
+          window.setTimeout(() => {
+            button.click();
+          }, 0);
+        }
       );
-
-      const button = document.createElement("button");
-      button.className = "primary person-confirm";
-      button.type = "button";
 
       const updateConfirmLabel = () => {
         const entered = input.value.trim();
