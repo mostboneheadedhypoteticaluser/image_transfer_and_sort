@@ -1,20 +1,24 @@
-import type { FolderTreeNode, SourceRecord } from "../shared/protocol";
+import type {
+  ExplorerFolderNode,
+  ExplorerRoot,
+  SourceRecord
+} from "../shared/protocol";
 
-const pickRootButton = document.querySelector<HTMLButtonElement>("#pickRoot")!;
-const refreshButton = document.querySelector<HTMLButtonElement>("#refreshTree")!;
+const refreshExplorerButton =
+  document.querySelector<HTMLButtonElement>("#refreshExplorer")!;
 const activeSources = document.querySelector<HTMLDivElement>("#activeSources")!;
 const sourceCount = document.querySelector<HTMLElement>("#sourceCount")!;
-const rootLabel = document.querySelector<HTMLElement>("#rootLabel")!;
 const treeStatus = document.querySelector<HTMLDivElement>("#treeStatus")!;
 const folderTree = document.querySelector<HTMLDivElement>("#folderTree")!;
 
 let sources: SourceRecord[] = [];
-let rootPath: string | null = null;
-let rootNode: FolderTreeNode | null = null;
-let loading = false;
+let loadingExplorer = false;
 
 function normalizePath(value: string): string {
-  return value.replace(/[\\/]+$/g, "").replace(/\\/g, "/").toLocaleLowerCase("de-DE");
+  return value
+    .replace(/[\\/]+$/g, "")
+    .replace(/\\/g, "/")
+    .toLocaleLowerCase("de-DE");
 }
 
 function samePath(left: string, right: string): boolean {
@@ -39,33 +43,10 @@ function coveringSource(folderPath: string): SourceRecord | null {
   );
 }
 
-function mediaLabel(node: FolderTreeNode): string {
-  const parts: string[] = [];
-  if (node.images > 0) parts.push(`${node.images.toLocaleString("de-DE")} Bilder`);
-  if (node.videos > 0) parts.push(`${node.videos.toLocaleString("de-DE")} Videos`);
-  return parts.length > 0 ? parts.join(" · ") : "keine Medien";
-}
-
-function directMediaLabel(node: FolderTreeNode): string | null {
-  if (node.directImages === node.images && node.directVideos === node.videos) return null;
-  const count = node.directImages + node.directVideos;
-  return count > 0
-    ? `direkt im Ordner: ${node.directImages} Bilder · ${node.directVideos} Videos`
-    : "Medien nur in Unterordnern";
-}
-
-function setBusy(busy: boolean, message = ""): void {
-  loading = busy;
-  pickRootButton.disabled = busy;
-  refreshButton.disabled = busy;
-  if (busy) {
-    treeStatus.hidden = false;
-    treeStatus.classList.add("loading");
-    treeStatus.textContent = message || "Ordnerstruktur wird eingelesen …";
-    folderTree.hidden = true;
-  } else {
-    treeStatus.classList.remove("loading");
-  }
+function folderName(sourcePath: string): string {
+  const normalized = sourcePath.replace(/\\/g, "/").replace(/\/$/, "");
+  const parts = normalized.split("/").filter(Boolean);
+  return parts.at(-1) ?? sourcePath;
 }
 
 function renderSources(): void {
@@ -81,72 +62,52 @@ function renderSources(): void {
   }
 
   for (const source of sources) {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "source-chip" + (rootPath && samePath(rootPath, source.path) ? " active" : "");
+    const item = document.createElement("div");
+    item.className = "source-chip";
 
     const icon = document.createElement("span");
     icon.className = "source-chip-icon";
-    icon.textContent = "▣";
+    icon.textContent = "✓";
 
     const content = document.createElement("span");
     const name = document.createElement("strong");
-    const segments = source.path.replace(/\\/g, "/").split("/").filter(Boolean);
-    name.textContent = segments.at(-1) ?? source.path;
+    name.textContent = folderName(source.path);
     const pathLine = document.createElement("small");
     pathLine.textContent = source.path;
     content.append(name, pathLine);
 
-    button.append(icon, content);
-    button.addEventListener("click", () => {
-      void loadTree(source.path);
-    });
-    activeSources.appendChild(button);
+    item.append(icon, content);
+    activeSources.appendChild(item);
   }
 }
 
-function createFolderNode(node: FolderTreeNode, depth = 0): HTMLElement {
-  const item = document.createElement("div");
-  item.className = "folder-node";
-  item.style.setProperty("--depth", String(depth));
+function mediaText(images: number, videos: number): string {
+  if (images === 0 && videos === 0) return "keine Medien direkt im Ordner";
+  const parts: string[] = [];
+  if (images > 0) parts.push(`${images.toLocaleString("de-DE")} Bilder`);
+  if (videos > 0) parts.push(`${videos.toLocaleString("de-DE")} Videos`);
+  return parts.join(" · ") + " direkt";
+}
 
-  const row = document.createElement("div");
-  row.className = "folder-row";
-
-  const hasChildren = node.children.length > 0;
-  const disclosure = document.createElement("button");
-  disclosure.type = "button";
-  disclosure.className = "folder-disclosure";
-  disclosure.textContent = hasChildren ? "›" : "";
-  disclosure.disabled = !hasChildren;
-  disclosure.setAttribute("aria-label", hasChildren ? "Unterordner ein-/ausklappen" : "Keine Unterordner");
-
-  const exact = sourceForExactPath(node.path);
-  const covering = coveringSource(node.path);
+function applySelectionState(
+  path: string,
+  checkbox: HTMLInputElement,
+  title: HTMLElement
+): void {
+  const exact = sourceForExactPath(path);
+  const covering = coveringSource(path);
   const inherited = covering !== null && exact === null;
 
-  const checkbox = document.createElement("input");
-  checkbox.type = "checkbox";
-  checkbox.className = "folder-check";
   checkbox.checked = exact !== null || inherited;
-  checkbox.disabled = inherited || loading;
+  checkbox.disabled = inherited;
+  checkbox.indeterminate = false;
   checkbox.title = inherited
     ? `Bereits rekursiv über ${covering?.path ?? "übergeordneten Ordner"} enthalten`
     : exact
-      ? "Aus der aktiven Überwachung entfernen"
-      : "Diesen Ordner rekursiv überwachen";
+      ? "Haken entfernen: Quelle nicht mehr überwachen"
+      : "Haken setzen: Ordner rekursiv scannen und überwachen";
 
-  const folderIcon = document.createElement("span");
-  folderIcon.className = "folder-icon";
-  folderIcon.textContent = hasChildren ? "▰" : "▱";
-
-  const info = document.createElement("div");
-  info.className = "folder-info";
-  const title = document.createElement("div");
-  title.className = "folder-title";
-  const name = document.createElement("strong");
-  name.textContent = node.name;
-  title.appendChild(name);
+  title.querySelectorAll(".selection-badge").forEach((badge) => badge.remove());
 
   if (exact) {
     const badge = document.createElement("span");
@@ -159,145 +120,210 @@ function createFolderNode(node: FolderTreeNode, depth = 0): HTMLElement {
     badge.textContent = "übergeordnet enthalten";
     title.appendChild(badge);
   }
-
-  const counts = document.createElement("div");
-  counts.className = "folder-counts";
-  const images = document.createElement("span");
-  images.className = "count-badge";
-  images.textContent = `${node.images.toLocaleString("de-DE")} Bilder`;
-  const videos = document.createElement("span");
-  videos.className = "count-badge";
-  videos.textContent = `${node.videos.toLocaleString("de-DE")} Videos`;
-  counts.append(images, videos);
-
-  const direct = directMediaLabel(node);
-  if (direct) {
-    const directLabel = document.createElement("small");
-    directLabel.textContent = direct;
-    counts.appendChild(directLabel);
-  }
-
-  if (node.readError) {
-    const error = document.createElement("small");
-    error.className = "folder-error";
-    error.textContent = "Nicht lesbar: " + node.readError;
-    counts.appendChild(error);
-  }
-
-  info.append(title, counts);
-  row.append(disclosure, checkbox, folderIcon, info);
-  item.appendChild(row);
-
-  const children = document.createElement("div");
-  children.className = "folder-children";
-  children.hidden = depth > 0;
-  for (const child of node.children) {
-    children.appendChild(createFolderNode(child, depth + 1));
-  }
-  item.appendChild(children);
-
-  if (hasChildren) {
-    const setExpanded = (expanded: boolean) => {
-      children.hidden = !expanded;
-      disclosure.classList.toggle("expanded", expanded);
-    };
-    setExpanded(depth === 0);
-    disclosure.addEventListener("click", () => setExpanded(children.hidden));
-    folderIcon.addEventListener("click", () => setExpanded(children.hidden));
-    name.addEventListener("dblclick", () => setExpanded(children.hidden));
-  }
-
-  checkbox.addEventListener("change", () => {
-    void updateSelection(node, checkbox);
-  });
-
-  return item;
 }
 
-function renderTree(): void {
-  folderTree.replaceChildren();
-
-  if (!rootNode) {
-    folderTree.hidden = true;
-    treeStatus.hidden = false;
-    treeStatus.textContent = "Keine Ordnerstruktur geladen.";
-    return;
+function refreshRenderedSelections(): void {
+  for (const row of folderTree.querySelectorAll<HTMLElement>(".folder-row")) {
+    const path = row.dataset.path;
+    if (!path) continue;
+    const checkbox = row.querySelector<HTMLInputElement>(".folder-check");
+    const title = row.querySelector<HTMLElement>(".folder-title");
+    if (!checkbox || !title) continue;
+    applySelectionState(path, checkbox, title);
   }
-
-  rootLabel.textContent = rootNode.path;
-  folderTree.appendChild(createFolderNode(rootNode));
-  folderTree.hidden = false;
-  treeStatus.hidden = true;
 }
 
 async function refreshSources(): Promise<void> {
   sources = await window.imageSorter.catalog.listSources();
   renderSources();
+  refreshRenderedSelections();
 }
 
-async function updateSelection(
-  node: FolderTreeNode,
-  checkbox: HTMLInputElement
-): Promise<void> {
-  const exact = sourceForExactPath(node.path);
-  checkbox.disabled = true;
+function createNode(
+  node: ExplorerFolderNode | ExplorerRoot,
+  depth: number,
+  drive = false
+): HTMLElement {
+  const item = document.createElement("div");
+  item.className = "folder-node";
 
-  try {
-    if (exact) {
-      await window.imageSorter.catalog.disableSource(exact.id);
-    } else {
-      await window.imageSorter.catalog.addSource(node.path);
+  const row = document.createElement("div");
+  row.className = "folder-row";
+  row.dataset.path = node.path;
+  row.style.setProperty("--depth", String(depth));
+
+  const disclosure = document.createElement("button");
+  disclosure.type = "button";
+  disclosure.className = "folder-disclosure";
+  disclosure.textContent = node.hasChildren ? "›" : "";
+  disclosure.disabled = !node.hasChildren;
+  disclosure.setAttribute(
+    "aria-label",
+    node.hasChildren ? "Ordner auf- oder zuklappen" : "Keine Unterordner"
+  );
+
+  const checkbox = document.createElement("input");
+  checkbox.type = "checkbox";
+  checkbox.className = "folder-check";
+
+  const icon = document.createElement("span");
+  icon.className = drive ? "drive-icon" : "folder-icon";
+  icon.textContent = drive ? "▣" : "▰";
+
+  const info = document.createElement("div");
+  info.className = "folder-info";
+
+  const title = document.createElement("div");
+  title.className = "folder-title";
+  const name = document.createElement("strong");
+  name.textContent = node.name;
+  title.appendChild(name);
+
+  const counts = document.createElement("div");
+  counts.className = "folder-counts";
+
+  const media = document.createElement("span");
+  media.className =
+    node.directImages + node.directVideos > 0
+      ? "count-badge has-media"
+      : "count-badge";
+  media.textContent = mediaText(node.directImages, node.directVideos);
+  counts.appendChild(media);
+
+  if (node.hasChildren) {
+    const childHint = document.createElement("span");
+    childHint.className = "child-hint";
+    childHint.textContent = "Unterordner";
+    counts.appendChild(childHint);
+  }
+
+  if (node.readError) {
+    const error = document.createElement("span");
+    error.className = "folder-error";
+    error.textContent = "nicht lesbar";
+    error.title = node.readError;
+    counts.appendChild(error);
+  }
+
+  info.append(title, counts);
+  row.append(disclosure, checkbox, icon, info);
+  item.appendChild(row);
+
+  const children = document.createElement("div");
+  children.className = "folder-children";
+  children.hidden = true;
+  item.appendChild(children);
+
+  applySelectionState(node.path, checkbox, title);
+
+  let loaded = false;
+  let loading = false;
+
+  const setExpanded = async (expanded: boolean): Promise<void> => {
+    if (!node.hasChildren) return;
+
+    if (expanded && !loaded && !loading) {
+      loading = true;
+      disclosure.classList.add("loading");
+      try {
+        const childNodes =
+          await window.imageSorter.catalog.getExplorerChildren(node.path);
+        children.replaceChildren(
+          ...childNodes.map((child) => createNode(child, depth + 1, false))
+        );
+        loaded = true;
+      } catch (error) {
+        const message = document.createElement("div");
+        message.className = "folder-load-error";
+        message.textContent =
+          error instanceof Error ? error.message : String(error);
+        children.replaceChildren(message);
+        loaded = true;
+      } finally {
+        loading = false;
+        disclosure.classList.remove("loading");
+      }
     }
-    await refreshSources();
-    renderTree();
-  } catch (error) {
-    checkbox.checked = exact !== null;
-    treeStatus.hidden = false;
-    treeStatus.classList.remove("loading");
-    treeStatus.textContent = error instanceof Error ? error.message : String(error);
-  } finally {
-    checkbox.disabled = false;
-  }
+
+    children.hidden = !expanded;
+    disclosure.classList.toggle("expanded", expanded);
+  };
+
+  disclosure.addEventListener("click", () => {
+    void setExpanded(children.hidden);
+  });
+  icon.addEventListener("dblclick", () => {
+    void setExpanded(children.hidden);
+  });
+  name.addEventListener("dblclick", () => {
+    void setExpanded(children.hidden);
+  });
+
+  checkbox.addEventListener("change", () => {
+    void (async () => {
+      const exact = sourceForExactPath(node.path);
+      checkbox.disabled = true;
+
+      try {
+        if (exact) {
+          await window.imageSorter.catalog.disableSource(exact.id);
+        } else {
+          await window.imageSorter.catalog.addSource(node.path);
+        }
+        await refreshSources();
+      } catch (error) {
+        treeStatus.hidden = false;
+        treeStatus.classList.remove("loading");
+        treeStatus.textContent =
+          error instanceof Error ? error.message : String(error);
+        refreshRenderedSelections();
+      } finally {
+        const inherited = coveringSource(node.path) !== null &&
+          sourceForExactPath(node.path) === null;
+        checkbox.disabled = inherited;
+      }
+    })();
+  });
+
+  return item;
 }
 
-async function loadTree(path: string): Promise<void> {
-  if (loading) return;
-  rootPath = path;
-  rootLabel.textContent = path;
-  renderSources();
-  setBusy(true, "Ordnerstruktur und Medienzahlen werden eingelesen …");
+async function loadExplorer(): Promise<void> {
+  if (loadingExplorer) return;
+  loadingExplorer = true;
+  refreshExplorerButton.disabled = true;
+  folderTree.hidden = true;
+  treeStatus.hidden = false;
+  treeStatus.classList.add("loading");
+  treeStatus.textContent = "Laufwerke werden geladen …";
 
   try {
-    rootNode = await window.imageSorter.catalog.getFolderTree(path);
-    renderTree();
+    await refreshSources();
+    const roots = await window.imageSorter.catalog.listExplorerRoots();
+    folderTree.replaceChildren(
+      ...roots.map((root) => createNode(root, 0, true))
+    );
+
+    if (roots.length === 0) {
+      treeStatus.classList.remove("loading");
+      treeStatus.textContent = "Keine erreichbaren Laufwerke gefunden.";
+      return;
+    }
+
+    treeStatus.hidden = true;
+    folderTree.hidden = false;
   } catch (error) {
-    rootNode = null;
-    folderTree.hidden = true;
-    treeStatus.hidden = false;
-    treeStatus.textContent = error instanceof Error ? error.message : String(error);
+    treeStatus.classList.remove("loading");
+    treeStatus.textContent =
+      error instanceof Error ? error.message : String(error);
   } finally {
-    setBusy(false);
+    loadingExplorer = false;
+    refreshExplorerButton.disabled = false;
   }
 }
 
-pickRootButton.addEventListener("click", () => {
-  void (async () => {
-    const selected = await window.imageSorter.pickSource();
-    if (!selected) return;
-    await loadTree(selected);
-  })();
+refreshExplorerButton.addEventListener("click", () => {
+  void loadExplorer();
 });
 
-refreshButton.addEventListener("click", () => {
-  void (async () => {
-    await refreshSources();
-    if (rootPath) await loadTree(rootPath);
-  })();
-});
-
-void (async () => {
-  await refreshSources();
-  if (sources.length > 0) {
-    await loadTree(sources[0].path);
-  }
-})();
+void loadExplorer();
