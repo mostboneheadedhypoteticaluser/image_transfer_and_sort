@@ -562,9 +562,11 @@ function registerIpc(): void {
   );
 
   ipcMain.handle("catalog:scanSource", async (_event, sourceId: number) => {
-    const result = await catalog!.request<ScanResult>("scanSource", { sourceId });
-    await catalogWatchService?.syncSources();
-    return result;
+    if (catalogWatchService) {
+      return catalogWatchService.requestManualScan(sourceId);
+    }
+
+    return catalog!.request<ScanResult>("scanSource", { sourceId });
   });
 
   ipcMain.handle("catalog:restoreMedia", (_event, mediaId: number) =>
