@@ -106,6 +106,7 @@ export class AnalysisService {
   private readonly pending = new Map<string, Pending>();
   private stopping = false;
   private qwenServerPid: number | null = null;
+  private workerCapabilities: Record<string, unknown> = {};
   private qwen3vl4bAvailable = false;
   private qwen3vl4bIssue: string | null = "Qwen3-VL 4B wurde noch nicht geprüft.";
   private status: AnalysisWorkerStatus = { ...DEFAULT_STATUS };
@@ -201,6 +202,35 @@ export class AnalysisService {
     return this.qwen3vl4bIssue;
   }
 
+  isWorkerMethodAvailable(method: string): boolean {
+    const capabilities = this.workerCapabilities;
+    switch (method) {
+      case "probe_media":
+      case "fuse_pet_detections":
+        return true;
+      case "extract_image_metadata":
+        return capabilities.imageMetadata === true;
+      case "detect_faces":
+        return capabilities.faceDetection === true;
+      case "extract_face_embeddings":
+        return capabilities.faceEmbeddings === true;
+      case "detect_pets":
+      case "detect_pets_yolox":
+        return capabilities.petDetection === true;
+      case "extract_dog_embeddings":
+        return capabilities.petEmbeddings === true;
+      case "extract_semantic_image_embedding":
+      case "extract_semantic_text_embedding":
+        return capabilities.semanticEmbeddings === true;
+      case "analyze_video_frames":
+        return capabilities.opencv === true;
+      case "analyze_catalog_qwen3vl4b":
+        return this.qwen3vl4bAvailable;
+      default:
+        return true;
+    }
+  }
+
   private publish(patch: Partial<AnalysisWorkerStatus>): void {
     this.status = { ...this.status, ...patch };
     this.onStatus(this.getStatus());
@@ -292,67 +322,35 @@ export class AnalysisService {
             ? ping.capabilities as Record<string, unknown>
             : {};
 
-        if (capabilities.pillow !== true) {
-          throw new Error(
-            "Pillow ist im Analyse-Python nicht verfügbar. " +
-            "Bitte 'npm.cmd run setup:ai' ausführen."
-          );
-        }
+        this.workerCapabilities = { ...capabilities };
+        this.devLog("WORKER_CAPABILITIES", {
+          pillow: capabilities.pillow === true,
+          opencv: capabilities.opencv === true,
+          imageMetadata: capabilities.imageMetadata === true,
+          faceDetection: capabilities.faceDetection === true,
+          faceEmbeddings: capabilities.faceEmbeddings === true,
+          petDetection: capabilities.petDetection === true,
+          petEmbeddings: capabilities.petEmbeddings === true,
+          semanticEmbeddings: capabilities.semanticEmbeddings === true
+        });
 
-        if (capabilities.opencv !== true) {
-          throw new Error(
-            "OpenCV ist im Analyse-Python nicht verfügbar. " +
-            "Bitte 'npm.cmd run setup:ai' ausführen."
-          );
-        }
+        // Einzelne Spezialmodelle sind ab hier optional. Der Worker selbst ist
+        // bereits erreichbar; technische Prüfung und alle verfügbaren leichten
+        // Stufen dürfen sofort laufen. Fehlende Modelle blockieren nur die
+        // jeweilige Stufe statt die komplette Analyse-Pipeline.
+        const missingCoreCapabilities = [
+          capabilities.imageMetadata === true ? null : "Bildmetadaten/Pillow",
+          capabilities.faceDetection === true ? null : "YuNet",
+          capabilities.faceEmbeddings === true ? null : "SFace",
+          capabilities.petDetection === true ? null : "NanoDet/YOLOX-S",
+          capabilities.petEmbeddings === true ? null : "Dog-ReID",
+          capabilities.semanticEmbeddings === true ? null : "SigLIP2"
+        ].filter((value): value is string => Boolean(value));
 
-        if (capabilities.yunetModel !== true) {
-          throw new Error(
-            "Das YuNet-Modell für die Gesichtsdetektion fehlt. " +
-            "Bitte 'npm.cmd run setup:ai' ausführen."
-          );
-        }
-
-        if (capabilities.sfaceModel !== true || capabilities.faceEmbeddings !== true) {
-          throw new Error(
-            "Das SFace-Modell für Gesichtsmerkmale fehlt oder ist nicht verfügbar. " +
-            "Bitte 'npm.cmd run setup:ai' ausführen."
-          );
-        }
-
-        if (
-          capabilities.nanodetModel !== true ||
-          capabilities.yoloxModel !== true ||
-          capabilities.petDetection !== true
-        ) {
-          throw new Error(
-            "Mindestens ein Haustiermodell (NanoDet/YOLOX-S) fehlt oder ist nicht verfügbar. " +
-            "Bitte 'npm.cmd run setup:ai' ausführen."
-          );
-        }
-
-        if (
-          capabilities.dogReIdModel !== true ||
-          capabilities.onnxRuntime !== true ||
-          capabilities.petEmbeddings !== true
-        ) {
-          throw new Error(
-            "Das Dog-ReID-Modell oder ONNX Runtime fehlt. " +
-            "Bitte 'npm.cmd run setup:ai' ausführen."
-          );
-        }
-
-        if (
-          capabilities.siglip2Model !== true ||
-          capabilities.torch !== true ||
-          capabilities.transformers !== true ||
-          capabilities.semanticEmbeddings !== true
-        ) {
-          throw new Error(
-            "SigLIP2 So400m NaFlex oder seine Python-Abhängigkeiten fehlen. " +
-            "Bitte 'npm.cmd run setup:ai' ausführen. " +
-            "Der einmalige SigLIP2-Download ist etwa 4,6 GB groß."
-          );
+        if (missingCoreCapabilities.length > 0) {
+          this.devLog("OPTIONAL_ANALYSIS_CAPABILITIES_MISSING", {
+            missing: missingCoreCapabilities
+          });
         }
 
         const qwen4bModelReady = capabilities.qwen3vl4bModel === true;
@@ -411,9 +409,13 @@ export class AnalysisService {
         this.applyWorkerResult(configured);
         this.publish({
           state: "READY",
-          message: this.qwen3vl4bAvailable
-            ? "Analyse-Worker läuft getrennt im Hintergrund."
-            : "Analyse-Worker läuft. " + (this.qwen3vl4bIssue ?? "Qwen3-VL 4B ist pausiert.")
+          message:
+            missingCoreCapabilities.length > 0
+              ? "Analyse-Worker läuft · verfügbare Stufen starten sofort; fehlend: " +
+                missingCoreCapabilities.join(", ") + "."
+              : this.qwen3vl4bAvailable
+                ? "Analyse-Worker läuft getrennt im Hintergrund."
+                : "Analyse-Worker läuft. " + (this.qwen3vl4bIssue ?? "Qwen3-VL 4B ist pausiert.")
         });
         this.devLog("START_READY", {
           totalElapsedMs: Date.now() - startAt,
