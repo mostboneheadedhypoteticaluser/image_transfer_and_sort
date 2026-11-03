@@ -7,12 +7,14 @@ import { CatalogService } from "./catalog-service";
 import { ThumbnailService } from "./thumbnail-service";
 
 const MODULE = "thumbnail-v1";
+const THUMBNAIL_CONCURRENCY = 2;
 
 export class ThumbnailCoordinator {
   private timer: NodeJS.Timeout | null = null;
   private pumping = false;
   private stopped = true;
   private shutdownRequested = false;
+  private activeJobs = 0;
 
   constructor(
     private readonly catalog: CatalogService,
@@ -49,11 +51,14 @@ export class ThumbnailCoordinator {
 
   async waitUntilIdle(timeoutMs = 15000): Promise<void> {
     const deadline = Date.now() + timeoutMs;
-    while (this.pumping && Date.now() < deadline) {
+    while (
+      (this.pumping || this.activeJobs > 0) &&
+      Date.now() < deadline
+    ) {
       await new Promise<void>((resolve) => setTimeout(resolve, 50));
     }
 
-    if (this.pumping) {
+    if (this.pumping || this.activeJobs > 0) {
       throw new Error(
         "Thumbnail-Pipeline konnte vor dem Datenbank-Reset nicht sauber angehalten werden."
       );
@@ -82,52 +87,59 @@ export class ThumbnailCoordinator {
     return stats;
   }
 
+  private launchJob(job: AnalysisJob): void {
+    this.activeJobs += 1;
+
+    void this.runJob(job).finally(() => {
+      this.activeJobs = Math.max(0, this.activeJobs - 1);
+
+      if (!this.stopped) {
+        void this.pump();
+      }
+    });
+  }
+
+  private async runJob(job: AnalysisJob): Promise<void> {
+    try {
+      const result = await this.thumbnails.generate(
+        job.absolutePath,
+        job.sha256
+      );
+
+      await this.catalog.request("completeThumbnailJob", {
+        jobId: job.id,
+        result
+      });
+    } catch (error) {
+      await this.catalog.request("failAnalysisJob", {
+        jobId: job.id,
+        error: error instanceof Error ? error.message : String(error)
+      });
+
+      if (this.shutdownRequested) {
+        await this.catalog.request("retryAnalysisJob", {
+          jobId: job.id
+        });
+      }
+    }
+
+    await this.refreshStats();
+  }
+
   private async pump(): Promise<void> {
     if (this.stopped || this.pumping) return;
 
     this.pumping = true;
 
     try {
-      const stats = await this.refreshStats();
-      if (stats.running > 0) return;
-
-      const job = await this.catalog.request<AnalysisJob | null>(
-        "claimAnalysisJob",
-        { module: MODULE }
-      );
-
-      if (!job) {
-        await this.refreshStats();
-        return;
-      }
-
-      this.onStats({
-        ...stats,
-        pending: Math.max(0, stats.pending - 1),
-        running: 1
-      });
-
-      try {
-        const result = await this.thumbnails.generate(
-          job.absolutePath,
-          job.sha256
+      while (!this.stopped && this.activeJobs < THUMBNAIL_CONCURRENCY) {
+        const job = await this.catalog.request<AnalysisJob | null>(
+          "claimAnalysisJob",
+          { module: MODULE }
         );
 
-        await this.catalog.request("completeThumbnailJob", {
-          jobId: job.id,
-          result
-        });
-      } catch (error) {
-        await this.catalog.request("failAnalysisJob", {
-          jobId: job.id,
-          error: error instanceof Error ? error.message : String(error)
-        });
-
-        if (this.shutdownRequested) {
-          await this.catalog.request("retryAnalysisJob", {
-            jobId: job.id
-          });
-        }
+        if (!job) break;
+        this.launchJob(job);
       }
 
       await this.refreshStats();
