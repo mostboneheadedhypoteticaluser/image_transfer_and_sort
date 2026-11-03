@@ -1165,6 +1165,16 @@ function renderCandidateReview(): void {
 
       button.addEventListener("click", () => {
         candidateReviewName.value = suggestion.name;
+
+        if (state.kind === "pet") {
+          // Bei Hunden ist ein Klick auf einen Ähnlichkeitsvorschlag bereits
+          // die eindeutige Einzelbild-Entscheidung: sofort zuweisen. Der
+          // bestehende Zuweisungsablauf entfernt die Fundstelle anschließend
+          // aus der Review-Liste und zeigt direkt die nächste an.
+          candidateReviewAssign.click();
+          return;
+        }
+
         candidateReviewName.focus();
       });
       candidateReviewSuggestions.appendChild(button);
