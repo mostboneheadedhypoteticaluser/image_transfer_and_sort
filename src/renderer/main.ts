@@ -98,7 +98,7 @@ const analysisWorkerState = document.querySelector<HTMLSpanElement>("#analysisWo
 const analysisPython = document.querySelector<HTMLElement>("#analysisPython")!;
 const analysisPriority = document.querySelector<HTMLElement>("#analysisPriority")!;
 const analysisCpuBudget = document.querySelector<HTMLElement>("#analysisCpuBudget")!;
-const analysisParallel = document.querySelector<HTMLElement>("#analysisParallel")!;
+const analysisParallelSelect = document.querySelector<HTMLSelectElement>("#analysisParallelSelect")!;
 const analysisQueue = document.querySelector<HTMLElement>("#analysisQueue")!;
 const analysisActive = document.querySelector<HTMLElement>("#analysisActive")!;
 const analysisMessage = document.querySelector<HTMLSpanElement>("#analysisMessage")!;
@@ -758,8 +758,9 @@ function renderAnalysisStatus(status: AnalysisWorkerStatus): void {
   analysisPriority.textContent =
     status.processPriority === "below-normal" ? "Niedrig" : status.processPriority;
   analysisCpuBudget.textContent = `${status.cpuBudgetPercent} % Ziel`;
-  analysisParallel.textContent =
-    `${status.maxConcurrentJobs} ${status.maxConcurrentJobs === 1 ? "Job" : "Jobs"}`;
+  if (document.activeElement !== analysisParallelSelect) {
+    analysisParallelSelect.value = String(status.maxConcurrentJobs);
+  }
   analysisQueue.textContent = status.queuedJobs.toLocaleString("de-DE");
   analysisActive.textContent = status.activeJobs.toLocaleString("de-DE");
   analysisMessage.textContent = status.message;
@@ -5698,6 +5699,30 @@ analysisCopyDevLogButton.addEventListener("click", () => {
   });
 });
 
+analysisParallelSelect.addEventListener("change", () => {
+  const requested = Math.max(
+    1,
+    Math.min(8, Math.trunc(Number(analysisParallelSelect.value) || 1))
+  );
+
+  window.localStorage.setItem(
+    "image-sorter.analysis.maxConcurrentJobs",
+    String(requested)
+  );
+
+  void runSafely(async () => {
+    analysisParallelSelect.disabled = true;
+    try {
+      const result = await window.imageSorter.analysis.setMaxConcurrentJobs(requested);
+      analysisParallelSelect.value = String(result.maxConcurrentJobs);
+      progressText.textContent =
+        `Parallele Analysejobs auf ${result.maxConcurrentJobs} gesetzt.`;
+    } finally {
+      analysisParallelSelect.disabled = false;
+    }
+  });
+});
+
 analysisClearDevLogButton.addEventListener("click", () => {
   if (!window.confirm(
     "Dev-Protokoll wirklich löschen? Ab diesem Zeitpunkt werden nur neue Diagnoseeinträge gespeichert."
@@ -6232,7 +6257,17 @@ void window.imageSorter.analysis
 
 void window.imageSorter.analysis
   .getStatus()
-  .then(renderAnalysisStatus)
+  .then(async (status) => {
+    renderAnalysisStatus(status);
+
+    const saved = Number(
+      window.localStorage.getItem("image-sorter.analysis.maxConcurrentJobs")
+    );
+    if (Number.isFinite(saved) && saved >= 1 && saved <= 8) {
+      const result = await window.imageSorter.analysis.setMaxConcurrentJobs(saved);
+      analysisParallelSelect.value = String(result.maxConcurrentJobs);
+    }
+  })
   .catch((error) => {
     renderAnalysisStatus({
       state: "ERROR",
