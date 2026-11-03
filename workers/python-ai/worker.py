@@ -716,6 +716,51 @@ def normalize_exif_datetime(value: Any) -> str | None:
     return text[:100] if text else None
 
 
+def detect_media_signature(file_path: str) -> tuple[str, str | None]:
+    """Erkennt Bild/Video anhand des Inhalts, nicht anhand der Dateiendung."""
+    try:
+        with open(file_path, "rb") as handle:
+            head = handle.read(64)
+    except Exception:
+        return "unknown", None
+
+    if head.startswith(b"\xff\xd8\xff"):
+        return "image", "image/jpeg"
+    if head.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image", "image/png"
+    if head.startswith((b"GIF87a", b"GIF89a")):
+        return "image", "image/gif"
+    if head.startswith(b"BM"):
+        return "image", "image/bmp"
+    if head.startswith((b"II*\x00", b"MM\x00*")):
+        return "image", "image/tiff"
+    if len(head) >= 12 and head[:4] == b"RIFF" and head[8:12] == b"WEBP":
+        return "image", "image/webp"
+    if len(head) >= 12 and head[:4] == b"RIFF" and head[8:12] == b"AVI ":
+        return "video", "video/x-msvideo"
+
+    # ISO Base Media File Format: MP4/MOV sowie HEIF/AVIF verwenden 'ftyp'.
+    if len(head) >= 12 and head[4:8] == b"ftyp":
+        brand = head[8:12].decode("ascii", errors="ignore").lower()
+        image_brands = {
+            "avif", "avis", "heic", "heix", "hevc", "hevx",
+            "heim", "heis", "mif1", "msf1"
+        }
+        if brand in image_brands:
+            return "image", "image/avif" if brand in {"avif", "avis"} else "image/heif"
+        return "video", "video/mp4"
+
+    # Matroska/WebM EBML header.
+    if head.startswith(b"\x1a\x45\xdf\xa3"):
+        return "video", "video/x-matroska"
+
+    # MPEG program/elementary streams.
+    if head.startswith((b"\x00\x00\x01\xba", b"\x00\x00\x01\xb3")):
+        return "video", "video/mpeg"
+
+    return "unknown", None
+
+
 def extract_image_metadata(file_path: str) -> dict:
     if Image is None:
         raise RuntimeError(
@@ -6423,7 +6468,8 @@ def handle(message: dict) -> bool:
             )
             return True
 
-        mime_type, _encoding = mimetypes.guess_type(file_path)
+        extension_mime_type, _encoding = mimetypes.guess_type(file_path)
+        detected_kind, detected_mime_type = detect_media_signature(file_path)
 
         respond(
             request_id,
@@ -6433,7 +6479,10 @@ def handle(message: dict) -> bool:
                 "exists": True,
                 "sizeBytes": int(info.st_size),
                 "mtimeNs": int(info.st_mtime_ns),
-                "mimeType": mime_type,
+                "mimeType": detected_mime_type or extension_mime_type,
+                "extensionMimeType": extension_mime_type,
+                "detectedMimeType": detected_mime_type,
+                "detectedKind": detected_kind,
                 "extension": str(payload.get("extension", "")),
                 "expectedSha256": str(payload.get("expectedSha256", "")),
             },
