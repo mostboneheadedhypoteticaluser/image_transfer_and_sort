@@ -5274,6 +5274,28 @@ analysisErrorDialog.addEventListener("click", (event) => {
   if (event.target === analysisErrorDialog) analysisErrorDialog.close();
 });
 
+closeLifeAreaAssignButton.addEventListener("click", () => {
+  lifeAreaAssignDialog.close();
+});
+
+lifeAreaAssignDialog.addEventListener("click", (event) => {
+  if (event.target === lifeAreaAssignDialog) lifeAreaAssignDialog.close();
+});
+
+lifeAreaAssignDialog.addEventListener("close", () => {
+  lifeAreaAssignPath.textContent = "—";
+  lifeAreaAssignList.replaceChildren();
+});
+
+window.addEventListener("life-area:preview", (event) => {
+  const detail = (event as CustomEvent<{
+    mediaId: number;
+    caption: string;
+  }>).detail;
+  if (!detail || !Number.isFinite(detail.mediaId)) return;
+  openImagePreview(detail.mediaId, detail.caption);
+});
+
 closeImagePreviewButton.addEventListener("click", () => {
   imagePreviewDialog.close();
 });
