@@ -7169,18 +7169,60 @@ function listPets(sourceId: number) {
       p.id,
       p.name,
       p.pet_class,
-      COUNT(*) AS detection_count,
-      SUM(CASE WHEN pa.assignment_source='CONFIRMED' THEN 1 ELSE 0 END) AS confirmed_count,
-      SUM(CASE WHEN pa.assignment_source='AUTO_HIGH_CONFIDENCE' THEN 1 ELSE 0 END) AS automatic_count,
-      MIN(pd.id) AS representative_pet_id
+      (
+        SELECT COUNT(*)
+        FROM pet_assignments pa
+        JOIN pet_fused_detections pd ON pd.id=pa.pet_detection_id
+        JOIN media_items m ON m.id=pd.media_id
+        WHERE pa.pet_id=p.id
+          AND m.source_id=?
+      ) AS detection_count,
+      (
+        SELECT COUNT(*)
+        FROM pet_assignments pa
+        JOIN pet_fused_detections pd ON pd.id=pa.pet_detection_id
+        JOIN media_items m ON m.id=pd.media_id
+        WHERE pa.pet_id=p.id
+          AND m.source_id=?
+          AND pa.assignment_source='CONFIRMED'
+      ) AS confirmed_count,
+      (
+        SELECT COUNT(*)
+        FROM pet_assignments pa
+        JOIN pet_fused_detections pd ON pd.id=pa.pet_detection_id
+        JOIN media_items m ON m.id=pd.media_id
+        WHERE pa.pet_id=p.id
+          AND m.source_id=?
+          AND pa.assignment_source='AUTO_HIGH_CONFIDENCE'
+      ) AS automatic_count,
+      (
+        SELECT MIN(pd.id)
+        FROM pet_assignments pa
+        JOIN pet_fused_detections pd ON pd.id=pa.pet_detection_id
+        JOIN media_items m ON m.id=pd.media_id
+        WHERE pa.pet_id=p.id
+          AND m.source_id=?
+      ) AS representative_pet_id
     FROM pets p
-    JOIN pet_assignments pa ON pa.pet_id=p.id
-    JOIN pet_fused_detections pd ON pd.id=pa.pet_detection_id
-    JOIN media_items m ON m.id=pd.media_id
-    WHERE m.source_id=?
-    GROUP BY p.id, p.name, p.pet_class
+    WHERE EXISTS (
+      SELECT 1
+      FROM pet_assignments pa
+      JOIN pet_fused_detections pd ON pd.id=pa.pet_detection_id
+      JOIN media_items m ON m.id=pd.media_id
+      WHERE pa.pet_id=p.id
+        AND m.source_id=?
+    )
+    OR EXISTS (
+      SELECT 1
+      FROM video_identity_tracks vit
+      JOIN media_items m ON m.id=vit.media_id
+      WHERE vit.identity_kind='pet'
+        AND vit.identity_id=p.id
+        AND m.source_id=?
+        AND m.availability='AVAILABLE'
+    )
     ORDER BY p.name COLLATE NOCASE, p.id
-  `).all(sourceId);
+  `).all(sourceId, sourceId, sourceId, sourceId, sourceId, sourceId);
 
   const itemQuery = db.prepare(`
     SELECT
@@ -8742,16 +8784,42 @@ function listPersons(sourceId: number) {
     SELECT
       p.id,
       p.name,
-      COUNT(*) AS face_count,
-      MIN(fd.id) AS representative_face_id
+      (
+        SELECT COUNT(*)
+        FROM person_face_assignments pfa
+        JOIN face_detections fd ON fd.id=pfa.face_detection_id
+        JOIN media_items m ON m.id=fd.media_id
+        WHERE pfa.person_id=p.id
+          AND m.source_id=?
+      ) AS face_count,
+      (
+        SELECT MIN(fd.id)
+        FROM person_face_assignments pfa
+        JOIN face_detections fd ON fd.id=pfa.face_detection_id
+        JOIN media_items m ON m.id=fd.media_id
+        WHERE pfa.person_id=p.id
+          AND m.source_id=?
+      ) AS representative_face_id
     FROM persons p
-    JOIN person_face_assignments pfa ON pfa.person_id=p.id
-    JOIN face_detections fd ON fd.id=pfa.face_detection_id
-    JOIN media_items m ON m.id=fd.media_id
-    WHERE m.source_id=?
-    GROUP BY p.id, p.name
+    WHERE EXISTS (
+      SELECT 1
+      FROM person_face_assignments pfa
+      JOIN face_detections fd ON fd.id=pfa.face_detection_id
+      JOIN media_items m ON m.id=fd.media_id
+      WHERE pfa.person_id=p.id
+        AND m.source_id=?
+    )
+    OR EXISTS (
+      SELECT 1
+      FROM video_identity_tracks vit
+      JOIN media_items m ON m.id=vit.media_id
+      WHERE vit.identity_kind='person'
+        AND vit.identity_id=p.id
+        AND m.source_id=?
+        AND m.availability='AVAILABLE'
+    )
     ORDER BY p.name COLLATE NOCASE, p.id
-  `).all(sourceId);
+  `).all(sourceId, sourceId, sourceId, sourceId);
 
   const faceQuery = db.prepare(`
     SELECT
