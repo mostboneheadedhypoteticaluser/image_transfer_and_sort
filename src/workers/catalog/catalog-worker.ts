@@ -7051,7 +7051,6 @@ function listPetCandidates(
     JOIN media_items m ON m.id=pd.media_id
     WHERE pc.source_id=?
     GROUP BY pc.id
-    HAVING COUNT(DISTINCT m.sha256 || ':' || pd.detection_index) >= 2
     ORDER BY detection_count DESC, pc.average_similarity DESC, newest_pet_id DESC
     LIMIT ?
   `).all(sourceId, limit);
@@ -7070,7 +7069,7 @@ function listPetCandidates(
       CASE WHEN pci.pet_detection_id=? THEN 0 ELSE 1 END,
       pci.similarity DESC,
       pci.pet_detection_id ASC
-    LIMIT 24
+    LIMIT 200
   `);
 
   const memberSignatureQuery = db.prepare(`
@@ -7799,6 +7798,273 @@ function insertPetCannotLinks(
   }
 
   return changes;
+}
+
+function resolvePetCandidateSelection(
+  candidateId: number,
+  rawPetDetectionIds: unknown
+) {
+  const candidate = db.prepare(
+    "SELECT id, source_id, pet_class, algorithm_version FROM pet_candidates WHERE id=?"
+  ).get(candidateId);
+
+  if (!candidate) {
+    throw new Error("Die Hundegruppe wurde nicht gefunden.");
+  }
+
+  const sourceId = Number(candidate.source_id);
+  const members = db.prepare(
+    "SELECT pet_detection_id, similarity FROM pet_candidate_items " +
+    "WHERE candidate_id=? ORDER BY pet_detection_id"
+  ).all(candidateId).map((row) => ({
+    petDetectionId: Number(row.pet_detection_id),
+    similarity: Number(row.similarity)
+  }));
+
+  if (members.length === 0) {
+    throw new Error("Die Hundegruppe enthält keine Fundstellen mehr.");
+  }
+
+  const requested = Array.isArray(rawPetDetectionIds)
+    ? [...new Set(
+        rawPetDetectionIds
+          .map(Number)
+          .filter((value) => Number.isInteger(value) && value > 0)
+      )]
+    : [];
+
+  if (requested.length === 0) {
+    throw new Error("Bitte mindestens eine Hundefundstelle auswählen.");
+  }
+
+  const memberIds = new Set(members.map((member) => member.petDetectionId));
+  const selectedSet = new Set<number>();
+
+  for (const requestedId of requested) {
+    if (!memberIds.has(requestedId)) continue;
+    const equivalentIds = equivalentPetDetectionIds(requestedId, sourceId);
+    if (equivalentIds.length === 0) {
+      selectedSet.add(requestedId);
+      continue;
+    }
+    for (const equivalentId of equivalentIds) {
+      if (memberIds.has(equivalentId)) selectedSet.add(equivalentId);
+    }
+  }
+
+  const selected = members.filter((member) =>
+    selectedSet.has(member.petDetectionId)
+  );
+  const remaining = members.filter((member) =>
+    !selectedSet.has(member.petDetectionId)
+  );
+
+  if (selected.length === 0) {
+    throw new Error(
+      "Die ausgewählten Fundstellen gehören nicht mehr zu dieser Hundegruppe."
+    );
+  }
+
+  return { candidate, sourceId, selected, remaining };
+}
+
+function insertManualPetCandidate(
+  sourceId: number,
+  petClass: string,
+  algorithmVersion: string,
+  members: Array<{ petDetectionId: number; similarity: number }>
+): number | null {
+  if (members.length === 0) return null;
+
+  const similarities = members
+    .map((member) => member.similarity)
+    .filter(Number.isFinite);
+  const averageSimilarity =
+    similarities.length > 0
+      ? similarities.reduce((sum, value) => sum + value, 0) / similarities.length
+      : 1;
+  const minSimilarity = similarities.length > 0 ? Math.min(...similarities) : 1;
+
+  const inserted = db.prepare(
+    "INSERT INTO pet_candidates(" +
+    "source_id,pet_class,algorithm_version,representative_pet_id," +
+    "average_similarity,min_similarity" +
+    ") VALUES(?,?,?,?,?,?)"
+  ).run(
+    sourceId,
+    petClass,
+    algorithmVersion,
+    members[0].petDetectionId,
+    averageSimilarity,
+    minSimilarity
+  );
+
+  const candidateId = Number(inserted.lastInsertRowid);
+  const insertItem = db.prepare(
+    "INSERT INTO pet_candidate_items(candidate_id,pet_detection_id,similarity) " +
+    "VALUES(?,?,?)"
+  );
+
+  for (const member of members) {
+    insertItem.run(candidateId, member.petDetectionId, member.similarity);
+  }
+
+  return candidateId;
+}
+
+function splitPetCandidate(
+  candidateId: number,
+  rawPetDetectionIds: unknown
+) {
+  const resolved = resolvePetCandidateSelection(candidateId, rawPetDetectionIds);
+
+  if (resolved.remaining.length === 0) {
+    throw new Error(
+      "Zum Aufteilen muss mindestens eine Fundstelle in der ursprünglichen Gruppe verbleiben."
+    );
+  }
+
+  const selectedIds = resolved.selected.map((member) => member.petDetectionId);
+  const remainingIds = resolved.remaining.map((member) => member.petDetectionId);
+
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    insertPetCannotLinks(selectedIds, remainingIds, "USER_MANUAL_SPLIT");
+    db.prepare("DELETE FROM pet_candidates WHERE id=?").run(candidateId);
+
+    const selectedCandidateId = insertManualPetCandidate(
+      resolved.sourceId,
+      String(resolved.candidate.pet_class),
+      String(resolved.candidate.algorithm_version),
+      resolved.selected
+    );
+    const remainingCandidateId = insertManualPetCandidate(
+      resolved.sourceId,
+      String(resolved.candidate.pet_class),
+      String(resolved.candidate.algorithm_version),
+      resolved.remaining
+    );
+
+    // Den letzten Clusterlauf nicht invalidieren: die UI bleibt stabil.
+    // Bei späterem Re-Clustering halten die Cannot-Links beide Gruppen getrennt.
+    db.exec("COMMIT");
+
+    return {
+      changed: true,
+      selectedCount: resolved.selected.length,
+      remainingCount: resolved.remaining.length,
+      selectedCandidateId,
+      remainingCandidateId
+    };
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+}
+
+function assignPetCandidateSelection(
+  candidateId: number,
+  rawPetDetectionIds: unknown,
+  rawName: unknown
+) {
+  const name = typeof rawName === "string" ? rawName.trim() : "";
+  if (!name) {
+    throw new Error("Bitte einen Namen für die ausgewählten Fundstellen eingeben.");
+  }
+  if (name.length > 120) throw new Error("Der Haustiername ist zu lang.");
+
+  const resolved = resolvePetCandidateSelection(candidateId, rawPetDetectionIds);
+  const petClass = String(resolved.candidate.pet_class);
+  const selectedIds = resolved.selected.map((member) => member.petDetectionId);
+  const remainingIds = resolved.remaining.map((member) => member.petDetectionId);
+
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const existing = db.prepare(
+      "SELECT id FROM pets WHERE name=? COLLATE NOCASE AND pet_class=? " +
+      "ORDER BY id LIMIT 1"
+    ).get(name, petClass);
+
+    const petId = existing
+      ? Number(existing.id)
+      : Number(
+          db.prepare("INSERT INTO pets(name,pet_class) VALUES(?,?)")
+            .run(name, petClass).lastInsertRowid
+        );
+
+    db.prepare(
+      "UPDATE pets SET name=?, updated_at=CURRENT_TIMESTAMP WHERE id=?"
+    ).run(name, petId);
+
+    insertPetCannotLinks(selectedIds, remainingIds, "USER_DIRECT_ASSIGN");
+
+    const clearExplicitExclusion = db.prepare(
+      "DELETE FROM pet_assignment_exclusions WHERE pet_id=? AND pet_detection_id=?"
+    );
+    const assign = db.prepare(
+      "INSERT INTO pet_assignments(" +
+      "pet_detection_id,pet_id,assignment_source,confidence,updated_at" +
+      ") VALUES(?,?,\'CONFIRMED\',?,CURRENT_TIMESTAMP) " +
+      "ON CONFLICT(pet_detection_id) DO UPDATE SET " +
+      "pet_id=excluded.pet_id,assignment_source=\'CONFIRMED\'," +
+      "confidence=excluded.confidence,updated_at=CURRENT_TIMESTAMP"
+    );
+    const removeFromCandidates = db.prepare(
+      "DELETE FROM pet_candidate_items WHERE pet_detection_id=?"
+    );
+
+    for (const member of resolved.selected) {
+      clearExplicitExclusion.run(petId, member.petDetectionId);
+      assign.run(
+        member.petDetectionId,
+        petId,
+        Number.isFinite(member.similarity) ? member.similarity : null
+      );
+      removeFromCandidates.run(member.petDetectionId);
+    }
+
+    db.prepare(
+      "DELETE FROM pet_candidates WHERE NOT EXISTS (" +
+      "SELECT 1 FROM pet_candidate_items pci WHERE pci.candidate_id=pet_candidates.id" +
+      ")"
+    ).run();
+
+    if (resolved.remaining.length > 0) {
+      const remainingSimilarities = resolved.remaining
+        .map((member) => member.similarity)
+        .filter(Number.isFinite);
+      const averageSimilarity =
+        remainingSimilarities.length > 0
+          ? remainingSimilarities.reduce((sum, value) => sum + value, 0) /
+            remainingSimilarities.length
+          : 1;
+      const minSimilarity =
+        remainingSimilarities.length > 0
+          ? Math.min(...remainingSimilarities)
+          : 1;
+
+      db.prepare(
+        "UPDATE pet_candidates SET representative_pet_id=?," +
+        "average_similarity=?,min_similarity=? WHERE id=?"
+      ).run(
+        resolved.remaining[0].petDetectionId,
+        averageSimilarity,
+        minSimilarity,
+        candidateId
+      );
+    }
+
+    db.exec("COMMIT");
+    return {
+      petId,
+      name,
+      detectionCount: resolved.selected.length,
+      remainingCount: resolved.remaining.length
+    };
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
 }
 
 function removePetFromCandidate(
@@ -10718,6 +10984,17 @@ async function dispatch(method: CatalogMethod, payload: Record<string, unknown> 
       return removePetFromCandidate(
         asNumber(payload.candidateId, "candidateId"),
         asNumber(payload.petDetectionId, "petDetectionId")
+      );
+    case "splitPetCandidate":
+      return splitPetCandidate(
+        asNumber(payload.candidateId, "candidateId"),
+        payload.petDetectionIds
+      );
+    case "assignPetCandidateSelection":
+      return assignPetCandidateSelection(
+        asNumber(payload.candidateId, "candidateId"),
+        payload.petDetectionIds,
+        payload.name
       );
     case "removePetFromPet":
       return removePetFromPet(
