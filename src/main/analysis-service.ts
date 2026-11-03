@@ -417,7 +417,7 @@ export class AnalysisService {
         const configured = await this.request<Record<string, unknown>>(
           "configure",
           {
-            maxConcurrentJobs: 2,
+            maxConcurrentJobs: this.status.maxConcurrentJobs,
             cpuBudgetPercent: 50,
             profile: "background"
           },
@@ -874,6 +874,27 @@ export class AnalysisService {
       }
     );
     return response;
+  }
+
+  async setMaxConcurrentJobs(value: number): Promise<number> {
+    const maxConcurrentJobs = Math.max(1, Math.min(8, Math.trunc(value || 1)));
+
+    if (!this.child || this.status.state !== "READY") {
+      this.publish({ maxConcurrentJobs });
+      return maxConcurrentJobs;
+    }
+
+    const configured = await this.request<Record<string, unknown>>(
+      "configure",
+      {
+        maxConcurrentJobs,
+        cpuBudgetPercent: this.status.cpuBudgetPercent,
+        profile: "background"
+      },
+      15000
+    );
+    this.applyWorkerResult(configured);
+    return this.status.maxConcurrentJobs;
   }
 
   async refreshStatus(): Promise<AnalysisWorkerStatus> {
