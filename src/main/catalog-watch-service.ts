@@ -388,14 +388,6 @@ export class CatalogWatchService {
         }
       }
 
-      this.onDiagnostic?.("WATCH_SCAN_ERROR", {
-        sourceId,
-        mode: full ? "FULL" : "INCREMENTAL",
-        pathCount: paths?.length ?? 0,
-        elapsedMs: Date.now() - scanStartedAt,
-        error: message
-      });
-
       source.mode = "ERROR";
       this.emit({
         sourceId: source.sourceId,
@@ -682,6 +674,14 @@ export class CatalogWatchService {
         retry.unref();
         return;
       }
+
+      this.onDiagnostic?.("WATCH_SCAN_ERROR", {
+        sourceId,
+        mode: full ? "FULL" : "INCREMENTAL",
+        pathCount: paths?.length ?? 0,
+        elapsedMs: Date.now() - scanStartedAt,
+        error: message
+      });
 
       source.mode = "ERROR";
       this.emit({
