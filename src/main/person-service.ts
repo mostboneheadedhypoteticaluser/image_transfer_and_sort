@@ -1,5 +1,6 @@
 import type {
   AnalysisQueueStats,
+  AssignPersonSelectionResult,
   CatalogStats,
   ConfirmPersonResult,
   IgnorePersonResult,
@@ -274,6 +275,17 @@ export class PersonService {
         expectedFaceCount,
         expectedMemberSignature
       }
+    );
+  }
+
+  async assignCandidateSelection(
+    candidateId: number,
+    faceDetectionIds: number[],
+    name: string
+  ): Promise<AssignPersonSelectionResult> {
+    return this.catalog.request<AssignPersonSelectionResult>(
+      "assignPersonCandidateSelection",
+      { candidateId, faceDetectionIds, name }
     );
   }
 
