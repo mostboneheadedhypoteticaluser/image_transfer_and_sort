@@ -94,7 +94,7 @@ const DEFAULT_STATUS: AnalysisWorkerStatus = {
   python: null,
   processPriority: "below-normal",
   cpuBudgetPercent: 50,
-  maxConcurrentJobs: 1,
+  maxConcurrentJobs: 2,
   queuedJobs: 0,
   activeJobs: 0,
   message: "Analyse-Worker ist noch nicht gestartet.",
@@ -398,7 +398,7 @@ export class AnalysisService {
         const configured = await this.request<Record<string, unknown>>(
           "configure",
           {
-            maxConcurrentJobs: 1,
+            maxConcurrentJobs: 2,
             cpuBudgetPercent: 50,
             profile: "background"
           },
