@@ -2933,6 +2933,17 @@ function renderRows(rows: MediaRecord[], emptyText = "Noch keine Medien katalogi
       actionCell.textContent = "Keine automatische Aktion";
       actionCell.className = "muted";
       actionCell.title = "Mehrere identische Papierkorb-Dateien passen. Die App trifft absichtlich keine unsichere Auswahl.";
+    } else if (row.availability === "AVAILABLE") {
+      const lifeAreaButton = document.createElement("button");
+      lifeAreaButton.type = "button";
+      lifeAreaButton.className = "table-action";
+      lifeAreaButton.textContent = "Lebensbereiche";
+      lifeAreaButton.addEventListener("click", () => {
+        void runSafely(() =>
+          openLifeAreaAssignment(row.id, row.relativePath)
+        );
+      });
+      actionCell.appendChild(lifeAreaButton);
     } else {
       actionCell.textContent = "—";
       actionCell.className = "muted";
