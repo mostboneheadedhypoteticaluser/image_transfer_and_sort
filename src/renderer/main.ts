@@ -3318,11 +3318,11 @@ function renderPersonOverview(overview: PersonOverview): void {
         hiddenNote.textContent =
           "Es werden " + candidate.faces.length + " von " +
           candidate.faceCount + " Fundstellen angezeigt.";
-        body.append(heading);
+        body.append(heading, selectionPanel);
         if (similarityMatches) body.appendChild(similarityMatches);
         body.append(hiddenNote, confirmRow);
       } else {
-        body.append(heading);
+        body.append(heading, selectionPanel);
         if (similarityMatches) body.appendChild(similarityMatches);
         body.append(confirmRow);
       }
@@ -3628,7 +3628,11 @@ function renderPetOverview(overview: PetOverview): void {
       card.className = "person-candidate-card";
 
       const cropStrip = document.createElement("div");
-      cropStrip.className = "person-face-strip";
+      cropStrip.className = "person-face-strip pet-split-strip";
+
+      const selectedPetIds = new Set<number>();
+      const selectionInputs = new Map<number, HTMLInputElement>();
+      let updateSelectionUi = () => {};
 
       for (const pet of candidate.pets) {
         const figure = document.createElement("figure");
@@ -3656,31 +3660,37 @@ function renderPetOverview(overview: PetOverview): void {
           fallback.hidden = false;
         });
 
-        const removeButton = document.createElement("button");
-        removeButton.type = "button";
-        removeButton.className = "face-correction-button";
-        removeButton.textContent = "×";
-        removeButton.title = "Diesen Hund aus der vorgeschlagenen Gruppe entfernen";
-        removeButton.addEventListener("click", (event) => {
-          event.preventDefault();
-          event.stopPropagation();
+        const selector = document.createElement("label");
+        selector.className = "pet-split-selector";
+        selector.title = "Fundstelle für Aufteilen oder Einzelzuweisung auswählen";
 
-          void runSafely(async () => {
-            removeButton.disabled = true;
-            const result = await window.imageSorter.pets.removeCandidatePet(
-              candidate.id,
-              pet.petDetectionId
-            );
-            const sourceId = selectedSourceId();
-            if (sourceId !== null) await loadPetOverview(sourceId, true);
-            progressText.textContent =
-              result.affectedPets.toLocaleString("de-DE") + " " +
-              (result.affectedPets === 1 ? "Fundstelle wurde" : "Fundstellen wurden") +
-              " dauerhaft aus dieser Hundegruppe getrennt.";
-          });
+        const checkbox = document.createElement("input");
+        checkbox.type = "checkbox";
+        checkbox.setAttribute(
+          "aria-label",
+          "Fundstelle " + pet.relativePath + " auswählen"
+        );
+        selectionInputs.set(pet.petDetectionId, checkbox);
+
+        const marker = document.createElement("span");
+        marker.textContent = "✓";
+
+        selector.addEventListener("click", (event) => {
+          event.stopPropagation();
+        });
+        checkbox.addEventListener("change", () => {
+          if (checkbox.checked) {
+            selectedPetIds.add(pet.petDetectionId);
+            figure.classList.add("split-selected");
+          } else {
+            selectedPetIds.delete(pet.petDetectionId);
+            figure.classList.remove("split-selected");
+          }
+          updateSelectionUi();
         });
 
-        figure.append(img, fallback, removeButton);
+        selector.append(checkbox, marker);
+        figure.append(img, fallback, selector);
         cropStrip.appendChild(figure);
       }
 
@@ -3742,6 +3752,189 @@ function renderPetOverview(overview: PetOverview): void {
               : petCropUrl(pet.representativePetId)
         }))
       );
+
+      const selectionPanel = document.createElement("section");
+      selectionPanel.className = "pet-selection-panel";
+
+      const selectionHeader = document.createElement("div");
+      selectionHeader.className = "pet-selection-header";
+
+      const selectionInfo = document.createElement("div");
+      const selectionTitle = document.createElement("strong");
+      selectionTitle.textContent = "Gruppe korrigieren";
+      const selectionHint = document.createElement("small");
+      selectionHint.textContent =
+        "Fundstellen links markieren. Einzelne Bilder können direkt zugewiesen oder mehrere dauerhaft abgetrennt werden.";
+      selectionInfo.append(selectionTitle, selectionHint);
+
+      const selectionCount = document.createElement("span");
+      selectionCount.className = "pet-selection-count";
+      selectionHeader.append(selectionInfo, selectionCount);
+
+      const selectionQuickActions = document.createElement("div");
+      selectionQuickActions.className = "pet-selection-quick-actions";
+
+      const selectAllButton = document.createElement("button");
+      selectAllButton.type = "button";
+      selectAllButton.className = "ghost";
+      selectAllButton.textContent = "Alle sichtbaren";
+      selectAllButton.addEventListener("click", () => {
+        for (const [id, checkbox] of selectionInputs) {
+          checkbox.checked = true;
+          selectedPetIds.add(id);
+          checkbox.closest(".person-face")?.classList.add("split-selected");
+        }
+        updateSelectionUi();
+      });
+
+      const clearSelectionButton = document.createElement("button");
+      clearSelectionButton.type = "button";
+      clearSelectionButton.className = "ghost";
+      clearSelectionButton.textContent = "Auswahl aufheben";
+      clearSelectionButton.addEventListener("click", () => {
+        for (const checkbox of selectionInputs.values()) {
+          checkbox.checked = false;
+          checkbox.closest(".person-face")?.classList.remove("split-selected");
+        }
+        selectedPetIds.clear();
+        updateSelectionUi();
+      });
+
+      selectionQuickActions.append(selectAllButton, clearSelectionButton);
+
+      const selectionAssignRow = document.createElement("div");
+      selectionAssignRow.className = "pet-selection-assign-row";
+
+      const selectionNameInput = document.createElement("input");
+      selectionNameInput.type = "text";
+      selectionNameInput.maxLength = 120;
+      selectionNameInput.placeholder = "Markierte Fundstellen zu Hund …";
+      selectionNameInput.autocomplete = "off";
+
+      const selectionNameField = createIdentityNameField(
+        selectionNameInput,
+        matchingPets.map((pet) => ({
+          id: pet.id,
+          name: pet.name,
+          count: pet.detectionCount,
+          previewUrl:
+            pet.representativePetId === null
+              ? null
+              : petCropUrl(pet.representativePetId)
+        }))
+      );
+
+      const assignSelectionButton = document.createElement("button");
+      assignSelectionButton.type = "button";
+      assignSelectionButton.className = "primary";
+      assignSelectionButton.textContent = "Markierte zuweisen";
+
+      const splitSelectionButton = document.createElement("button");
+      splitSelectionButton.type = "button";
+      splitSelectionButton.className = "secondary";
+      splitSelectionButton.textContent = "Als eigene Gruppe abtrennen";
+
+      updateSelectionUi = () => {
+        const selectedCount = selectedPetIds.size;
+        selectionCount.textContent =
+          selectedCount.toLocaleString("de-DE") +
+          " von " +
+          candidate.detectionCount.toLocaleString("de-DE") +
+          " ausgewählt";
+        assignSelectionButton.disabled = selectedCount === 0;
+        splitSelectionButton.disabled =
+          selectedCount === 0 || selectedCount >= candidate.detectionCount;
+        clearSelectionButton.disabled = selectedCount === 0;
+      };
+
+      assignSelectionButton.addEventListener("click", () => {
+        const selected = [...selectedPetIds];
+        const name = selectionNameInput.value.trim();
+        if (selected.length === 0) return;
+        if (!name) {
+          selectionNameInput.focus();
+          return;
+        }
+
+        void runSafely(async () => {
+          assignSelectionButton.disabled = true;
+          splitSelectionButton.disabled = true;
+          progressText.textContent =
+            selected.length.toLocaleString("de-DE") +
+            (selected.length === 1
+              ? " Fundstelle wird "
+              : " Fundstellen werden ") +
+            "„" + name + "“ zugewiesen …";
+
+          const result =
+            await window.imageSorter.pets.assignCandidateSelection(
+              candidate.id,
+              selected,
+              name
+            );
+
+          const sourceId = selectedSourceId();
+          if (sourceId !== null) await loadPetOverview(sourceId);
+          progressText.textContent =
+            result.detectionCount.toLocaleString("de-DE") +
+            (result.detectionCount === 1
+              ? " Fundstelle wurde "
+              : " Fundstellen wurden ") +
+            "„" + result.name + "“ fest zugewiesen. " +
+            result.remainingCount.toLocaleString("de-DE") +
+            " bleiben in der ursprünglichen Gruppe.";
+        });
+      });
+
+      splitSelectionButton.addEventListener("click", () => {
+        const selected = [...selectedPetIds];
+        if (
+          selected.length === 0 ||
+          selected.length >= candidate.detectionCount
+        ) {
+          return;
+        }
+
+        void runSafely(async () => {
+          assignSelectionButton.disabled = true;
+          splitSelectionButton.disabled = true;
+          progressText.textContent =
+            "Markierte Hundefundstellen werden dauerhaft als eigene Gruppe abgetrennt …";
+
+          const result = await window.imageSorter.pets.splitCandidate(
+            candidate.id,
+            selected
+          );
+
+          const sourceId = selectedSourceId();
+          if (sourceId !== null) await loadPetOverview(sourceId);
+          progressText.textContent =
+            "Gruppe dauerhaft geteilt: " +
+            result.selectedCount.toLocaleString("de-DE") +
+            " Fundstellen in der neuen Gruppe · " +
+            result.remainingCount.toLocaleString("de-DE") +
+            " Fundstellen in der ursprünglichen Gruppe.";
+        });
+      });
+
+      selectionNameInput.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" && selectedPetIds.size > 0) {
+          event.preventDefault();
+          assignSelectionButton.click();
+        }
+      });
+
+      selectionAssignRow.append(
+        selectionNameField,
+        assignSelectionButton,
+        splitSelectionButton
+      );
+      selectionPanel.append(
+        selectionHeader,
+        selectionQuickActions,
+        selectionAssignRow
+      );
+      updateSelectionUi();
 
       const button = document.createElement("button");
       button.className = "primary person-confirm";
