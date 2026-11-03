@@ -2,11 +2,13 @@ import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import "./life-areas.css";
 import type {
+  ExplorerFolderNode,
   LifeAreaMediaItem,
   LifeAreaRecord,
   LifeAreaRule,
   LifeAreaRuleConditionType,
-  SearchFacets
+  SearchFacets,
+  SourceRecord
 } from "../shared/protocol";
 
 const VIDEO_EXTENSIONS = new Set([
@@ -22,6 +24,76 @@ let mapLayer: L.LayerGroup | null = null;
 let mapBoundsFilter: L.LatLngBounds | null = null;
 let fitMapOnNextRender = false;
 let activationToken = 0;
+let ruleSources: SourceRecord[] = [];
+let folderRuleSelection: {
+  sourceId: number;
+  sourcePath: string;
+  folderPath: string;
+  relativePath: string;
+} | null = null;
+
+const FOLDER_RULE_PREFIX = "@folder:";
+
+type RuleBuilderType = LifeAreaRuleConditionType | "folder";
+
+function normalizeFolderPath(value: string): string {
+  return value.replace(/\\/g, "/").replace(/\/+$/g, "");
+}
+
+function relativeFolderPath(sourcePath: string, folderPath: string): string {
+  const source = normalizeFolderPath(sourcePath);
+  const folder = normalizeFolderPath(folderPath);
+  const sourceKey = source.toLocaleLowerCase("de-DE");
+  const folderKey = folder.toLocaleLowerCase("de-DE");
+
+  if (folderKey === sourceKey) return "";
+  if (!folderKey.startsWith(sourceKey + "/")) {
+    throw new Error("Der gewählte Ordner liegt nicht innerhalb der Medienquelle.");
+  }
+
+  return folder.slice(source.length + 1);
+}
+
+function encodeFolderRuleValue(selection: NonNullable<typeof folderRuleSelection>): string {
+  return FOLDER_RULE_PREFIX + JSON.stringify({
+    s: selection.sourceId,
+    p: selection.relativePath
+  });
+}
+
+function parseFolderRuleValue(value: string | null): { sourceId: number; relativePath: string } | null {
+  if (!value || !value.startsWith(FOLDER_RULE_PREFIX)) return null;
+  try {
+    const parsed = JSON.parse(value.slice(FOLDER_RULE_PREFIX.length));
+    const sourceId = Number(parsed?.s);
+    if (!Number.isInteger(sourceId) || sourceId <= 0) return null;
+    return {
+      sourceId,
+      relativePath:
+        typeof parsed?.p === "string"
+          ? parsed.p.replace(/\\/g, "/").replace(/^\/+|\/+$/g, "")
+          : ""
+    };
+  } catch {
+    return null;
+  }
+}
+
+function sourceDisplayName(sourcePath: string): string {
+  const normalized = normalizeFolderPath(sourcePath);
+  return normalized.split("/").filter(Boolean).at(-1) ?? sourcePath;
+}
+
+function folderRuleDisplay(value: string | null): string | null {
+  const folder = parseFolderRuleValue(value);
+  if (!folder) return null;
+
+  const source = ruleSources.find((item) => item.id === folder.sourceId);
+  const root = source?.path ?? "Medienquelle #" + folder.sourceId;
+  return folder.relativePath
+    ? normalizeFolderPath(root) + "/" + folder.relativePath
+    : root;
+}
 
 const lifeAreaList = document.querySelector<HTMLDivElement>("#lifeAreaList")!;
 const lifeAreaAddButton = document.querySelector<HTMLButtonElement>("#lifeAreaAddButton")!;
@@ -36,6 +108,9 @@ const lifeAreaRuleType = document.querySelector<HTMLSelectElement>("#lifeAreaRul
 const lifeAreaRuleValueField = document.querySelector<HTMLElement>("#lifeAreaRuleValueField")!;
 const lifeAreaRuleIdentityValue = document.querySelector<HTMLSelectElement>("#lifeAreaRuleIdentityValue")!;
 const lifeAreaRuleTextValue = document.querySelector<HTMLInputElement>("#lifeAreaRuleTextValue")!;
+const lifeAreaRuleFolderValue = document.querySelector<HTMLDivElement>("#lifeAreaRuleFolderValue")!;
+const lifeAreaRuleFolderPick = document.querySelector<HTMLButtonElement>("#lifeAreaRuleFolderPick")!;
+const lifeAreaRuleFolderSelected = document.querySelector<HTMLElement>("#lifeAreaRuleFolderSelected")!;
 const lifeAreaRuleDateFields = document.querySelector<HTMLDivElement>("#lifeAreaRuleDateFields")!;
 const lifeAreaRuleDateFrom = document.querySelector<HTMLInputElement>("#lifeAreaRuleDateFrom")!;
 const lifeAreaRuleDateTo = document.querySelector<HTMLInputElement>("#lifeAreaRuleDateTo")!;
@@ -61,6 +136,11 @@ const lifeAreaCreateError = document.querySelector<HTMLParagraphElement>("#lifeA
 const closeLifeAreaCreate = document.querySelector<HTMLButtonElement>("#closeLifeAreaCreate")!;
 const cancelLifeAreaCreate = document.querySelector<HTMLButtonElement>("#cancelLifeAreaCreate")!;
 const saveLifeAreaCreate = document.querySelector<HTMLButtonElement>("#saveLifeAreaCreate")!;
+const lifeAreaFolderDialog = document.querySelector<HTMLDialogElement>("#lifeAreaFolderDialog")!;
+const closeLifeAreaFolderDialog = document.querySelector<HTMLButtonElement>("#closeLifeAreaFolderDialog")!;
+const cancelLifeAreaFolderDialog = document.querySelector<HTMLButtonElement>("#cancelLifeAreaFolderDialog")!;
+const lifeAreaFolderStatus = document.querySelector<HTMLDivElement>("#lifeAreaFolderStatus")!;
+const lifeAreaFolderTree = document.querySelector<HTMLDivElement>("#lifeAreaFolderTree")!;
 
 function selectedArea(): LifeAreaRecord | null {
   return areas.find((area) => area.id === selectedAreaId) ?? null;
@@ -193,6 +273,8 @@ function ruleDescription(rule: LifeAreaRule): string {
     );
   }
   if (rule.conditionType === "path") {
+    const folder = folderRuleDisplay(rule.conditionValue);
+    if (folder) return "Ordner rekursiv: " + folder;
     return "Pfad enthält „" + (rule.conditionValue ?? "") + "“";
   }
   return "Merkmal enthält „" + (rule.conditionValue ?? "") + "“";
@@ -358,7 +440,7 @@ function updateRuleGroupOptions(): void {
 }
 
 function updateRuleBuilder(): void {
-  const type = lifeAreaRuleType.value as LifeAreaRuleConditionType;
+  const type = lifeAreaRuleType.value as RuleBuilderType;
   const area = selectedArea();
   lifeAreaRuleThenLabel.textContent = area
     ? "→ " + area.name
@@ -370,13 +452,19 @@ function updateRuleBuilder(): void {
   lifeAreaRuleValueField.hidden = type === "date";
   lifeAreaRuleIdentityValue.hidden = type !== "person" && type !== "pet";
   lifeAreaRuleTextValue.hidden =
-    type === "person" || type === "pet" || type === "date";
+    type === "person" || type === "pet" || type === "date" || type === "folder";
+  lifeAreaRuleFolderValue.hidden = type !== "folder";
 
   if (type === "tag") {
     lifeAreaRuleTextValue.placeholder = "z. B. Rettungshund, Einsatzfahrzeug";
   } else if (type === "path") {
     lifeAreaRuleTextValue.placeholder = "z. B. DRK\\Rettungshunde";
   }
+
+  lifeAreaRuleFolderSelected.textContent = folderRuleSelection
+    ? sourceDisplayName(folderRuleSelection.sourcePath) +
+      (folderRuleSelection.relativePath ? " / " + folderRuleSelection.relativePath : " /")
+    : "Kein Ordner ausgewählt.";
 
   if (!facets || (type !== "person" && type !== "pet")) return;
 
@@ -567,7 +655,10 @@ function renderFilters(): void {
 }
 
 async function loadFacets(): Promise<void> {
-  facets = await window.imageSorter.catalog.getSearchFacets();
+  [facets, ruleSources] = await Promise.all([
+    window.imageSorter.catalog.getSearchFacets(),
+    window.imageSorter.catalog.listSources()
+  ]);
   updateRuleBuilder();
 }
 
