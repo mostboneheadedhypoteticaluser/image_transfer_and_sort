@@ -4,6 +4,7 @@ import { activateLifeAreasView, invalidateLifeAreas } from "./life-areas";
 import type {
   AnalysisErrorRecord,
   AnalysisWorkerStatus,
+  BackgroundPauseState,
   CatalogStats,
   CatalogWatchEvent,
   CatalogWatchSnapshot,
@@ -84,6 +85,10 @@ const watchState = document.querySelector<HTMLSpanElement>("#watchState")!;
 const watchDetail = document.querySelector<HTMLElement>("#watchDetail")!;
 const watchHistory = document.querySelector<HTMLDivElement>("#watchHistory")!;
 const workerState = document.querySelector<HTMLSpanElement>("#workerState")!;
+const backgroundPauseButton = document.querySelector<HTMLButtonElement>("#backgroundPauseButton")!;
+const backgroundPauseIcon = document.querySelector<HTMLElement>("#backgroundPauseIcon")!;
+const backgroundPauseLabel = document.querySelector<HTMLElement>("#backgroundPauseLabel")!;
+const backgroundPauseHint = document.querySelector<HTMLElement>("#backgroundPauseHint")!;
 const totalCount = document.querySelector<HTMLSpanElement>("#totalCount")!;
 const availableCount = document.querySelector<HTMLSpanElement>("#availableCount")!;
 const missingCount = document.querySelector<HTMLSpanElement>("#missingCount")!;
@@ -265,6 +270,11 @@ let sourcePipelineRefreshTimer: number | null = null;
 let identityStatsRefreshTimer: number | null = null;
 let searchFacetsScopeKey: string | null = null;
 let latestAnalysisStatus: AnalysisWorkerStatus | null = null;
+let backgroundPauseState: BackgroundPauseState = {
+  paused: false,
+  changing: false,
+  message: "Hintergrundarbeit läuft."
+};
 let qwenBenchmarkSelectedPath: string | null = null;
 let qwenBenchmarkRunning = false;
 let qwenBenchmarkModelInRun: QwenBenchmarkModel = "minicpm";
@@ -689,6 +699,35 @@ function renderQwenLiveProgress(): void {
   objectVerificationStageState.textContent = "Läuft";
   objectVerificationStageCounts.textContent =
     progress.message.replace(/^Qwen3-VL:\s*/, "");
+}
+
+function renderBackgroundPauseState(state: BackgroundPauseState): void {
+  backgroundPauseState = state;
+  backgroundPauseButton.disabled = state.changing;
+  backgroundPauseButton.classList.toggle("paused", state.paused);
+  backgroundPauseButton.setAttribute("aria-pressed", String(state.paused));
+
+  if (state.changing) {
+    backgroundPauseIcon.textContent = "…";
+    backgroundPauseLabel.textContent = state.paused
+      ? "Wird pausiert …"
+      : "Wird fortgesetzt …";
+    backgroundPauseHint.textContent = state.message;
+    return;
+  }
+
+  if (state.paused) {
+    backgroundPauseIcon.textContent = "▶";
+    backgroundPauseLabel.textContent = "Hintergrund fortsetzen";
+    backgroundPauseHint.textContent = "Analyse und Scan wieder starten";
+    backgroundPauseButton.title = "Hintergrundverarbeitung fortsetzen";
+  } else {
+    backgroundPauseIcon.textContent = "Ⅱ";
+    backgroundPauseLabel.textContent = "Hintergrund pausieren";
+    backgroundPauseHint.textContent = "CPU/GPU freigeben";
+    backgroundPauseButton.title =
+      "Hintergrundverarbeitung pausieren und CPU/GPU freigeben";
+  }
 }
 
 function renderAnalysisStatus(status: AnalysisWorkerStatus): void {
@@ -5991,6 +6030,17 @@ searchScope.addEventListener("change", () => {
 
 refreshButton.addEventListener("click", () => void runSafely(refreshCatalog));
 
+backgroundPauseButton.addEventListener("click", () => {
+  if (backgroundPauseState.changing) return;
+
+  void runSafely(async () => {
+    const next = await window.imageSorter.lifecycle.setBackgroundPaused(
+      !backgroundPauseState.paused
+    );
+    renderBackgroundPauseState(next);
+  });
+});
+
 window.imageSorter.catalog.onProgress((progress) => {
   if (progress.sourceId !== selectedSourceId()) return;
   progressText.textContent = progress.message;
@@ -6028,6 +6078,10 @@ window.imageSorter.catalog.onWatchEvent((event) => {
     progressBar.classList.remove("active");
     progressText.textContent = event.message;
   }
+});
+
+window.imageSorter.lifecycle.onBackgroundPauseState((state) => {
+  renderBackgroundPauseState(state);
 });
 
 window.imageSorter.lifecycle.onShutdownStatus((status) => {
@@ -6121,6 +6175,17 @@ for (const item of appNavItems) {
 }
 
 void initEmbeddedSourceExplorer();
+
+void window.imageSorter.lifecycle
+  .getBackgroundPauseState()
+  .then(renderBackgroundPauseState)
+  .catch(() => {
+    renderBackgroundPauseState({
+      paused: false,
+      changing: false,
+      message: "Pausenstatus konnte nicht gelesen werden."
+    });
+  });
 
 void window.imageSorter.analysis
   .getAutomaticQwenState()
