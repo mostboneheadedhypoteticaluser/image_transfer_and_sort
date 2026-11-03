@@ -10580,7 +10580,8 @@ function getMediaDetails(mediaId: number) {
             maxSimilarity: row.max_similarity === null ? null : Number(row.max_similarity)
           }))
         }
-      : null
+      : null,
+    lifeAreas: lifeAreaStore.assignmentsForMedia(mediaId)
   };
 }
 
