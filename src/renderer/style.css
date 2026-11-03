@@ -3737,3 +3737,153 @@ body {
   font-size: 11px;
   font-weight: 750;
 }
+
+
+/* Manuelles Aufteilen und Einzelzuweisen von Hundegruppen */
+.pet-split-strip .person-face {
+  cursor: default;
+}
+
+.pet-split-strip .person-face.split-selected {
+  outline: 3px solid #d72622;
+  outline-offset: -3px;
+}
+
+.pet-split-selector {
+  position: absolute;
+  z-index: 6;
+  top: 6px;
+  left: 6px;
+  display: grid;
+  place-items: center;
+  width: 27px;
+  height: 27px;
+  border-radius: 8px;
+  background: rgba(20, 27, 34, .78);
+  box-shadow: 0 1px 5px rgba(0,0,0,.22);
+  cursor: pointer;
+}
+
+.pet-split-selector input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.pet-split-selector span {
+  display: grid;
+  place-items: center;
+  width: 19px;
+  height: 19px;
+  border: 2px solid rgba(255,255,255,.88);
+  border-radius: 5px;
+  color: transparent;
+  font-size: 12px;
+  font-weight: 900;
+  line-height: 1;
+}
+
+.pet-split-selector input:checked + span {
+  border-color: #fff;
+  background: #d72622;
+  color: #fff;
+}
+
+.pet-selection-panel {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid #dce2e7;
+  border-radius: 10px;
+  background: #f8fafb;
+}
+
+.pet-selection-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.pet-selection-header > div {
+  min-width: 0;
+}
+
+.pet-selection-header strong,
+.pet-selection-header small {
+  display: block;
+}
+
+.pet-selection-header strong {
+  font-size: 13px;
+}
+
+.pet-selection-header small {
+  margin-top: 3px;
+  color: #6f7984;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.pet-selection-count {
+  flex: 0 0 auto;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: #eef1f4;
+  color: #56616d;
+  font-size: 10px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.pet-selection-quick-actions {
+  display: flex;
+  gap: 7px;
+  flex-wrap: wrap;
+}
+
+.pet-selection-quick-actions button {
+  height: 30px;
+  padding: 0 10px;
+  font-size: 11px;
+}
+
+.pet-selection-assign-row {
+  display: grid;
+  grid-template-columns: minmax(190px, 1fr) auto auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.pet-selection-assign-row .identity-name-field {
+  min-width: 0;
+}
+
+.pet-selection-assign-row input {
+  width: 100%;
+  min-width: 0;
+  height: 38px;
+  padding: 0 11px;
+  border: 1px solid #d6dce2;
+  border-radius: 8px;
+  background: #fff;
+  color: #17202a;
+  font: inherit;
+}
+
+.pet-selection-assign-row button {
+  height: 38px;
+  white-space: nowrap;
+}
+
+@media (max-width: 1050px) {
+  .pet-selection-assign-row {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .pet-selection-assign-row .identity-name-field {
+    grid-column: 1 / -1;
+  }
+}
