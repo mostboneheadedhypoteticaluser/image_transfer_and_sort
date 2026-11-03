@@ -10817,6 +10817,52 @@ async function dispatch(method: CatalogMethod, payload: Record<string, unknown> 
           ? undefined
           : asNumber(payload.sourceId, "sourceId")
       );
+    case "listLifeAreas":
+      return lifeAreaStore.list();
+    case "createLifeArea":
+      return lifeAreaStore.create(payload.name);
+    case "renameLifeArea":
+      return lifeAreaStore.rename(
+        asNumber(payload.lifeAreaId, "lifeAreaId"),
+        payload.name
+      );
+    case "deleteLifeArea":
+      return lifeAreaStore.remove(
+        asNumber(payload.lifeAreaId, "lifeAreaId")
+      );
+    case "addLifeAreaRule":
+      return lifeAreaStore.addRule(
+        asNumber(payload.lifeAreaId, "lifeAreaId"),
+        payload.conditionType,
+        payload.conditionValue,
+        payload.dateFrom,
+        payload.dateTo
+      );
+    case "deleteLifeAreaRule":
+      return lifeAreaStore.deleteRule(
+        asNumber(payload.ruleId, "ruleId")
+      );
+    case "setLifeAreaRuleEnabled":
+      return lifeAreaStore.setRuleEnabled(
+        asNumber(payload.ruleId, "ruleId"),
+        payload.enabled
+      );
+    case "applyLifeAreaRules":
+      return lifeAreaStore.applyRules(
+        payload.lifeAreaId === undefined
+          ? undefined
+          : asNumber(payload.lifeAreaId, "lifeAreaId")
+      );
+    case "listLifeAreaMedia":
+      return lifeAreaStore.listMedia(
+        asNumber(payload.lifeAreaId, "lifeAreaId")
+      );
+    case "setMediaLifeArea":
+      return lifeAreaStore.setMedia(
+        asNumber(payload.mediaId, "mediaId"),
+        asNumber(payload.lifeAreaId, "lifeAreaId"),
+        payload.assigned
+      );
     case "getSearchFacets":
       return getSearchFacets(
         payload.sourceId === undefined
