@@ -323,8 +323,8 @@ function schedulePersonRefresh(): void {
         }))
       });
 
-      await analysisCoordinator?.pauseForMaintenance();
-
+      // Gruppierung läuft jetzt als normaler paralleler Python-Job mit.
+      // Sie darf die Bild-/Video-Lanes nicht mehr exklusiv anhalten.
       try {
         if (personService) {
           for (const entry of faceChangedSources) {
@@ -367,7 +367,7 @@ function schedulePersonRefresh(): void {
           if (!activeSourceIds.has(sourceId)) groupedPetEmbeddingCounts.delete(sourceId);
         }
       } finally {
-        analysisCoordinator?.resumeAfterMaintenance();
+        // Kein exklusiver Maintenance-Stopp mehr nötig.
       }
     })()
       .catch((error) => {
