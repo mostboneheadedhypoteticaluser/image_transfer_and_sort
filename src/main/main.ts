@@ -37,6 +37,8 @@ import type {
   MergePetsResult,
   PersonCorrectionResult,
   PetCorrectionResult,
+  SplitPetCandidateResult,
+  AssignPetSelectionResult,
   PersonOverview,
   PetCropInfo,
   PetOverview,
