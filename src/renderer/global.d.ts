@@ -1,6 +1,7 @@
 import type {
   AnalysisErrorRecord,
   AnalysisWorkerStatus,
+  BackgroundPauseState,
   AssignPersonSelectionResult,
   QwenBenchmarkModel,
   QwenBenchmarkProfile,
@@ -52,6 +53,11 @@ declare global {
       openSourceManager(): Promise<{ opened: true }>;
       lifecycle: {
         onShutdownStatus(listener: (status: ShutdownStatus) => void): () => void;
+        getBackgroundPauseState(): Promise<BackgroundPauseState>;
+        setBackgroundPaused(paused: boolean): Promise<BackgroundPauseState>;
+        onBackgroundPauseState(
+          listener: (status: BackgroundPauseState) => void
+        ): () => void;
       };
       analysis: {
         getStatus(): Promise<AnalysisWorkerStatus>;
