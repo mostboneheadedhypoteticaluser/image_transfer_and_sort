@@ -1053,6 +1053,27 @@ export class AnalysisService {
     });
   }
 
+  stopForUserPause(): void {
+    this.devLog("USER_PAUSE_BEGIN", {
+      childPid: this.status.pid,
+      qwenServerPid: this.qwenServerPid
+    });
+
+    // Nutzt denselben harten Prozess-Stopp wie der Einzelbildtest: Dadurch
+    // verschwinden laufende CPU-/GPU-Last und ein ggf. gestarteter llama.cpp-
+    // Server sofort. Der Coordinator setzt unterbrochene Jobs wieder auf PENDING.
+    this.stopForBenchmark();
+
+    this.publish({
+      state: "STOPPED",
+      pid: null,
+      activeJobs: 0,
+      progress: null,
+      message: "Hintergrundanalyse pausiert · CPU/GPU-Worker sind gestoppt."
+    });
+    this.devLog("USER_PAUSE_DONE");
+  }
+
   /**
    * Harte, synchrone Beendigung für den App-Shutdown.
    *
