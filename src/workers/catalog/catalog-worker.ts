@@ -761,6 +761,27 @@ function normalizeHistoricalUnavailableJobs(): void {
 
 normalizeHistoricalUnavailableJobs();
 
+// Frühere technische Prüfungen haben nur aus der Dateiendung einen MIME-Typ
+// abgeleitet. Sie müssen einmal neu laufen, damit falsch benannte Dateien
+// (z. B. MP4 mit .jpg-Endung) anhand ihrer Signatur korrekt klassifiziert werden.
+db.prepare(`
+  UPDATE analysis_jobs
+  SET
+    status='PENDING',
+    attempts=0,
+    result_json=NULL,
+    error_message=NULL,
+    started_at=NULL,
+    finished_at=NULL,
+    updated_at=CURRENT_TIMESTAMP
+  WHERE module='file-probe-v1'
+    AND status='DONE'
+    AND (
+      result_json IS NULL
+      OR result_json NOT LIKE '%"detectedKind":%'
+    )
+`).run();
+
 db.prepare(`
   UPDATE analysis_jobs
   SET
@@ -2965,28 +2986,45 @@ function reactivateAvailableMediaJobs(sourceId: number): void {
   }
 }
 
+const IMAGE_ANALYSIS_MODULES = new Set([
+  "thumbnail-v1",
+  "image-metadata-v1",
+  "face-detect-yunet-v1",
+  "face-embed-sface-v1",
+  "pet-detect-nanodet-v1",
+  "pet-detect-yolox-v1",
+  "pet-fuse-ensemble-v1",
+  "pet-embed-dogreid-v1",
+  "catalog-semantic-qwen3vl4b-v3",
+  "semantic-embed-siglip2-v1"
+]);
+
+const VIDEO_ANALYSIS_MODULES = new Set(["video-analyze-v1"]);
+
+function detectedMediaKindFilter(module: string, mediaAlias = "m"): string {
+  const kind = IMAGE_ANALYSIS_MODULES.has(module)
+    ? "image"
+    : VIDEO_ANALYSIS_MODULES.has(module)
+      ? "video"
+      : null;
+
+  if (!kind) return "";
+
+  return `
+    AND EXISTS (
+      SELECT 1
+      FROM analysis_jobs probe
+      WHERE probe.media_id=${mediaAlias}.id
+        AND probe.module='file-probe-v1'
+        AND probe.status='DONE'
+        AND probe.input_sha256=${mediaAlias}.sha256
+        AND probe.result_json LIKE '%"detectedKind":"${kind}"%'
+    )
+  `;
+}
+
 function enqueueAnalysisJobs(sourceId: number, module = "file-probe-v1") {
-  const imageExtensions = [...IMAGE_EXTENSIONS];
-  const imageOnlyModules = new Set([
-    "thumbnail-v1",
-    "image-metadata-v1",
-    "face-detect-yunet-v1",
-    "face-embed-sface-v1",
-    "pet-detect-nanodet-v1",
-    "pet-detect-yolox-v1",
-    "pet-fuse-ensemble-v1",
-    "pet-embed-dogreid-v1",
-    "catalog-semantic-qwen3vl4b-v3",
-    "semantic-embed-siglip2-v1"
-  ]);
-  const videoExtensions = [...VIDEO_EXTENSIONS];
-  const videoOnlyModules = new Set(["video-analyze-v1"]);
-  const imageFilter =
-    imageOnlyModules.has(module)
-      ? ` AND m.extension IN (${imageExtensions.map(() => "?").join(",")})`
-      : videoOnlyModules.has(module)
-        ? ` AND m.extension IN (${videoExtensions.map(() => "?").join(",")})`
-        : "";
+  const mediaKindFilter = detectedMediaKindFilter(module);
 
   const statement = db.prepare(`
     INSERT INTO analysis_jobs(
@@ -3021,7 +3059,7 @@ function enqueueAnalysisJobs(sourceId: number, module = "file-probe-v1") {
     FROM media_items m
     WHERE m.source_id=?
       AND m.availability='AVAILABLE'
-      ${imageFilter}
+      ${mediaKindFilter}
     ON CONFLICT(media_id, module) DO UPDATE SET
       status='PENDING',
       attempts=CASE
@@ -3043,9 +3081,6 @@ function enqueueAnalysisJobs(sourceId: number, module = "file-probe-v1") {
   `);
 
   const args: (string | number)[] = [module, sourceId];
-  if (imageOnlyModules.has(module)) args.push(...imageExtensions);
-  if (videoOnlyModules.has(module)) args.push(...videoExtensions);
-
   const result = statement.run(...args);
 
   const stats = getAnalysisQueueStats(sourceId, module);
@@ -3358,6 +3393,7 @@ function claimAnalysisJob(
   module = "file-probe-v1",
   mediaId?: number
 ) {
+  const mediaKindFilter = detectedMediaKindFilter(module);
   db.exec("BEGIN IMMEDIATE");
   try {
     const row = db.prepare(`
@@ -3375,6 +3411,7 @@ function claimAnalysisJob(
         AND j.status='PENDING'
         AND m.availability='AVAILABLE'
         ${mediaId === undefined ? "" : "AND j.media_id=?"}
+        ${mediaKindFilter}
         AND (
           j.module<>'face-embed-sface-v1'
           OR EXISTS (
@@ -3493,6 +3530,11 @@ function claimAnalysisJob(
 
 function completeAnalysisJob(jobId: number, result: unknown) {
   const encoded = JSON.stringify(result ?? null);
+  const job = db.prepare(`
+    SELECT id, media_id, module, input_sha256
+    FROM analysis_jobs
+    WHERE id=?
+  `).get(jobId);
 
   db.prepare(`
     UPDATE analysis_jobs
@@ -3505,6 +3547,54 @@ function completeAnalysisJob(jobId: number, result: unknown) {
     WHERE id=?
       AND status='RUNNING'
   `).run(encoded, jobId);
+
+  if (job && String(job.module) === "file-probe-v1") {
+    const value =
+      result && typeof result === "object"
+        ? result as Record<string, unknown>
+        : {};
+    const detectedKind =
+      value.detectedKind === "image" || value.detectedKind === "video"
+        ? String(value.detectedKind)
+        : "unknown";
+    const mediaId = Number(job.media_id);
+    const sha256 = String(job.input_sha256 ?? "");
+
+    // Veraltete, nur anhand der Endung erzeugte Jobs entfernen. Danach wird
+    // ausschließlich die Pipeline des tatsächlich erkannten Dateiinhalts
+    // angelegt.
+    const removeModules = detectedKind === "image"
+      ? [...VIDEO_ANALYSIS_MODULES]
+      : detectedKind === "video"
+        ? [...IMAGE_ANALYSIS_MODULES]
+        : [...IMAGE_ANALYSIS_MODULES, ...VIDEO_ANALYSIS_MODULES];
+
+    const remove = db.prepare(`
+      DELETE FROM analysis_jobs
+      WHERE media_id=?
+        AND module=?
+        AND id<>?
+    `);
+    for (const module of removeModules) {
+      remove.run(mediaId, module, jobId);
+    }
+
+    const targetModules = detectedKind === "image"
+      ? [...IMAGE_ANALYSIS_MODULES]
+      : detectedKind === "video"
+        ? [...VIDEO_ANALYSIS_MODULES]
+        : [];
+
+    for (const module of targetModules) {
+      enqueueSingleMediaJob.run(mediaId, module, sha256);
+    }
+
+    return {
+      completed: true,
+      detectedKind,
+      queuedModules: targetModules.length
+    };
+  }
 
   return { completed: true };
 }
@@ -3672,27 +3762,11 @@ const enqueueSingleMediaJob = db.prepare(`
 
 function enqueueFastAnalysisJobsForMedia(
   mediaId: number,
-  extension: string,
   sha256: string
 ): void {
-  const modules = ["file-probe-v1"];
-
-  if (IMAGE_EXTENSIONS.has(extension)) {
-    modules.push(
-      "thumbnail-v1",
-      "image-metadata-v1",
-      "face-detect-yunet-v1",
-      "face-embed-sface-v1",
-      "pet-detect-nanodet-v1",
-      "pet-detect-yolox-v1",
-      "pet-fuse-ensemble-v1",
-      "pet-embed-dogreid-v1"
-    );
-  }
-
-  for (const module of modules) {
-    enqueueSingleMediaJob.run(mediaId, module, sha256);
-  }
+  // Erst die Signatur prüfen. Die Dateiendung ist keine verlässliche Aussage
+  // darüber, ob es sich wirklich um Bild oder Video handelt.
+  enqueueSingleMediaJob.run(mediaId, "file-probe-v1", sha256);
 }
 
 function enqueueAllAnalysisJobs(sourceId: number): void {
@@ -4000,7 +4074,7 @@ async function reconcileSourceChanges(
         previous.deviceId = file.deviceId;
         previous.inode = file.inode;
         previous.availability = "AVAILABLE";
-        enqueueFastAnalysisJobsForMedia(previous.id, file.extension, hash);
+        enqueueFastAnalysisJobsForMedia(previous.id, hash);
         changed += 1;
         changes.push({
           kind: "CHANGED",
@@ -4141,7 +4215,6 @@ async function reconcileSourceChanges(
       seenIds.add(insertedMedia.id);
       enqueueFastAnalysisJobsForMedia(
         insertedMedia.id,
-        insertedMedia.extension,
         insertedMedia.sha256
       );
       added += 1;
@@ -4581,7 +4654,7 @@ async function scanSource(sourceId: number): Promise<ScanResult> {
               previous.sha256 = hash;
               previous.deviceId = file.deviceId;
               previous.inode = file.inode;
-              enqueueFastAnalysisJobsForMedia(previous.id, file.extension, hash);
+              enqueueFastAnalysisJobsForMedia(previous.id, hash);
               changed += 1;
               changes.push({
                 kind: "CHANGED",
@@ -4719,7 +4792,6 @@ async function scanSource(sourceId: number): Promise<ScanResult> {
               seenIds.add(insertedMedia.id);
               enqueueFastAnalysisJobsForMedia(
                 insertedMedia.id,
-                insertedMedia.extension,
                 insertedMedia.sha256
               );
               added += 1;
