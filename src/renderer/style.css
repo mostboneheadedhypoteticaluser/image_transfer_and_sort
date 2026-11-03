@@ -2940,6 +2940,71 @@ body {
 .sidebar-status {
   margin-top: auto;
   padding: 12px 6px 0;
+  display: grid;
+  gap: 10px;
+}
+
+.background-pause-button {
+  width: 100%;
+  min-height: 58px;
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid rgba(255, 112, 105, .48);
+  border-radius: 11px;
+  background: #d72622;
+  color: #fff;
+  text-align: left;
+  box-shadow: 0 8px 18px rgba(0, 0, 0, .18);
+}
+
+.background-pause-button:hover:not(:disabled) {
+  background: #bd1f1b;
+}
+
+.background-pause-button:disabled {
+  cursor: wait;
+  opacity: .72;
+}
+
+.background-pause-button.paused {
+  border-color: rgba(114, 210, 148, .52);
+  background: #247a45;
+}
+
+.background-pause-button.paused:hover:not(:disabled) {
+  background: #1f6a3c;
+}
+
+.background-pause-icon {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 9px;
+  background: rgba(255,255,255,.16);
+  font-size: 19px;
+  font-weight: 900;
+  line-height: 1;
+}
+
+.background-pause-copy {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.background-pause-copy strong {
+  font-size: 13px;
+  line-height: 1.2;
+}
+
+.background-pause-copy small {
+  color: rgba(255,255,255,.78);
+  font-size: 10px;
+  line-height: 1.2;
 }
 
 .sidebar-status .status-pill {
