@@ -2,9 +2,12 @@ import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { utilityProcess, type UtilityProcess } from "electron";
 
+const THUMBNAIL_WORKER_COUNT = 2;
+
 type Pending = {
   resolve: (value: unknown) => void;
   reject: (reason: Error) => void;
+  worker: UtilityProcess;
 };
 
 type WorkerResponse =
@@ -27,6 +30,22 @@ type WorkerResponse =
       error: string;
     };
 
+type CropBox = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+};
+
+type ThumbnailRequest = {
+  mode: "thumbnail" | "preview" | "face-crop" | "pet-crop";
+  inputPath: string;
+  outputPath: string;
+  maxWidth: number;
+  maxHeight: number;
+  crop?: CropBox;
+};
+
 export type ThumbnailResult = {
   path: string;
   width: number;
@@ -36,8 +55,9 @@ export type ThumbnailResult = {
 };
 
 export class ThumbnailService {
-  private child: UtilityProcess | null = null;
+  private readonly children: UtilityProcess[] = [];
   private readonly pending = new Map<string, Pending>();
+  private readonly workerLoads = new Map<UtilityProcess, number>();
 
   constructor(
     private readonly workerPath: string,
@@ -45,41 +65,88 @@ export class ThumbnailService {
   ) {}
 
   start(): void {
-    if (this.child) return;
+    while (this.children.length < THUMBNAIL_WORKER_COUNT) {
+      this.spawnWorker(this.children.length + 1);
+    }
+  }
 
+  private spawnWorker(index: number): void {
     const child = utilityProcess.fork(this.workerPath, [], {
-      serviceName: "Image Sortierer – Thumbnails"
+      serviceName: `Image Sortierer – Thumbnails ${index}`
     });
+
+    this.children.push(child);
+    this.workerLoads.set(child, 0);
 
     child.on("message", (message: WorkerResponse) => {
       const pending = this.pending.get(message.id);
-      if (!pending) return;
+      if (!pending || pending.worker !== child) return;
 
       this.pending.delete(message.id);
+      this.workerLoads.set(
+        child,
+        Math.max(0, (this.workerLoads.get(child) ?? 1) - 1)
+      );
 
       if (message.ok) pending.resolve(message.result);
       else pending.reject(new Error(message.error));
     });
 
     child.on("exit", (code) => {
-      // Ein absichtlich beendeter alter Worker darf einen inzwischen neu
-      // gestarteten Worker weder auf null setzen noch dessen neue Requests
-      // verwerfen.
-      if (this.child !== child) return;
+      const position = this.children.indexOf(child);
+      if (position >= 0) this.children.splice(position, 1);
+      this.workerLoads.delete(child);
 
       const error = new Error(
         `Thumbnail-Worker wurde beendet (Code ${code ?? "unbekannt"}).`
       );
 
-      for (const pending of this.pending.values()) {
+      for (const [id, pending] of [...this.pending.entries()]) {
+        if (pending.worker !== child) continue;
+        this.pending.delete(id);
         pending.reject(error);
       }
+    });
+  }
 
-      this.pending.clear();
-      this.child = null;
+  private leastBusyWorker(): UtilityProcess {
+    this.start();
+
+    const worker = this.children
+      .map((child) => ({
+        child,
+        load: this.workerLoads.get(child) ?? 0
+      }))
+      .sort((left, right) => left.load - right.load)[0]?.child;
+
+    if (!worker) {
+      throw new Error("Thumbnail-Worker konnte nicht gestartet werden.");
+    }
+
+    return worker;
+  }
+
+  private request(request: ThumbnailRequest): Promise<ThumbnailResult> {
+    const worker = this.leastBusyWorker();
+    const id = randomUUID();
+
+    const result = new Promise<ThumbnailResult>((resolve, reject) => {
+      this.pending.set(id, {
+        resolve: (value) => resolve(value as ThumbnailResult),
+        reject,
+        worker
+      });
     });
 
-    this.child = child;
+    this.workerLoads.set(worker, (this.workerLoads.get(worker) ?? 0) + 1);
+
+    worker.postMessage({
+      kind: "request",
+      id,
+      ...request
+    });
+
+    return result;
   }
 
   async generate(
@@ -88,42 +155,20 @@ export class ThumbnailService {
     maxWidth = 360,
     maxHeight = 260
   ): Promise<ThumbnailResult> {
-    if (!this.child) this.start();
-
-    const child = this.child;
-    if (!child) throw new Error("Thumbnail-Worker konnte nicht gestartet werden.");
-
-    const safeHash = sha256.toLowerCase().replace(/[^a-f0-9]/g, "");
-    if (safeHash.length < 16) {
-      throw new Error("Ungültiger SHA-256 für Thumbnail-Cache.");
-    }
-
+    const safeHash = this.safeHash(sha256, "Thumbnail");
     const outputPath = path.join(
       this.cacheRoot,
       safeHash.slice(0, 2),
       `${safeHash}.jpg`
     );
 
-    const id = randomUUID();
-
-    const result = new Promise<ThumbnailResult>((resolve, reject) => {
-      this.pending.set(id, {
-        resolve: (value) => resolve(value as ThumbnailResult),
-        reject
-      });
-    });
-
-    child.postMessage({
-      kind: "request",
-      id,
+    return this.request({
       mode: "thumbnail",
       inputPath,
       outputPath,
       maxWidth,
       maxHeight
     });
-
-    return result;
   }
 
   async generatePreview(
@@ -132,16 +177,7 @@ export class ThumbnailService {
     maxWidth = 1920,
     maxHeight = 1440
   ): Promise<ThumbnailResult> {
-    if (!this.child) this.start();
-
-    const child = this.child;
-    if (!child) throw new Error("Thumbnail-Worker konnte nicht gestartet werden.");
-
-    const safeHash = sha256.toLowerCase().replace(/[^a-f0-9]/g, "");
-    if (safeHash.length < 16) {
-      throw new Error("Ungültiger SHA-256 für Vorschau-Cache.");
-    }
-
+    const safeHash = this.safeHash(sha256, "Vorschau");
     const outputPath = path.join(
       this.cacheRoot,
       "previews",
@@ -149,45 +185,23 @@ export class ThumbnailService {
       `${safeHash}.jpg`
     );
 
-    const id = randomUUID();
-
-    const result = new Promise<ThumbnailResult>((resolve, reject) => {
-      this.pending.set(id, {
-        resolve: (value) => resolve(value as ThumbnailResult),
-        reject
-      });
-    });
-
-    child.postMessage({
-      kind: "request",
-      id,
+    return this.request({
       mode: "preview",
       inputPath,
       outputPath,
       maxWidth,
       maxHeight
     });
-
-    return result;
   }
 
   async generatePetCrop(
     inputPath: string,
     sha256: string,
     petDetectionId: number,
-    box: { x: number; y: number; width: number; height: number },
+    box: CropBox,
     size = 200
   ): Promise<ThumbnailResult> {
-    if (!this.child) this.start();
-
-    const child = this.child;
-    if (!child) throw new Error("Thumbnail-Worker konnte nicht gestartet werden.");
-
-    const safeHash = sha256.toLowerCase().replace(/[^a-f0-9]/g, "");
-    if (safeHash.length < 16) {
-      throw new Error("Ungültiger SHA-256 für Haustier-Crop-Cache.");
-    }
-
+    const safeHash = this.safeHash(sha256, "Haustier-Crop");
     const cropKey = [
       petDetectionId,
       Math.round(box.x),
@@ -203,18 +217,7 @@ export class ThumbnailService {
       `${safeHash}-${cropKey}.jpg`
     );
 
-    const id = randomUUID();
-
-    const result = new Promise<ThumbnailResult>((resolve, reject) => {
-      this.pending.set(id, {
-        resolve: (value) => resolve(value as ThumbnailResult),
-        reject
-      });
-    });
-
-    child.postMessage({
-      kind: "request",
-      id,
+    return this.request({
       mode: "pet-crop",
       inputPath,
       outputPath,
@@ -222,27 +225,16 @@ export class ThumbnailService {
       maxHeight: size,
       crop: box
     });
-
-    return result;
   }
 
   async generateFaceCrop(
     inputPath: string,
     sha256: string,
     faceDetectionId: number,
-    box: { x: number; y: number; width: number; height: number },
+    box: CropBox,
     size = 180
   ): Promise<ThumbnailResult> {
-    if (!this.child) this.start();
-
-    const child = this.child;
-    if (!child) throw new Error("Thumbnail-Worker konnte nicht gestartet werden.");
-
-    const safeHash = sha256.toLowerCase().replace(/[^a-f0-9]/g, "");
-    if (safeHash.length < 16) {
-      throw new Error("Ungültiger SHA-256 für Face-Crop-Cache.");
-    }
-
+    const safeHash = this.safeHash(sha256, "Face-Crop");
     const cropKey = [
       faceDetectionId,
       Math.round(box.x),
@@ -258,18 +250,7 @@ export class ThumbnailService {
       `${safeHash}-${cropKey}.jpg`
     );
 
-    const id = randomUUID();
-
-    const result = new Promise<ThumbnailResult>((resolve, reject) => {
-      this.pending.set(id, {
-        resolve: (value) => resolve(value as ThumbnailResult),
-        reject
-      });
-    });
-
-    child.postMessage({
-      kind: "request",
-      id,
+    return this.request({
       mode: "face-crop",
       inputPath,
       outputPath,
@@ -277,17 +258,20 @@ export class ThumbnailService {
       maxHeight: size,
       crop: box
     });
+  }
 
-    return result;
+  private safeHash(sha256: string, label: string): string {
+    const safeHash = sha256.toLowerCase().replace(/[^a-f0-9]/g, "");
+    if (safeHash.length < 16) {
+      throw new Error(`Ungültiger SHA-256 für ${label}-Cache.`);
+    }
+    return safeHash;
   }
 
   stop(): void {
-    const child = this.child;
-    if (!child) return;
-
-    // Zuerst logisch vom alten Worker trennen. Dadurch kann dessen späteres
-    // exit-Ereignis einen neu gestarteten Worker nicht mehr beeinflussen.
-    this.child = null;
+    const children = [...this.children];
+    this.children.length = 0;
+    this.workerLoads.clear();
 
     const error = new Error("Thumbnail-Worker wurde für einen Neustart beendet.");
     for (const pending of this.pending.values()) {
@@ -295,6 +279,12 @@ export class ThumbnailService {
     }
     this.pending.clear();
 
-    child.kill();
+    for (const child of children) {
+      try {
+        child.kill();
+      } catch {
+        // Worker ist bereits beendet.
+      }
+    }
   }
 }
