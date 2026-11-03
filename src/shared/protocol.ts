@@ -325,6 +325,7 @@ export type MediaDetails = {
   } | null;
   analysisJobs: MediaDetailAnalysisJob[];
   videoAnalysis: VideoAnalysisDetails | null;
+  lifeAreas: MediaLifeAreaAssignment[];
 };
 
 export type PetDetectionForEmbedding = {
@@ -715,6 +716,68 @@ export type MediaRecord = {
   lastSeenAt: string;
 };
 
+
+export type LifeAreaAssignmentSource = "MANUAL" | "RULE";
+
+export type LifeAreaRuleConditionType =
+  | "person"
+  | "pet"
+  | "tag"
+  | "path"
+  | "date";
+
+export type LifeAreaRule = {
+  id: number;
+  lifeAreaId: number;
+  conditionType: LifeAreaRuleConditionType;
+  conditionValue: string | null;
+  dateFrom: string | null;
+  dateTo: string | null;
+  enabled: boolean;
+  matchedMediaCount: number;
+};
+
+export type LifeAreaRecord = {
+  id: number;
+  name: string;
+  mediaCount: number;
+  manualCount: number;
+  ruleCount: number;
+  rules: LifeAreaRule[];
+};
+
+export type LifeAreaMediaItem = {
+  mediaId: number;
+  sourceId: number;
+  relativePath: string;
+  extension: string;
+  capturedAt: string | null;
+  mtimeMs: number;
+  thumbnailVersion: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  assignmentSource: LifeAreaAssignmentSource;
+  ruleId: number | null;
+  ruleLabel: string | null;
+};
+
+export type MediaLifeAreaAssignment = {
+  lifeAreaId: number;
+  name: string;
+  assignmentSource: LifeAreaAssignmentSource;
+  ruleId: number | null;
+  ruleLabel: string | null;
+};
+
+export type ApplyLifeAreaRulesResult = {
+  assigned: number;
+  areas: number;
+};
+
+export type LifeAreaMutationResult = {
+  changed: true;
+};
+
 export type SearchFilter = {
   personIds: number[];
   petIds: number[];
@@ -840,6 +903,16 @@ export type CatalogMethod =
   | "getStats"
   | "listMedia"
   | "listGeoMedia"
+  | "listLifeAreas"
+  | "createLifeArea"
+  | "renameLifeArea"
+  | "deleteLifeArea"
+  | "addLifeAreaRule"
+  | "deleteLifeAreaRule"
+  | "setLifeAreaRuleEnabled"
+  | "applyLifeAreaRules"
+  | "listLifeAreaMedia"
+  | "setMediaLifeArea"
   | "getSearchFacets"
   | "searchMedia"
   | "listDuplicateGroups"
