@@ -28,9 +28,12 @@ type SourceWatch = {
 // Eine Datei muss nur selbst kurz ruhig sein. Andere Dateien im selben
 // Import dürfen währenddessen bereits in den Katalog weiterlaufen.
 const WATCH_SETTLE_MS = 650;
-const WATCH_FLUSH_MAX_PATHS = 128;
+// Große Importwellen sollen in möglichst wenigen Katalogabgleichen landen.
+// Die einzelnen Pfade bleiben trotzdem dedupliziert und pro Datei 650 ms ruhig.
+const WATCH_FLUSH_MAX_PATHS = 512;
 const WATCH_RETRY_MS = 5000;
 const SAFETY_SCAN_MS = 15 * 60 * 1000;
+const SAFETY_IDLE_RETRY_MS = 15000;
 const HISTORY_LIMIT = 50;
 
 export class CatalogWatchService {
@@ -54,6 +57,7 @@ export class CatalogWatchService {
   >();
   private processingScans = false;
   private safetyTimer: NodeJS.Timeout | null = null;
+  private initialSafetyTimer: NodeJS.Timeout | null = null;
   private stopped = true;
   private userPaused = false;
 
@@ -79,13 +83,10 @@ export class CatalogWatchService {
     }
 
     if (runInitialSafetyScan) {
-      // Der vorhandene SQLite-Katalog soll beim Programmstart sofort
-      // sichtbar sein. Ein Vollscan direkt nach 1,2 s blockiert sonst den
-      // seriellen Katalog-Worker und verzögert listSources/getStats/listMedia.
-      // Live-Watching startet sofort; der Sicherheits-Vollscan folgt später.
-      setTimeout(() => {
-        if (!this.stopped) void this.runSafetySweep("Programmstart");
-      }, 30000).unref();
+      // Der Sicherheits-Vollscan darf nicht mitten in einen laufenden Live-
+      // Import grätschen. Er wird nach 30 s versucht und bei Aktivität bis zur
+      // nächsten ruhigen Phase verschoben.
+      this.scheduleInitialSafetySweep(30000);
     }
   }
 
@@ -95,6 +96,10 @@ export class CatalogWatchService {
     if (this.safetyTimer) {
       clearInterval(this.safetyTimer);
       this.safetyTimer = null;
+    }
+    if (this.initialSafetyTimer) {
+      clearTimeout(this.initialSafetyTimer);
+      this.initialSafetyTimer = null;
     }
 
     for (const source of this.sources.values()) {
@@ -595,9 +600,12 @@ export class CatalogWatchService {
       source.lastScanAt = finishedAt;
       source.scanning = false;
 
-      // resolveSourceRoot kann einen umbenannten Quellordner übernommen haben.
-      // Erst den Watcher auf den neuen Pfad setzen, dann das Ergebnis melden.
-      await this.syncSources();
+      // Ein vollständiger Scan kann einen umbenannten Quellordner übernehmen.
+      // Bei normalen inkrementellen Dateiänderungen ist ein erneutes
+      // listSources()/Watcher-Sync dagegen unnötige Kataloglast.
+      if (full || result.moved > 0) {
+        await this.syncSources();
+      }
       const currentSource = this.sources.get(sourceId) ?? source;
       currentSource.lastScanAt = finishedAt;
       currentSource.scanning = false;
@@ -657,8 +665,46 @@ export class CatalogWatchService {
     }
   }
 
+  private hasLiveActivity(): boolean {
+    if (this.processingScans || this.pendingScans.size > 0) return true;
+    for (const source of this.sources.values()) {
+      if (
+        source.scanning ||
+        source.pendingPaths.size > 0 ||
+        source.debounceTimer !== null
+      ) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private scheduleInitialSafetySweep(delayMs: number): void {
+    if (this.initialSafetyTimer) {
+      clearTimeout(this.initialSafetyTimer);
+    }
+
+    this.initialSafetyTimer = setTimeout(() => {
+      this.initialSafetyTimer = null;
+      if (this.stopped) return;
+
+      if (this.hasLiveActivity()) {
+        this.scheduleInitialSafetySweep(SAFETY_IDLE_RETRY_MS);
+        return;
+      }
+
+      void this.runSafetySweep("Programmstart");
+    }, delayMs);
+    this.initialSafetyTimer.unref();
+  }
+
   private async runSafetySweep(trigger: string): Promise<void> {
     if (this.stopped) return;
+
+    // Periodische Vollscans sind reine Sicherheitsnetze. Während gerade
+    // Live-Events verarbeitet werden, würden sie nur denselben Katalog-Worker
+    // zusätzlich blockieren. Der Live-Watcher hat dann Vorrang.
+    if (this.hasLiveActivity()) return;
 
     try {
       await this.syncSources();
