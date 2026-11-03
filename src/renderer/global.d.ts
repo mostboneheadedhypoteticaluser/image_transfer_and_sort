@@ -68,6 +68,7 @@ declare global {
           path: string;
           characters: number;
         }>;
+        clearDevLog(): Promise<{ cleared: true; path: string }>;
         getAutomaticQwenState(): Promise<{ enabled: boolean }>;
         startAutomaticQwen(): Promise<{ enabled: true }>;
         prepareQwenBenchmark(): Promise<{ paused: true }>;
