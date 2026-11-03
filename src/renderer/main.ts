@@ -3318,11 +3318,11 @@ function renderPersonOverview(overview: PersonOverview): void {
         hiddenNote.textContent =
           "Es werden " + candidate.faces.length + " von " +
           candidate.faceCount + " Fundstellen angezeigt.";
-        body.append(heading, selectionPanel);
+        body.append(heading);
         if (similarityMatches) body.appendChild(similarityMatches);
         body.append(hiddenNote, confirmRow);
       } else {
-        body.append(heading, selectionPanel);
+        body.append(heading);
         if (similarityMatches) body.appendChild(similarityMatches);
         body.append(confirmRow);
       }
@@ -4110,11 +4110,11 @@ function renderPetOverview(overview: PetOverview): void {
         hiddenNote.textContent =
           "Es werden " + candidate.pets.length + " von " +
           candidate.detectionCount + " Fundstellen angezeigt.";
-        body.append(heading);
+        body.append(heading, selectionPanel);
         if (similarityMatches) body.appendChild(similarityMatches);
         body.append(hiddenNote, confirmRow);
       } else {
-        body.append(heading);
+        body.append(heading, selectionPanel);
         if (similarityMatches) body.appendChild(similarityMatches);
         body.append(confirmRow);
       }
