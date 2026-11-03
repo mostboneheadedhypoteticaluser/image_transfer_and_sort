@@ -1657,6 +1657,46 @@ function renderImagePreviewDetails(details: MediaDetails): void {
   ];
   appendDetailSection("Datei", detailGrid(fileRows));
 
+  const lifeAreaBody = document.createElement("div");
+  lifeAreaBody.className = "media-life-area-editor";
+  if (details.lifeAreas.length === 0) {
+    const empty = document.createElement("span");
+    empty.className = "image-preview-detail-empty";
+    empty.textContent = "Noch keinem Lebensbereich zugeordnet.";
+    lifeAreaBody.appendChild(empty);
+  } else {
+    for (const assignment of details.lifeAreas) {
+      const row = document.createElement("div");
+      row.className = "media-life-area-option";
+      const marker = document.createElement("span");
+      marker.textContent = "◆";
+      const text = document.createElement("span");
+      const title = document.createElement("strong");
+      title.textContent = assignment.name;
+      const meta = document.createElement("small");
+      meta.textContent =
+        assignment.assignmentSource === "MANUAL"
+          ? "Manuell"
+          : "Automatisch · " +
+            (assignment.ruleLabel ?? "Wenn-dann-Regel");
+      text.append(title, meta);
+      row.append(marker, text);
+      lifeAreaBody.appendChild(row);
+    }
+  }
+
+  const editLifeAreas = document.createElement("button");
+  editLifeAreas.type = "button";
+  editLifeAreas.className = "secondary";
+  editLifeAreas.textContent = "Lebensbereiche bearbeiten";
+  editLifeAreas.addEventListener("click", () => {
+    void runSafely(() =>
+      openLifeAreaAssignment(details.mediaId, details.relativePath)
+    );
+  });
+  lifeAreaBody.appendChild(editLifeAreas);
+  appendDetailSection("Lebensbereiche", lifeAreaBody);
+
   const technicalRows: Array<[string, unknown]> = [];
   if (details.technicalProbe) {
     const probeLabels: Record<string, string> = {
@@ -1961,6 +2001,104 @@ async function loadImagePreviewDetails(mediaId: number): Promise<void> {
       "Detaildaten konnten nicht geladen werden: " +
       (error instanceof Error ? error.message : String(error));
     imagePreviewDetails.appendChild(message);
+  }
+}
+
+async function openLifeAreaAssignment(
+  mediaId: number,
+  relativePath: string
+): Promise<void> {
+  lifeAreaAssignPath.textContent = relativePath;
+  lifeAreaAssignPath.title = relativePath;
+  lifeAreaAssignList.replaceChildren();
+
+  const loading = document.createElement("div");
+  loading.className = "image-preview-detail-loading";
+  loading.textContent = "Lebensbereiche werden geladen …";
+  lifeAreaAssignList.appendChild(loading);
+
+  if (!lifeAreaAssignDialog.open) {
+    lifeAreaAssignDialog.showModal();
+  }
+
+  const [lifeAreas, details] = await Promise.all([
+    window.imageSorter.catalog.listLifeAreas(),
+    window.imageSorter.catalog.getMediaDetails(mediaId)
+  ]);
+
+  if (!lifeAreaAssignDialog.open) return;
+  lifeAreaAssignList.replaceChildren();
+
+  if (lifeAreas.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "image-preview-detail-empty";
+    empty.textContent =
+      "Noch keine Lebensbereiche vorhanden. Lege sie links unter „Lebensbereiche“ an.";
+    lifeAreaAssignList.appendChild(empty);
+    return;
+  }
+
+  const assigned = new Map(
+    (details?.lifeAreas ?? []).map((item) => [item.lifeAreaId, item])
+  );
+
+  for (const area of lifeAreas) {
+    const label = document.createElement("label");
+    label.className = "media-life-area-option";
+
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.checked = assigned.has(area.id);
+
+    const text = document.createElement("span");
+    const title = document.createElement("strong");
+    title.textContent = area.name;
+
+    const meta = document.createElement("small");
+    const current = assigned.get(area.id);
+    meta.textContent = current
+      ? current.assignmentSource === "MANUAL"
+        ? "Manuell zugewiesen"
+        : "Automatisch · " + (current.ruleLabel ?? "Wenn-dann-Regel")
+      : area.mediaCount.toLocaleString("de-DE") +
+        (area.mediaCount === 1 ? " Medium im Bereich" : " Medien im Bereich");
+
+    text.append(title, meta);
+    label.append(checkbox, text);
+
+    checkbox.addEventListener("change", () => {
+      void runSafely(async () => {
+        checkbox.disabled = true;
+        try {
+          await window.imageSorter.catalog.setMediaLifeArea(
+            mediaId,
+            area.id,
+            checkbox.checked
+          );
+          invalidateLifeAreas();
+
+          const refreshed = await window.imageSorter.catalog.getMediaDetails(mediaId);
+          const assignment = refreshed?.lifeAreas.find(
+            (item) => item.lifeAreaId === area.id
+          );
+          meta.textContent = assignment
+            ? assignment.assignmentSource === "MANUAL"
+              ? "Manuell zugewiesen"
+              : "Automatisch · " + (assignment.ruleLabel ?? "Wenn-dann-Regel")
+            : checkbox.checked
+              ? "Manuell zugewiesen"
+              : "Manuell ausgeschlossen";
+
+          if (imagePreviewDialog.open) {
+            await loadImagePreviewDetails(mediaId);
+          }
+        } finally {
+          checkbox.disabled = false;
+        }
+      });
+    });
+
+    lifeAreaAssignList.appendChild(label);
   }
 }
 
