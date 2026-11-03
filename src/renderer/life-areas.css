@@ -160,7 +160,7 @@
 
 .life-area-rule-builder {
   display: grid;
-  grid-template-columns: minmax(150px, .8fr) minmax(180px, 1.2fr) minmax(240px, 1.2fr) minmax(150px, .8fr) auto;
+  grid-template-columns: minmax(140px, .8fr) minmax(180px, 1.1fr) minmax(220px, 1.1fr) minmax(190px, 1fr) minmax(150px, .8fr) auto;
   gap: 10px;
   align-items: end;
   margin-top: 16px;
@@ -484,5 +484,164 @@
 
   .life-area-filter-group {
     flex-wrap: wrap;
+  }
+}
+
+
+.life-area-rule-group {
+  overflow: hidden;
+  border: 1px solid #dce2e7;
+  border-radius: 11px;
+  background: #fff;
+}
+
+.life-area-rule-group-header {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  padding: 10px 12px;
+  background: #f7f9fa;
+  border-bottom: 1px solid #e2e7eb;
+}
+
+.life-area-rule-group-header strong,
+.life-area-rule-group-header small {
+  display: block;
+}
+
+.life-area-rule-group-header small {
+  margin-top: 2px;
+  color: #6f7882;
+  font-size: 10px;
+}
+
+.life-area-rule-conditions {
+  display: grid;
+}
+
+.life-area-rule-condition {
+  display: grid;
+  grid-template-columns: 52px minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  min-height: 44px;
+  padding: 8px 12px;
+  border-bottom: 1px solid #edf0f2;
+}
+
+.life-area-rule-condition:last-child {
+  border-bottom: 0;
+}
+
+.life-area-rule-condition-operator {
+  display: inline-grid;
+  place-items: center;
+  min-height: 25px;
+  border-radius: 999px;
+  background: #eef1f4;
+  color: #606a74;
+  font-size: 9px;
+  font-weight: 900;
+  letter-spacing: .04em;
+}
+
+.life-area-rule-condition strong {
+  min-width: 0;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.life-area-rule-group-result {
+  padding: 9px 12px;
+  border-top: 1px solid #e4e9ec;
+  background: #fff8f7;
+  color: #a61d1a;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.life-area-rule-or {
+  display: grid;
+  place-items: center;
+  min-height: 25px;
+  color: #7b858f;
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: .08em;
+}
+
+.life-area-create-dialog {
+  width: min(520px, calc(100vw - 36px));
+}
+
+.life-area-create-body {
+  display: grid;
+  gap: 14px;
+  padding: 18px;
+}
+
+.life-area-create-body label {
+  display: grid;
+  gap: 6px;
+}
+
+.life-area-create-body label > span {
+  color: #626d77;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.life-area-create-body input {
+  height: 42px;
+  padding: 0 12px;
+  border: 1px solid #d5dbe0;
+  border-radius: 9px;
+  background: #fff;
+  color: #25303a;
+  font: inherit;
+}
+
+.life-area-create-error {
+  margin: 0;
+  padding: 9px 10px;
+  border-radius: 8px;
+  background: #fff0ef;
+  color: #a51e1b;
+  font-size: 11px;
+}
+
+.life-area-create-body .dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+@media (max-width: 1450px) {
+  .life-area-rule-builder {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .life-area-rule-builder > button {
+    grid-column: auto;
+  }
+}
+
+@media (max-width: 900px) {
+  .life-area-rule-group-header {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .life-area-rule-group-header > button {
+    grid-column: 1 / -1;
+  }
+
+  .life-area-rule-condition {
+    grid-template-columns: 48px minmax(0, 1fr);
+  }
+
+  .life-area-rule-condition > button {
+    grid-column: 1 / -1;
+    justify-self: end;
   }
 }
