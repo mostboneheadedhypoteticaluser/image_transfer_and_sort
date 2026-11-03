@@ -58,10 +58,15 @@ export class ThumbnailService {
   private readonly children: UtilityProcess[] = [];
   private readonly pending = new Map<string, Pending>();
   private readonly workerLoads = new Map<UtilityProcess, number>();
+  private readonly inFlightOutputs = new Map<string, Promise<ThumbnailResult>>();
 
   constructor(
     private readonly workerPath: string,
-    private readonly cacheRoot: string
+    private readonly cacheRoot: string,
+    private readonly onDiagnostic?: (
+      event: string,
+      fields?: Record<string, unknown>
+    ) => void
   ) {}
 
   start(): void {
@@ -77,6 +82,7 @@ export class ThumbnailService {
 
     this.children.push(child);
     this.workerLoads.set(child, 0);
+    this.onDiagnostic?.("THUMBNAIL_WORKER_STARTED", { index });
 
     child.on("message", (message: WorkerResponse) => {
       const pending = this.pending.get(message.id);
@@ -88,8 +94,14 @@ export class ThumbnailService {
         Math.max(0, (this.workerLoads.get(child) ?? 1) - 1)
       );
 
-      if (message.ok) pending.resolve(message.result);
-      else pending.reject(new Error(message.error));
+      if (message.ok) {
+        pending.resolve(message.result);
+      } else {
+        this.onDiagnostic?.("THUMBNAIL_WORKER_ERROR", {
+          error: message.error
+        });
+        pending.reject(new Error(message.error));
+      }
     });
 
     child.on("exit", (code) => {
@@ -100,6 +112,12 @@ export class ThumbnailService {
       const error = new Error(
         `Thumbnail-Worker wurde beendet (Code ${code ?? "unbekannt"}).`
       );
+      this.onDiagnostic?.("THUMBNAIL_WORKER_EXIT", {
+        code: code ?? null,
+        pending: [...this.pending.values()].filter(
+          (pending) => pending.worker === child
+        ).length
+      });
 
       for (const [id, pending] of [...this.pending.entries()]) {
         if (pending.worker !== child) continue;
@@ -127,6 +145,17 @@ export class ThumbnailService {
   }
 
   private request(request: ThumbnailRequest): Promise<ThumbnailResult> {
+    // Der Cache ist SHA-basiert. Zwei Medien mit identischem Inhalt können
+    // deshalb exakt denselben outputPath besitzen. Mit mehreren Workern darf
+    // niemals gleichzeitig in dieselbe Datei geschrieben werden.
+    const existing = this.inFlightOutputs.get(request.outputPath);
+    if (existing) {
+      this.onDiagnostic?.("THUMBNAIL_OUTPUT_REUSED_IN_FLIGHT", {
+        outputPath: request.outputPath
+      });
+      return existing;
+    }
+
     const worker = this.leastBusyWorker();
     const id = randomUUID();
 
@@ -138,7 +167,21 @@ export class ThumbnailService {
       });
     });
 
+    this.inFlightOutputs.set(request.outputPath, result);
+    const cleanup = () => {
+      if (this.inFlightOutputs.get(request.outputPath) === result) {
+        this.inFlightOutputs.delete(request.outputPath);
+      }
+    };
+    void result.then(cleanup, cleanup);
+
     this.workerLoads.set(worker, (this.workerLoads.get(worker) ?? 0) + 1);
+
+    this.onDiagnostic?.("THUMBNAIL_REQUEST_BEGIN", {
+      inputPath: request.inputPath,
+      outputPath: request.outputPath,
+      mode: request.mode
+    });
 
     worker.postMessage({
       kind: "request",
@@ -272,6 +315,7 @@ export class ThumbnailService {
     const children = [...this.children];
     this.children.length = 0;
     this.workerLoads.clear();
+    this.inFlightOutputs.clear();
 
     const error = new Error("Thumbnail-Worker wurde für einen Neustart beendet.");
     for (const pending of this.pending.values()) {
