@@ -638,6 +638,49 @@ db.exec(`
     hit_count INTEGER NOT NULL,
     PRIMARY KEY(media_id, label)
   );
+
+  CREATE TABLE IF NOT EXISTS life_areas (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL COLLATE NOCASE UNIQUE,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE TABLE IF NOT EXISTS life_area_rules (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    life_area_id INTEGER NOT NULL REFERENCES life_areas(id) ON DELETE CASCADE,
+    condition_type TEXT NOT NULL CHECK(condition_type IN ('person','pet','tag','path','date')),
+    condition_value TEXT,
+    date_from TEXT,
+    date_to TEXT,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_life_area_rules_area
+    ON life_area_rules(life_area_id, enabled);
+
+  CREATE TABLE IF NOT EXISTS media_life_areas (
+    media_id INTEGER NOT NULL REFERENCES media_items(id) ON DELETE CASCADE,
+    life_area_id INTEGER NOT NULL REFERENCES life_areas(id) ON DELETE CASCADE,
+    assignment_source TEXT NOT NULL CHECK(assignment_source IN ('MANUAL','RULE')),
+    rule_id INTEGER REFERENCES life_area_rules(id) ON DELETE SET NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY(media_id, life_area_id)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_media_life_areas_area
+    ON media_life_areas(life_area_id, assignment_source);
+
+  CREATE TABLE IF NOT EXISTS life_area_exclusions (
+    media_id INTEGER NOT NULL REFERENCES media_items(id) ON DELETE CASCADE,
+    life_area_id INTEGER NOT NULL REFERENCES life_areas(id) ON DELETE CASCADE,
+    reason TEXT NOT NULL DEFAULT 'MANUAL_REMOVE',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY(media_id, life_area_id)
+  );
 `);
 
 db.exec(`
