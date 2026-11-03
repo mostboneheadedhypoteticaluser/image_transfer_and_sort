@@ -8,7 +8,7 @@ import {
   type DiscoveredDirectory,
   type DiscoveredFile
 } from "../../catalog/file-scanner";
-import { IMAGE_EXTENSIONS, MEDIA_EXTENSIONS } from "../../catalog/constants";
+import { IMAGE_EXTENSIONS, MEDIA_EXTENSIONS, VIDEO_EXTENSIONS } from "../../catalog/constants";
 import { sha256File } from "../../catalog/hash";
 import {
   findRenamedSibling,
@@ -599,6 +599,46 @@ ensureColumn("analysis_jobs", "result_json", "TEXT");
 ensureColumn("analysis_jobs", "error_message", "TEXT");
 ensureColumn("analysis_jobs", "started_at", "TEXT");
 ensureColumn("analysis_jobs", "finished_at", "TEXT");
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS media_video_analysis (
+    media_id INTEGER PRIMARY KEY REFERENCES media_items(id) ON DELETE CASCADE,
+    input_sha256 TEXT NOT NULL,
+    duration_ms INTEGER NOT NULL,
+    width INTEGER NOT NULL,
+    height INTEGER NOT NULL,
+    fps REAL NOT NULL,
+    sample_interval_ms INTEGER NOT NULL,
+    sampled_frames INTEGER NOT NULL,
+    scene_count INTEGER NOT NULL,
+    frames_json TEXT NOT NULL DEFAULT '[]',
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE TABLE IF NOT EXISTS video_identity_tracks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    media_id INTEGER NOT NULL REFERENCES media_items(id) ON DELETE CASCADE,
+    identity_kind TEXT NOT NULL CHECK(identity_kind IN ('person','pet')),
+    identity_id INTEGER,
+    pet_class TEXT,
+    start_ms INTEGER NOT NULL,
+    end_ms INTEGER NOT NULL,
+    hit_count INTEGER NOT NULL,
+    max_similarity REAL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_video_identity_media ON video_identity_tracks(media_id);
+  CREATE INDEX IF NOT EXISTS idx_video_identity_lookup ON video_identity_tracks(identity_kind, identity_id);
+
+  CREATE TABLE IF NOT EXISTS video_tags (
+    media_id INTEGER NOT NULL REFERENCES media_items(id) ON DELETE CASCADE,
+    label TEXT NOT NULL,
+    score REAL NOT NULL,
+    hit_count INTEGER NOT NULL,
+    PRIMARY KEY(media_id, label)
+  );
+`);
 
 db.exec(`
   CREATE INDEX IF NOT EXISTS idx_media_recycle
@@ -2834,10 +2874,14 @@ function enqueueAnalysisJobs(sourceId: number, module = "file-probe-v1") {
     "catalog-semantic-qwen3vl4b-v3",
     "semantic-embed-siglip2-v1"
   ]);
+  const videoExtensions = [...VIDEO_EXTENSIONS];
+  const videoOnlyModules = new Set(["video-analyze-v1"]);
   const imageFilter =
     imageOnlyModules.has(module)
       ? ` AND m.extension IN (${imageExtensions.map(() => "?").join(",")})`
-      : "";
+      : videoOnlyModules.has(module)
+        ? ` AND m.extension IN (${videoExtensions.map(() => "?").join(",")})`
+        : "";
 
   const statement = db.prepare(`
     INSERT INTO analysis_jobs(
@@ -2895,6 +2939,7 @@ function enqueueAnalysisJobs(sourceId: number, module = "file-probe-v1") {
 
   const args: (string | number)[] = [module, sourceId];
   if (imageOnlyModules.has(module)) args.push(...imageExtensions);
+  if (videoOnlyModules.has(module)) args.push(...videoExtensions);
 
   const result = statement.run(...args);
 
@@ -6390,6 +6435,281 @@ function ignoredIdentityRevision(kind: "person" | "pet"): string {
   return `${Number(row?.reference_count ?? 0)}:${String(row?.updated_at ?? "")}`;
 }
 
+
+function completeVideoAnalysisJob(jobId: number, result: unknown) {
+  if (!result || typeof result !== "object") {
+    throw new Error("Videoanalyse-Ergebnis ist ungültig.");
+  }
+
+  const value = result as Record<string, unknown>;
+  const job = jobForModule(jobId, "video-analyze-v1");
+  const mediaId = Number(job.media_id);
+  const inputSha256 = String(job.input_sha256 ?? "");
+  const media = db.prepare(
+    "SELECT source_id, sha256 FROM media_items WHERE id=?"
+  ).get(mediaId);
+
+  if (!media || String(media.sha256) !== inputSha256) {
+    throw new Error("Video wurde während der Analyse geändert.");
+  }
+
+  const sourceId = Number(media.source_id);
+  const durationMs = Math.max(0, Math.trunc(Number(value.durationMs) || 0));
+  const width = Math.max(0, Math.trunc(Number(value.width) || 0));
+  const height = Math.max(0, Math.trunc(Number(value.height) || 0));
+  const fps = Math.max(0, Number(value.fps) || 0);
+  const sampleIntervalMs = Math.max(
+    250,
+    Math.trunc(Number(value.sampleIntervalMs) || 1000)
+  );
+  const rawFrames = Array.isArray(value.frames) ? value.frames : [];
+  const rawTags = Array.isArray(value.tags) ? value.tags : [];
+  const knownPersons = knownPersonCentroids();
+  const knownPets = knownPetCentroids();
+
+  type FrameMatch = {
+    timestampMs: number;
+    sceneChange: boolean;
+    persons: Array<{ id: number; name: string; similarity: number }>;
+    pets: Array<{ id: number; name: string; petClass: string; similarity: number }>;
+    objects: string[];
+  };
+
+  const compactFrames: FrameMatch[] = [];
+
+  for (const rawFrame of rawFrames) {
+    if (!rawFrame || typeof rawFrame !== "object") continue;
+    const frame = rawFrame as Record<string, unknown>;
+    const timestampMs = Math.max(
+      0,
+      Math.min(durationMs, Math.trunc(Number(frame.timestampMs) || 0))
+    );
+
+    const persons: FrameMatch["persons"] = [];
+    for (const rawFace of Array.isArray(frame.faces) ? frame.faces : []) {
+      if (!rawFace || typeof rawFace !== "object") continue;
+      const vectorRaw = (rawFace as Record<string, unknown>).vector;
+      if (!Array.isArray(vectorRaw) || vectorRaw.length === 0) continue;
+      const vector = vectorRaw.map(Number);
+      if (vector.some((entry) => !Number.isFinite(entry))) continue;
+
+      const matches = knownPersons
+        .map((known) => ({
+          known,
+          similarity: cosineSimilarity(vector, known.vector)
+        }))
+        .sort((left, right) => right.similarity - left.similarity);
+
+      const best = matches[0];
+      const second = matches[1]?.similarity ?? -1;
+      if (best && best.similarity >= 0.60 && best.similarity - second >= 0.025) {
+        persons.push({
+          id: best.known.id,
+          name: best.known.name,
+          similarity: best.similarity
+        });
+      }
+    }
+
+    const pets: FrameMatch["pets"] = [];
+    for (const rawPet of Array.isArray(frame.pets) ? frame.pets : []) {
+      if (!rawPet || typeof rawPet !== "object") continue;
+      const pet = rawPet as Record<string, unknown>;
+      const petClass = String(pet.petClass ?? "");
+      const vectorRaw = pet.vector;
+      if (petClass !== "dog" || !Array.isArray(vectorRaw) || vectorRaw.length === 0) {
+        continue;
+      }
+      const vector = vectorRaw.map(Number);
+      if (vector.some((entry) => !Number.isFinite(entry))) continue;
+
+      const matches = knownPets
+        .filter((known) => known.petClass === petClass)
+        .map((known) => ({
+          known,
+          similarity: cosineSimilarity(vector, known.vector)
+        }))
+        .sort((left, right) => right.similarity - left.similarity);
+
+      const best = matches[0];
+      const second = matches[1]?.similarity ?? -1;
+      if (best && best.similarity >= 0.72 && best.similarity - second >= 0.04) {
+        pets.push({
+          id: best.known.id,
+          name: best.known.name,
+          petClass,
+          similarity: best.similarity
+        });
+      }
+    }
+
+    const objects = [
+      ...new Set(
+        (Array.isArray(frame.objects) ? frame.objects : [])
+          .map((entry) =>
+            entry && typeof entry === "object"
+              ? String((entry as Record<string, unknown>).label ?? "").trim()
+              : ""
+          )
+          .filter(Boolean)
+      )
+    ];
+
+    compactFrames.push({
+      timestampMs,
+      sceneChange: Boolean(frame.sceneChange),
+      persons: [...new Map(persons.map((entry) => [entry.id, entry])).values()],
+      pets: [...new Map(pets.map((entry) => [entry.id, entry])).values()],
+      objects
+    });
+  }
+
+  compactFrames.sort((left, right) => left.timestampMs - right.timestampMs);
+
+  type OpenTrack = {
+    kind: "person" | "pet";
+    identityId: number;
+    petClass: string | null;
+    startMs: number;
+    endMs: number;
+    hitCount: number;
+    maxSimilarity: number;
+    lastSeenMs: number;
+  };
+
+  const finishedTracks: OpenTrack[] = [];
+  const activeTracks = new Map<string, OpenTrack>();
+  const allowedGap = Math.max(2500, sampleIntervalMs * 3);
+
+  const touchTrack = (
+    kind: "person" | "pet",
+    identityId: number,
+    petClass: string | null,
+    timestampMs: number,
+    similarity: number
+  ) => {
+    const key = kind + ":" + identityId;
+    const existing = activeTracks.get(key);
+
+    if (existing && timestampMs - existing.lastSeenMs <= allowedGap) {
+      existing.endMs = Math.min(durationMs, timestampMs + sampleIntervalMs);
+      existing.hitCount += 1;
+      existing.maxSimilarity = Math.max(existing.maxSimilarity, similarity);
+      existing.lastSeenMs = timestampMs;
+      return;
+    }
+
+    if (existing) finishedTracks.push(existing);
+    activeTracks.set(key, {
+      kind,
+      identityId,
+      petClass,
+      startMs: timestampMs,
+      endMs: Math.min(durationMs, timestampMs + sampleIntervalMs),
+      hitCount: 1,
+      maxSimilarity: similarity,
+      lastSeenMs: timestampMs
+    });
+  };
+
+  for (const frame of compactFrames) {
+    for (const person of frame.persons) {
+      touchTrack("person", person.id, null, frame.timestampMs, person.similarity);
+    }
+    for (const pet of frame.pets) {
+      touchTrack("pet", pet.id, pet.petClass, frame.timestampMs, pet.similarity);
+    }
+  }
+  finishedTracks.push(...activeTracks.values());
+
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    db.prepare(
+      "INSERT INTO media_video_analysis(" +
+      "media_id,input_sha256,duration_ms,width,height,fps,sample_interval_ms," +
+      "sampled_frames,scene_count,frames_json,updated_at" +
+      ") VALUES(?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP) " +
+      "ON CONFLICT(media_id) DO UPDATE SET " +
+      "input_sha256=excluded.input_sha256,duration_ms=excluded.duration_ms," +
+      "width=excluded.width,height=excluded.height,fps=excluded.fps," +
+      "sample_interval_ms=excluded.sample_interval_ms," +
+      "sampled_frames=excluded.sampled_frames,scene_count=excluded.scene_count," +
+      "frames_json=excluded.frames_json,updated_at=CURRENT_TIMESTAMP"
+    ).run(
+      mediaId,
+      inputSha256,
+      durationMs,
+      width,
+      height,
+      fps,
+      sampleIntervalMs,
+      compactFrames.length,
+      Math.max(0, Math.trunc(Number(value.sceneCount) || 0)),
+      JSON.stringify(compactFrames)
+    );
+
+    db.prepare("DELETE FROM video_identity_tracks WHERE media_id=?").run(mediaId);
+    const insertTrack = db.prepare(
+      "INSERT INTO video_identity_tracks(" +
+      "media_id,identity_kind,identity_id,pet_class,start_ms,end_ms,hit_count,max_similarity" +
+      ") VALUES(?,?,?,?,?,?,?,?)"
+    );
+    for (const track of finishedTracks) {
+      insertTrack.run(
+        mediaId,
+        track.kind,
+        track.identityId,
+        track.petClass,
+        track.startMs,
+        track.endMs,
+        track.hitCount,
+        track.maxSimilarity
+      );
+    }
+
+    db.prepare("DELETE FROM video_tags WHERE media_id=?").run(mediaId);
+    const insertTag = db.prepare(
+      "INSERT INTO video_tags(media_id,label,score,hit_count) VALUES(?,?,?,?)"
+    );
+    for (const rawTag of rawTags) {
+      if (!rawTag || typeof rawTag !== "object") continue;
+      const tag = rawTag as Record<string, unknown>;
+      const label = String(tag.label ?? "").trim();
+      const score = Number(tag.score);
+      const hitCount = Math.max(1, Math.trunc(Number(tag.hitCount) || 1));
+      if (!label || !Number.isFinite(score)) continue;
+      insertTag.run(mediaId, label, score, hitCount);
+    }
+
+    db.prepare(
+      "UPDATE analysis_jobs SET status='DONE',result_json=?,error_message=NULL," +
+      "finished_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE id=?"
+    ).run(
+      JSON.stringify({
+        durationMs,
+        sampledFrames: compactFrames.length,
+        sceneCount: Math.max(0, Math.trunc(Number(value.sceneCount) || 0)),
+        identityTracks: finishedTracks.length,
+        tags: rawTags.length
+      }),
+      jobId
+    );
+
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+
+  return {
+    completed: true,
+    mediaId,
+    sourceId,
+    sampledFrames: compactFrames.length,
+    tracks: finishedTracks.length
+  };
+}
+
 function knownPersonCentroids(sourceId?: number) {
   const sourceFilter = sourceId === undefined ? "" : "AND m.source_id=?";
   const sourceArgs = sourceId === undefined ? [] : [sourceId];
@@ -6880,6 +7200,15 @@ function listPets(sourceId: number) {
     LIMIT 48
   `);
 
+  const videoHitQuery = db.prepare(
+    "SELECT vit.media_id,m.relative_path,vit.start_ms,vit.end_ms," +
+    "vit.hit_count,vit.max_similarity FROM video_identity_tracks vit " +
+    "JOIN media_items m ON m.id=vit.media_id " +
+    "WHERE vit.identity_kind='pet' AND vit.identity_id=? " +
+    "AND m.source_id=? AND m.availability='AVAILABLE' " +
+    "ORDER BY vit.start_ms,vit.id"
+  );
+
   return pets.map((row) => ({
     id: Number(row.id),
     name: String(row.name),
@@ -6901,6 +7230,14 @@ function listPets(sourceId: number) {
         String(pet.assignment_source) === "AUTO_HIGH_CONFIDENCE"
           ? "AUTO_HIGH_CONFIDENCE"
           : "CONFIRMED"
+    })),
+    videoHits: videoHitQuery.all(Number(row.id), sourceId).map((hit) => ({
+      mediaId: Number(hit.media_id),
+      relativePath: String(hit.relative_path),
+      startMs: Number(hit.start_ms),
+      endMs: Number(hit.end_ms),
+      hitCount: Number(hit.hit_count),
+      maxSimilarity: hit.max_similarity === null ? null : Number(hit.max_similarity)
     }))
   }));
 }
@@ -8431,6 +8768,15 @@ function listPersons(sourceId: number) {
     LIMIT 48
   `);
 
+  const videoHitQuery = db.prepare(
+    "SELECT vit.media_id,m.relative_path,vit.start_ms,vit.end_ms," +
+    "vit.hit_count,vit.max_similarity FROM video_identity_tracks vit " +
+    "JOIN media_items m ON m.id=vit.media_id " +
+    "WHERE vit.identity_kind='person' AND vit.identity_id=? " +
+    "AND m.source_id=? AND m.availability='AVAILABLE' " +
+    "ORDER BY vit.start_ms,vit.id"
+  );
+
   return persons.map((row) => ({
     id: Number(row.id),
     name: String(row.name),
@@ -8445,6 +8791,14 @@ function listPersons(sourceId: number) {
         face.confidence === null || face.confidence === undefined
           ? null
           : Number(face.confidence)
+    })),
+    videoHits: videoHitQuery.all(Number(row.id), sourceId).map((hit) => ({
+      mediaId: Number(hit.media_id),
+      relativePath: String(hit.relative_path),
+      startMs: Number(hit.start_ms),
+      endMs: Number(hit.end_ms),
+      hitCount: Number(hit.hit_count),
+      maxSimilarity: hit.max_similarity === null ? null : Number(hit.max_similarity)
     }))
   }));
 }
@@ -9562,6 +9916,25 @@ function getMediaDetails(mediaId: number) {
       AND input_sha256=?
   `).get(mediaId, currentSha);
 
+  const videoAnalysis = db.prepare(
+    "SELECT duration_ms,width,height,fps,sample_interval_ms,sampled_frames,scene_count " +
+    "FROM media_video_analysis WHERE media_id=? AND input_sha256=?"
+  ).get(mediaId, currentSha);
+  const videoTags = db.prepare(
+    "SELECT label,score,hit_count FROM video_tags WHERE media_id=? " +
+    "ORDER BY hit_count DESC,score DESC,label"
+  ).all(mediaId);
+  const videoIdentityHits = db.prepare(
+    "SELECT vit.identity_kind,vit.identity_id,vit.pet_class,vit.start_ms,vit.end_ms," +
+    "vit.hit_count,vit.max_similarity," +
+    "CASE WHEN vit.identity_kind='person' THEN p.name " +
+    "WHEN vit.identity_kind='pet' THEN pe.name ELSE NULL END AS identity_name " +
+    "FROM video_identity_tracks vit " +
+    "LEFT JOIN persons p ON vit.identity_kind='person' AND p.id=vit.identity_id " +
+    "LEFT JOIN pets pe ON vit.identity_kind='pet' AND pe.id=vit.identity_id " +
+    "WHERE vit.media_id=? ORDER BY vit.start_ms,vit.id"
+  ).all(mediaId);
+
   const jobs = db.prepare(`
     SELECT
       module,
@@ -9760,7 +10133,35 @@ function getMediaDetails(mediaId: number) {
       startedAt: row.started_at ? String(row.started_at) : null,
       finishedAt: row.finished_at ? String(row.finished_at) : null,
       updatedAt: String(row.updated_at)
-    }))
+    })),
+    videoAnalysis: videoAnalysis
+      ? {
+          durationMs: Number(videoAnalysis.duration_ms),
+          width: Number(videoAnalysis.width),
+          height: Number(videoAnalysis.height),
+          fps: Number(videoAnalysis.fps),
+          sampleIntervalMs: Number(videoAnalysis.sample_interval_ms),
+          sampledFrames: Number(videoAnalysis.sampled_frames),
+          sceneCount: Number(videoAnalysis.scene_count),
+          tags: videoTags.map((row) => ({
+            label: String(row.label),
+            score: Number(row.score),
+            hitCount: Number(row.hit_count)
+          })),
+          identityHits: videoIdentityHits.map((row) => ({
+            kind: String(row.identity_kind) === "pet" ? "pet" : "person",
+            identityId: row.identity_id === null ? null : Number(row.identity_id),
+            name: row.identity_name === null ? null : String(row.identity_name),
+            petClass: row.pet_class === "dog" || row.pet_class === "cat"
+              ? String(row.pet_class)
+              : null,
+            startMs: Number(row.start_ms),
+            endMs: Number(row.end_ms),
+            hitCount: Number(row.hit_count),
+            maxSimilarity: row.max_similarity === null ? null : Number(row.max_similarity)
+          }))
+        }
+      : null
   };
 }
 
@@ -9880,6 +10281,9 @@ function resetCatalog(): { reset: true } {
 
       DELETE FROM object_fused_detections;
       DELETE FROM object_detections;
+      DELETE FROM video_identity_tracks;
+      DELETE FROM video_tags;
+      DELETE FROM media_video_analysis;
       DELETE FROM media_semantic_annotations;
       DELETE FROM semantic_embeddings;
       DELETE FROM face_embeddings;
@@ -9921,6 +10325,9 @@ function resetCatalog(): { reset: true } {
       "pet_detections",
       "object_fused_detections",
       "object_detections",
+      "video_identity_tracks",
+      "video_tags",
+      "media_video_analysis",
       "media_semantic_annotations",
       "semantic_embeddings",
       "face_embeddings",
@@ -10119,6 +10526,11 @@ async function dispatch(method: CatalogMethod, payload: Record<string, unknown> 
       );
     case "completeSemanticEmbeddingJob":
       return completeSemanticEmbeddingJob(
+        asNumber(payload.jobId, "jobId"),
+        payload.result
+      );
+    case "completeVideoAnalysisJob":
+      return completeVideoAnalysisJob(
         asNumber(payload.jobId, "jobId"),
         payload.result
       );
