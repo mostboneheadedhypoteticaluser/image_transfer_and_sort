@@ -18,7 +18,8 @@ type PythonStage =
   | "petFusion"
   | "petEmbeddings"
   | "objectVerification"
-  | "semanticEmbeddings";
+  | "semanticEmbeddings"
+  | "videoAnalysis";
 
 type ModuleSpec = {
   module: string;
@@ -34,7 +35,8 @@ type ModuleSpec = {
     | "completePetEmbeddingJob"
     | "completeVerifiedObjectDetectionJob"
     | "completeCatalogSemanticJob"
-    | "completeSemanticEmbeddingJob";
+    | "completeSemanticEmbeddingJob"
+    | "completeVideoAnalysisJob";
   label: string;
   timeoutMs: number;
 };
@@ -47,6 +49,14 @@ const MODULES: ModuleSpec[] = [
     completeMethod: "completeAnalysisJob",
     label: "Technische Prüfung",
     timeoutMs: 15000
+  },
+  {
+    module: "video-analyze-v1",
+    stage: "videoAnalysis",
+    workerMethod: "analyze_video_frames",
+    completeMethod: "completeVideoAnalysisJob",
+    label: "Video · Personen, Haustiere und Motive",
+    timeoutMs: 1800000
   },
   {
     module: "image-metadata-v1",
@@ -148,6 +158,7 @@ type PythonPipelineStats = Pick<
   | "petEmbeddings"
   | "objectVerification"
   | "semanticEmbeddings"
+  | "videoAnalysis"
 >;
 
 function emptyStats(): AnalysisQueueStats {
@@ -324,7 +335,8 @@ export class AnalysisCoordinator {
       petFusion: emptyStats(),
       petEmbeddings: emptyStats(),
       objectVerification: emptyStats(),
-      semanticEmbeddings: emptyStats()
+      semanticEmbeddings: emptyStats(),
+      videoAnalysis: emptyStats()
     };
 
     for (const spec of MODULES) {
@@ -372,7 +384,8 @@ export class AnalysisCoordinator {
       result.petFusion.pending +
       result.petEmbeddings.pending +
       qwenQueued +
-      result.semanticEmbeddings.pending;
+      result.semanticEmbeddings.pending +
+      result.videoAnalysis.pending;
     const active =
       result.technical.running +
       result.imageMetadata.running +
@@ -382,7 +395,8 @@ export class AnalysisCoordinator {
       result.petFusion.running +
       result.petEmbeddings.running +
       qwenActive +
-      result.semanticEmbeddings.running;
+      result.semanticEmbeddings.running +
+      result.videoAnalysis.running;
 
     const pausedQwen =
       (!this.automaticQwenEnabled || !this.analysis.isQwen3vl4bAvailable()) &&
@@ -486,7 +500,8 @@ export class AnalysisCoordinator {
         stats.petFusion.running +
         stats.petEmbeddings.running +
         stats.objectVerification.running +
-        stats.semanticEmbeddings.running;
+        stats.semanticEmbeddings.running +
+        stats.videoAnalysis.running;
 
       if (totalRunning > 0) return;
 
@@ -522,7 +537,8 @@ export class AnalysisCoordinator {
         stats.petFusion.pending +
         stats.petEmbeddings.pending +
         stats.objectVerification.pending +
-        stats.semanticEmbeddings.pending - 1;
+        stats.semanticEmbeddings.pending +
+        stats.videoAnalysis.pending - 1;
 
       this.analysis.setQueueState(
         Math.max(0, queued),
