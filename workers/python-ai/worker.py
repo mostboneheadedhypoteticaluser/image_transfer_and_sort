@@ -249,6 +249,14 @@ COCO_CLASS_NAMES = (
 _dog_reid_session = None
 _onnxruntime_module = None
 _DOG_REID_LOCK = threading.Lock()
+
+# YuNet/SFace liefen vor der Fast-Lane-Parallelisierung zuverlässig seriell.
+# Mehrere gleichzeitige OpenCV-DNN-Aufrufe plus Videoanalyse können die CPU
+# massiv überbuchen und ließen Gesichtsjobs über den Electron-Watchdog laufen.
+# Nur die Gesichtsinferenz wird deshalb serialisiert; Metadaten, Pet-Analyse,
+# Video-Orchestrierung usw. dürfen weiterhin parallel laufen.
+_FACE_INFERENCE_LOCK = threading.Lock()
+
 _siglip2_model = None
 _siglip2_processor = None
 _siglip2_coco_text_features = None
@@ -805,6 +813,8 @@ def extract_image_metadata(file_path: str) -> dict:
 
 
 def detect_faces(file_path: str) -> dict:
+    started = time.perf_counter()
+
     if cv2 is None:
         raise RuntimeError(
             "OpenCV fehlt. Einmal 'npm.cmd run setup:ai' ausführen."
@@ -839,17 +849,21 @@ def detect_faces(file_path: str) -> dict:
         working = image
         work_height, work_width = working.shape[:2]
 
-    detector = cv2.FaceDetectorYN.create(
-        YUNET_MODEL,
-        "",
-        (work_width, work_height),
-        0.80,
-        0.30,
-        5000,
-    )
+    # OpenCV-DNN/ONNX darf für die Gesichtspipeline nicht mehrfach parallel
+    # rechnen. Das stellt das Verhalten vor Einführung der Fast-Lanes wieder her
+    # und verhindert CPU-Überbuchung/Timeouts durch konkurrierende Video-Frames.
+    with _FACE_INFERENCE_LOCK:
+        detector = cv2.FaceDetectorYN.create(
+            YUNET_MODEL,
+            "",
+            (work_width, work_height),
+            0.80,
+            0.30,
+            5000,
+        )
 
-    detector.setInputSize((work_width, work_height))
-    _retval, detections = detector.detect(working)
+        detector.setInputSize((work_width, work_height))
+        _retval, detections = detector.detect(working)
 
     faces: list[dict] = []
 
@@ -887,6 +901,17 @@ def detect_faces(file_path: str) -> dict:
                 "landmarks": landmarks,
             })
 
+    dev_log(
+        "FACE_DETECT_RESULT",
+        target=file_path,
+        faces=len(faces),
+        imageWidth=int(original_width),
+        imageHeight=int(original_height),
+        workWidth=int(work_width),
+        workHeight=int(work_height),
+        elapsedMs=round((time.perf_counter() - started) * 1000, 1),
+    )
+
     return {
         "module": "face-detect-yunet-v1",
         "detector": "YuNet 2023mar",
@@ -911,66 +936,71 @@ def extract_face_embeddings(file_path: str, faces: list[dict]) -> dict:
     if image is None:
         raise RuntimeError("Bild konnte von OpenCV nicht gelesen werden.")
 
-    recognizer = cv2.FaceRecognizerSF.create(SFACE_MODEL, "")
     embeddings: list[dict] = []
     skipped = 0
     first_errors: list[str] = []
 
-    for face in faces:
-        if not isinstance(face, dict):
-            continue
+    # SFace ebenfalls gegen parallele YuNet-/SFace-Inferenz schützen. Der
+    # Recognizer bleibt lokal, aber die eigentliche OpenCV-DNN-Ausführung läuft
+    # wieder deterministisch wie vor der Parallelisierung.
+    with _FACE_INFERENCE_LOCK:
+        recognizer = cv2.FaceRecognizerSF.create(SFACE_MODEL, "")
 
-        landmarks = face.get("landmarks") or []
-        if not isinstance(landmarks, list) or len(landmarks) != 5:
-            continue
+        for face in faces:
+            if not isinstance(face, dict):
+                continue
 
-        values = [
-            float(face.get("x", 0.0)),
-            float(face.get("y", 0.0)),
-            float(face.get("width", 0.0)),
-            float(face.get("height", 0.0)),
-        ]
+            landmarks = face.get("landmarks") or []
+            if not isinstance(landmarks, list) or len(landmarks) != 5:
+                continue
 
-        valid_landmarks = True
-        for landmark in landmarks:
-            if not isinstance(landmark, dict):
-                valid_landmarks = False
-                break
-            values.extend([
-                float(landmark.get("x", 0.0)),
-                float(landmark.get("y", 0.0)),
-            ])
+            values = [
+                float(face.get("x", 0.0)),
+                float(face.get("y", 0.0)),
+                float(face.get("width", 0.0)),
+                float(face.get("height", 0.0)),
+            ]
 
-        if not valid_landmarks:
-            skipped += 1
-            continue
+            valid_landmarks = True
+            for landmark in landmarks:
+                if not isinstance(landmark, dict):
+                    valid_landmarks = False
+                    break
+                values.extend([
+                    float(landmark.get("x", 0.0)),
+                    float(landmark.get("y", 0.0)),
+                ])
 
-        # FaceRecognizerSF.alignCrop erwartet die vollständige YuNet-face_box:
-        # x, y, w, h, fünf Landmarken und abschließend den Score.
-        values.append(float(face.get("score", 0.0)))
-        detection = np.asarray(values, dtype=np.float32)
+            if not valid_landmarks:
+                skipped += 1
+                continue
 
-        try:
-            aligned = recognizer.alignCrop(image, detection)
-            feature = recognizer.feature(aligned)
-        except Exception as exc:
-            skipped += 1
-            if len(first_errors) < 3:
-                first_errors.append(str(exc))
-            continue
+            # FaceRecognizerSF.alignCrop erwartet die vollständige YuNet-face_box:
+            # x, y, w, h, fünf Landmarken und abschließend den Score.
+            values.append(float(face.get("score", 0.0)))
+            detection = np.asarray(values, dtype=np.float32)
 
-        vector = np.asarray(feature, dtype=np.float32).reshape(-1)
-        norm = float(np.linalg.norm(vector))
-        if not math.isfinite(norm) or norm <= 0.0:
-            skipped += 1
-            continue
+            try:
+                aligned = recognizer.alignCrop(image, detection)
+                feature = recognizer.feature(aligned)
+            except Exception as exc:
+                skipped += 1
+                if len(first_errors) < 3:
+                    first_errors.append(str(exc))
+                continue
 
-        vector = vector / norm
+            vector = np.asarray(feature, dtype=np.float32).reshape(-1)
+            norm = float(np.linalg.norm(vector))
+            if not math.isfinite(norm) or norm <= 0.0:
+                skipped += 1
+                continue
 
-        embeddings.append({
-            "faceDetectionId": int(face.get("id", 0)),
-            "vector": [float(value) for value in vector.tolist()],
-        })
+            vector = vector / norm
+
+            embeddings.append({
+                "faceDetectionId": int(face.get("id", 0)),
+                "vector": [float(value) for value in vector.tolist()],
+            })
 
     dev_log(
         "FACE_EMBED_RESULT",
@@ -980,6 +1010,26 @@ def extract_face_embeddings(file_path: str, faces: list[dict]) -> dict:
         skipped=skipped,
         firstErrors=first_errors,
     )
+
+    # Null Gesichter ist ein legitimes Ergebnis. Wenn aber Gesichter vorhanden
+    # waren und SFace keinen einzigen Vektor erzeugen konnte, darf das nicht als
+    # erfolgreicher DONE-Job verschwinden.
+    if len(faces) > 0 and len(embeddings) == 0:
+        detail = first_errors[0] if first_errors else "kein gültiger Embedding-Vektor"
+        raise RuntimeError(
+            "SFace konnte für "
+            f"{len(faces)} erkannte Gesicht(er) kein Embedding erzeugen: {detail}"
+        )
+
+    if skipped > 0:
+        dev_log(
+            "FACE_EMBED_PARTIAL",
+            target=file_path,
+            inputFaces=len(faces),
+            embeddings=len(embeddings),
+            skipped=skipped,
+            firstErrors=first_errors,
+        )
 
     return {
         "module": "face-embed-sface-v1",
