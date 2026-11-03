@@ -55,6 +55,7 @@ export class CatalogWatchService {
   private processingScans = false;
   private safetyTimer: NodeJS.Timeout | null = null;
   private stopped = true;
+  private userPaused = false;
 
   constructor(
     private readonly catalog: CatalogService,
@@ -112,6 +113,17 @@ export class CatalogWatchService {
 
   clearHistory(): void {
     this.history.length = 0;
+  }
+
+  async pauseForUser(): Promise<void> {
+    this.userPaused = true;
+    await this.catalog.request("setProcessingPaused", { paused: true });
+  }
+
+  async resumeFromUserPause(): Promise<void> {
+    await this.catalog.request("setProcessingPaused", { paused: false });
+    this.userPaused = false;
+    void this.processScanQueue();
   }
 
   async waitUntilIdle(timeoutMs = 300000): Promise<void> {
@@ -496,7 +508,7 @@ export class CatalogWatchService {
   }
 
   private async processScanQueue(): Promise<void> {
-    if (this.processingScans || this.stopped) return;
+    if (this.processingScans || this.stopped || this.userPaused) return;
     this.processingScans = true;
 
     try {
