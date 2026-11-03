@@ -14,6 +14,7 @@ import socket
 from pathlib import Path
 import subprocess
 import sys
+import tempfile
 import time
 from urllib import error as urllib_error
 from urllib import request as urllib_request
@@ -6071,6 +6072,298 @@ def detect_qwen3vl_objects(
         gc.collect()
 
 
+
+def analyze_video_frames(
+    file_path: str,
+    progress_request_id: str | None = None,
+) -> dict:
+    """Analysiert Videos sparsam über zeitlich verteilte Frames.
+
+    Ein Frame pro Sekunde ist das Ziel. Bei langen Videos wird das Intervall
+    automatisch vergrößert, damit höchstens 900 Frames verarbeitet werden.
+    Personen-, Haustier- und COCO-Motiverkennung verwenden exakt dieselben
+    Modelle wie die Foto-Pipeline. Embeddings werden mitgeliefert, damit der
+    Katalog-Worker sie gegen bereits bestätigte Identitäten abgleichen kann.
+    """
+    if cv2 is None or np is None:
+        raise RuntimeError(
+            "OpenCV/Numpy fehlt. Einmal 'npm.cmd run setup:ai' ausführen."
+        )
+
+    capture = cv2.VideoCapture(file_path)
+    if not capture.isOpened():
+        raise RuntimeError("Video konnte von OpenCV nicht geöffnet werden.")
+
+    try:
+        fps = float(capture.get(cv2.CAP_PROP_FPS) or 0.0)
+        frame_count = int(capture.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+        width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
+        height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
+
+        if fps > 0.0 and frame_count > 0:
+            duration_ms = int(round((frame_count / fps) * 1000.0))
+        else:
+            duration_ms = 0
+
+        # CAP_PROP_POS_MSEC liefert bei manchen Codecs erst nach einem Seek
+        # sinnvolle Werte. Falls die Container-Metadaten fehlen, einmal bis zum
+        # Ende springen und die Position auslesen.
+        if duration_ms <= 0:
+            capture.set(cv2.CAP_PROP_POS_AVI_RATIO, 1.0)
+            duration_ms = int(max(0.0, capture.get(cv2.CAP_PROP_POS_MSEC)))
+            capture.set(cv2.CAP_PROP_POS_AVI_RATIO, 0.0)
+
+        if duration_ms <= 0:
+            raise RuntimeError("Videodauer konnte nicht bestimmt werden.")
+
+        max_samples = 900
+        sample_interval_ms = max(
+            1000,
+            int(math.ceil(duration_ms / float(max_samples))),
+        )
+        sample_times = list(range(0, duration_ms + 1, sample_interval_ms))
+        if sample_times[-1] < max(0, duration_ms - 250):
+            sample_times.append(max(0, duration_ms - 1))
+
+        frames: list[dict] = []
+        tag_scores: dict[str, dict] = {}
+        previous_hist = None
+        scene_count = 1 if sample_times else 0
+
+        with tempfile.TemporaryDirectory(prefix="image-sorter-video-") as temp_dir:
+            for sample_index, timestamp_ms in enumerate(sample_times):
+                report_progress(
+                    progress_request_id,
+                    (
+                        f"Videoanalyse: Frame {sample_index + 1}/"
+                        f"{len(sample_times)} · {Path(file_path).name}"
+                    ),
+                    phase="video-frames",
+                    current=sample_index + 1,
+                    total=len(sample_times),
+                )
+
+                capture.set(cv2.CAP_PROP_POS_MSEC, float(timestamp_ms))
+                ok, frame = capture.read()
+                if not ok or frame is None:
+                    continue
+
+                frame_height, frame_width = frame.shape[:2]
+                if frame_width <= 0 or frame_height <= 0:
+                    continue
+
+                # Grobe Szenenwechselerkennung für spätere repräsentative
+                # Keyframes. Sie ist bewusst billig und läuft nur auf den
+                # ohnehin ausgewählten Analyseframes.
+                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                small = cv2.resize(gray, (160, 90), interpolation=cv2.INTER_AREA)
+                hist = cv2.calcHist([small], [0], None, [32], [0, 256])
+                cv2.normalize(hist, hist)
+                scene_change = False
+                if previous_hist is not None:
+                    correlation = float(
+                        cv2.compareHist(
+                            previous_hist,
+                            hist,
+                            cv2.HISTCMP_CORREL,
+                        )
+                    )
+                    scene_change = correlation < 0.72
+                    if scene_change:
+                        scene_count += 1
+                previous_hist = hist
+
+                frame_path = os.path.join(
+                    temp_dir,
+                    f"frame-{sample_index:05d}.jpg",
+                )
+                if not cv2.imwrite(
+                    frame_path,
+                    frame,
+                    [int(cv2.IMWRITE_JPEG_QUALITY), 92],
+                ):
+                    continue
+
+                face_result = detect_faces(frame_path)
+                raw_faces = face_result.get("faces") or []
+                faces_for_embedding: list[dict] = []
+                for local_index, raw_face in enumerate(raw_faces):
+                    face = dict(raw_face)
+                    face["id"] = local_index + 1
+                    faces_for_embedding.append(face)
+
+                face_embedding_result = extract_face_embeddings(
+                    frame_path,
+                    faces_for_embedding,
+                )
+                face_vector_by_id = {
+                    int(item.get("faceDetectionId", 0)): item.get("vector")
+                    for item in (face_embedding_result.get("embeddings") or [])
+                    if isinstance(item, dict)
+                }
+
+                nano = detect_pets(frame_path)
+                yolox = detect_pets_yolox(frame_path)
+                raw_pet_detections: list[dict] = []
+                raw_objects: list[dict] = []
+
+                for detector_result in (nano, yolox):
+                    detector_name = str(detector_result.get("detector") or "")
+                    for raw_pet in detector_result.get("pets") or []:
+                        if not isinstance(raw_pet, dict):
+                            continue
+                        raw_pet_detections.append({
+                            "petClass": raw_pet.get("class"),
+                            "detector": detector_name,
+                            "score": raw_pet.get("score"),
+                            "x": raw_pet.get("x"),
+                            "y": raw_pet.get("y"),
+                            "width": raw_pet.get("width"),
+                            "height": raw_pet.get("height"),
+                        })
+                    for raw_object in detector_result.get("objects") or []:
+                        if not isinstance(raw_object, dict):
+                            continue
+                        item = dict(raw_object)
+                        item["detector"] = detector_name
+                        raw_objects.append(item)
+
+                fused = fuse_pet_detections(raw_pet_detections, raw_objects)
+                fused_pets = fused.get("pets") or []
+                pets_for_embedding: list[dict] = []
+                for local_index, raw_pet in enumerate(fused_pets):
+                    if not isinstance(raw_pet, dict):
+                        continue
+                    pet = {
+                        "id": local_index + 1,
+                        "petClass": raw_pet.get("class"),
+                        "x": raw_pet.get("x"),
+                        "y": raw_pet.get("y"),
+                        "width": raw_pet.get("width"),
+                        "height": raw_pet.get("height"),
+                        "score": raw_pet.get("score"),
+                    }
+                    pets_for_embedding.append(pet)
+
+                dog_embedding_result = extract_dog_embeddings(
+                    frame_path,
+                    pets_for_embedding,
+                )
+                dog_vector_by_id = {
+                    int(item.get("petDetectionId", 0)): item.get("vector")
+                    for item in (dog_embedding_result.get("embeddings") or [])
+                    if isinstance(item, dict)
+                }
+
+                frame_faces: list[dict] = []
+                for local_index, raw_face in enumerate(faces_for_embedding):
+                    frame_faces.append({
+                        "score": float(raw_face.get("score", 0.0)),
+                        "x": float(raw_face.get("x", 0.0)),
+                        "y": float(raw_face.get("y", 0.0)),
+                        "width": float(raw_face.get("width", 0.0)),
+                        "height": float(raw_face.get("height", 0.0)),
+                        "vector": face_vector_by_id.get(local_index + 1),
+                    })
+
+                frame_pets: list[dict] = []
+                for local_index, raw_pet in enumerate(fused_pets):
+                    if not isinstance(raw_pet, dict):
+                        continue
+                    pet_class = str(raw_pet.get("class") or "")
+                    frame_pets.append({
+                        "petClass": pet_class,
+                        "score": float(raw_pet.get("score", 0.0)),
+                        "x": float(raw_pet.get("x", 0.0)),
+                        "y": float(raw_pet.get("y", 0.0)),
+                        "width": float(raw_pet.get("width", 0.0)),
+                        "height": float(raw_pet.get("height", 0.0)),
+                        "vector": (
+                            dog_vector_by_id.get(local_index + 1)
+                            if pet_class == "dog"
+                            else None
+                        ),
+                    })
+
+                frame_objects: list[dict] = []
+                seen_labels: set[str] = set()
+                for raw_object in fused.get("objects") or []:
+                    if not isinstance(raw_object, dict):
+                        continue
+                    label = str(raw_object.get("label") or "").strip()
+                    if not label:
+                        continue
+                    score = float(raw_object.get("score", 0.0))
+                    frame_objects.append({
+                        "label": label,
+                        "score": score,
+                        "agreementCount": int(
+                            raw_object.get("agreementCount", 1)
+                        ),
+                    })
+                    if label not in seen_labels:
+                        seen_labels.add(label)
+                        entry = tag_scores.setdefault(
+                            label,
+                            {"scoreSum": 0.0, "hitCount": 0, "maxScore": 0.0},
+                        )
+                        entry["scoreSum"] += score
+                        entry["hitCount"] += 1
+                        entry["maxScore"] = max(entry["maxScore"], score)
+
+                frames.append({
+                    "timestampMs": int(timestamp_ms),
+                    "sceneChange": scene_change,
+                    "width": int(frame_width),
+                    "height": int(frame_height),
+                    "faces": frame_faces,
+                    "pets": frame_pets,
+                    "objects": frame_objects,
+                })
+
+        tags = []
+        for label, values in tag_scores.items():
+            hits = max(1, int(values["hitCount"]))
+            tags.append({
+                "label": label,
+                "score": float(values["scoreSum"]) / hits,
+                "hitCount": hits,
+                "maxScore": float(values["maxScore"]),
+            })
+        tags.sort(
+            key=lambda item: (
+                -int(item["hitCount"]),
+                -float(item["score"]),
+                str(item["label"]),
+            )
+        )
+
+        dev_log(
+            "VIDEO_ANALYSIS_RESULT",
+            target=file_path,
+            durationMs=duration_ms,
+            sampledFrames=len(frames),
+            scenes=scene_count,
+            tags=len(tags),
+        )
+
+        return {
+            "module": "video-analyze-v1",
+            "durationMs": int(duration_ms),
+            "fps": float(fps),
+            "frameCount": int(frame_count),
+            "width": int(width),
+            "height": int(height),
+            "sampleIntervalMs": int(sample_interval_ms),
+            "sampledFrames": len(frames),
+            "sceneCount": int(scene_count),
+            "frames": frames,
+            "tags": tags[:80],
+        }
+    finally:
+        capture.release()
+
+
 def handle(message: dict) -> bool:
     request_id = message.get("id")
     method = message.get("method")
@@ -6125,6 +6418,18 @@ def handle(message: dict) -> bool:
                 "extension": str(payload.get("extension", "")),
                 "expectedSha256": str(payload.get("expectedSha256", "")),
             },
+        )
+        return True
+
+    if method == "analyze_video_frames":
+        file_path = require_file(payload)
+        verify_expected_size(file_path, payload)
+        respond(
+            request_id,
+            result=analyze_video_frames(
+                file_path,
+                progress_request_id=request_id,
+            ),
         )
         return True
 
