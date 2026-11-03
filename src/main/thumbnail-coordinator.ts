@@ -14,6 +14,7 @@ export class ThumbnailCoordinator {
   private pumping = false;
   private stopped = true;
   private shutdownRequested = false;
+  private userPaused = false;
   private activeJobs = 0;
 
   constructor(
@@ -47,6 +48,27 @@ export class ThumbnailCoordinator {
   prepareForShutdown(): void {
     this.shutdownRequested = true;
     this.stop();
+  }
+
+  async pauseForUser(): Promise<void> {
+    if (this.userPaused) return;
+    this.userPaused = true;
+
+    // Worker beenden statt nur keine neuen Jobs zu starten. Dadurch endet auch
+    // die CPU-Last eines gerade laufenden Sharp-Resizes sofort.
+    this.thumbnails.stop();
+
+    const deadline = Date.now() + 10000;
+    while (this.activeJobs > 0 && Date.now() < deadline) {
+      await new Promise<void>((resolve) => setTimeout(resolve, 50));
+    }
+  }
+
+  resumeFromUserPause(): void {
+    if (!this.userPaused) return;
+    this.thumbnails.start();
+    this.userPaused = false;
+    void this.pump();
   }
 
   async waitUntilIdle(timeoutMs = 15000): Promise<void> {
@@ -93,7 +115,7 @@ export class ThumbnailCoordinator {
     void this.runJob(job).finally(() => {
       this.activeJobs = Math.max(0, this.activeJobs - 1);
 
-      if (!this.stopped) {
+      if (!this.stopped && !this.userPaused) {
         void this.pump();
       }
     });
@@ -116,7 +138,7 @@ export class ThumbnailCoordinator {
         error: error instanceof Error ? error.message : String(error)
       });
 
-      if (this.shutdownRequested) {
+      if (this.shutdownRequested || this.userPaused) {
         await this.catalog.request("retryAnalysisJob", {
           jobId: job.id
         });
@@ -127,7 +149,7 @@ export class ThumbnailCoordinator {
   }
 
   private async pump(): Promise<void> {
-    if (this.stopped || this.pumping) return;
+    if (this.stopped || this.pumping || this.userPaused) return;
 
     this.pumping = true;
 
