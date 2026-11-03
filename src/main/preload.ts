@@ -294,15 +294,17 @@ const api = {
       conditionType: LifeAreaRuleConditionType,
       conditionValue: string | null,
       dateFrom: string | null,
-      dateTo: string | null
-    ): Promise<{ id: number }> =>
+      dateTo: string | null,
+      groupId?: number | null
+    ): Promise<{ id: number; groupId: number }> =>
       ipcRenderer.invoke(
         "catalog:addLifeAreaRule",
         lifeAreaId,
         conditionType,
         conditionValue,
         dateFrom,
-        dateTo
+        dateTo,
+        groupId
       ),
     deleteLifeAreaRule: (ruleId: number): Promise<LifeAreaMutationResult> =>
       ipcRenderer.invoke("catalog:deleteLifeAreaRule", ruleId),
