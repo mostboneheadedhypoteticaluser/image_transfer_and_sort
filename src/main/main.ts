@@ -1168,6 +1168,10 @@ function registerIpc(): void {
     };
   });
 
+  ipcMain.handle("analysis:clearDevLog", () =>
+    analysis!.clearDevLog()
+  );
+
   ipcMain.handle("analysis:getAutomaticQwenState", () => ({
     enabled:
       (analysisCoordinator?.isAutomaticQwenEnabled() ?? false) &&
