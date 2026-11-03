@@ -20,7 +20,11 @@ export class ThumbnailCoordinator {
   constructor(
     private readonly catalog: CatalogService,
     private readonly thumbnails: ThumbnailService,
-    private readonly onStats: (stats: AnalysisQueueStats) => void
+    private readonly onStats: (stats: AnalysisQueueStats) => void,
+    private readonly onDiagnostic?: (
+      event: string,
+      fields?: Record<string, unknown>
+    ) => void
   ) {}
 
   async start(): Promise<void> {
@@ -144,9 +148,17 @@ export class ThumbnailCoordinator {
         result
       });
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.onDiagnostic?.("THUMBNAIL_JOB_ERROR", {
+        jobId: job.id,
+        mediaId: job.mediaId,
+        target: job.absolutePath,
+        error: message
+      });
+
       await this.catalog.request("failAnalysisJob", {
         jobId: job.id,
-        error: error instanceof Error ? error.message : String(error)
+        error: message
       });
 
       if (this.shutdownRequested || this.userPaused) {
