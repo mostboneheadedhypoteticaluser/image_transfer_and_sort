@@ -452,6 +452,14 @@
                 <p id="personStatus">
                   Ähnliche Gesichter werden vorsichtig gruppiert. Erst deine Bestätigung macht daraus eine Person.
                 </p>
+                <div class="confirmation-media-filter" role="group" aria-label="Personen nach Medientyp filtern">
+                  <span>Vorkommen</span>
+                  <div>
+                    <button id="personConfirmAllMedia" class="active" type="button">Alle</button>
+                    <button id="personConfirmImagesOnly" type="button">Bilder</button>
+                    <button id="personConfirmVideosOnly" type="button">Videos</button>
+                  </div>
+                </div>
               </div>
               <button id="refreshPeople" class="ghost" type="button">Vorschläge neu berechnen</button>
             </div>
@@ -480,6 +488,14 @@
                 <p id="petStatus">
                   Fusionierte Hundefundstellen werden mit einem spezialisierten Dog-ReID-Modell gruppiert. Namen werden erst nach deiner Bestätigung gespeichert.
                 </p>
+                <div class="confirmation-media-filter" role="group" aria-label="Haustiere nach Medientyp filtern">
+                  <span>Vorkommen</span>
+                  <div>
+                    <button id="petConfirmAllMedia" class="active" type="button">Alle</button>
+                    <button id="petConfirmImagesOnly" type="button">Bilder</button>
+                    <button id="petConfirmVideosOnly" type="button">Videos</button>
+                  </div>
+                </div>
               </div>
               <button id="refreshPets" class="ghost" type="button">Vorschläge neu berechnen</button>
             </div>
