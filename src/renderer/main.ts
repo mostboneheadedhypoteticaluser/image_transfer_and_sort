@@ -1,5 +1,6 @@
 import { initEmbeddedSourceExplorer } from "./source-explorer";
 import { activateMapView, invalidateMapData } from "./map-view";
+import { activateLifeAreasView, invalidateLifeAreas } from "./life-areas";
 import type {
   AnalysisErrorRecord,
   AnalysisWorkerStatus,
@@ -5221,6 +5222,7 @@ window.imageSorter.catalog.onWatchEvent((event) => {
 
   if (event.kind === "SCAN_FINISHED") {
     invalidateMapData();
+    invalidateLifeAreas();
     progressBar.classList.remove("active");
     progressText.textContent = event.message;
 
@@ -5318,6 +5320,9 @@ async function showAppPage(page: string): Promise<void> {
   }
   if (page === "identities") {
     await loadIdentityBrowser();
+  }
+  if (page === "life-areas") {
+    await activateLifeAreasView();
   }
 }
 
