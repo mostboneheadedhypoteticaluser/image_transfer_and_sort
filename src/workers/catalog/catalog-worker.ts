@@ -7113,7 +7113,11 @@ function listPetCandidates(
       pci.pet_detection_id,
       pd.media_id,
       m.relative_path,
-      pci.similarity
+      pci.similarity,
+      pd.x,
+      pd.y,
+      pd.width,
+      pd.height
     FROM pet_candidate_items pci
     JOIN pet_fused_detections pd ON pd.id=pci.pet_detection_id
     JOIN media_items m ON m.id=pd.media_id
@@ -7183,6 +7187,12 @@ function listPetCandidates(
     const candidateVectors = embeddingRows.map((row) =>
       vectorFromBlob(row.vector_blob, Number(row.dimension))
     );
+    const vectorByPetId = new Map(
+      embeddingRows.map((row, index) => [
+        Number(row.pet_detection_id),
+        candidateVectors[index]
+      ])
+    );
     const candidateVector = centroid(candidateVectors);
 
     const ignoredMatch = classifyIgnoredVectors(
@@ -7249,7 +7259,25 @@ function listPetCandidates(
         petDetectionId: Number(row.pet_detection_id),
         mediaId: Number(row.media_id),
         relativePath: String(row.relative_path),
-        similarity: Number(row.similarity)
+        similarity: Number(row.similarity),
+        x: Number(row.x),
+        y: Number(row.y),
+        width: Number(row.width),
+        height: Number(row.height),
+        suggestedPersons: (() => {
+          const vector = vectorByFaceId.get(Number(row.face_detection_id));
+          if (!vector) return [];
+          return knownPersons
+            .map((known) => ({
+              personId: known.id,
+              personName: known.name,
+              similarity: cosineSimilarity(vector, known.vector),
+              representativeFaceId: known.representativeFaceId
+            }))
+            .filter((match) => match.similarity >= 0.48)
+            .sort((left, right) => right.similarity - left.similarity)
+            .slice(0, 5);
+        })()
       }))
     };
   }).filter((candidate) => candidate !== null);
@@ -8997,7 +9025,6 @@ function listPersonCandidates(
     JOIN media_items m ON m.id=fd.media_id
     WHERE pc.source_id=?
     GROUP BY pc.id
-    HAVING COUNT(DISTINCT m.sha256 || ':' || fd.detection_index) >= 2
     ORDER BY face_count DESC, pc.average_similarity DESC, newest_face_id DESC
     LIMIT ?
   `).all(sourceId, limit);
@@ -9014,7 +9041,11 @@ function listPersonCandidates(
       pcf.face_detection_id,
       fd.media_id,
       m.relative_path,
-      pcf.similarity
+      pcf.similarity,
+      fd.x,
+      fd.y,
+      fd.width,
+      fd.height
     FROM person_candidate_faces pcf
     JOIN face_detections fd ON fd.id=pcf.face_detection_id
     JOIN media_items m ON m.id=fd.media_id
@@ -9096,6 +9127,12 @@ function listPersonCandidates(
       return null;
     }
 
+    const vectorByFaceId = new Map(
+      embeddingRows.map((row, index) => [
+        Number(row.face_detection_id),
+        vectors[index]
+      ])
+    );
     const candidateVector = centroid(vectors);
     const suggestedPersons = candidateVector
       ? knownPersons
@@ -9132,7 +9169,26 @@ function listPersonCandidates(
         faceDetectionId: Number(row.face_detection_id),
         mediaId: Number(row.media_id),
         relativePath: String(row.relative_path),
-        similarity: Number(row.similarity)
+        similarity: Number(row.similarity),
+        x: Number(row.x),
+        y: Number(row.y),
+        width: Number(row.width),
+        height: Number(row.height),
+        suggestedPets: (() => {
+          const vector = vectorByPetId.get(Number(row.pet_detection_id));
+          if (!vector) return [];
+          return knownPets
+            .filter((known) => known.petClass === String(candidate.pet_class))
+            .map((known) => ({
+              petId: known.id,
+              petName: known.name,
+              similarity: cosineSimilarity(vector, known.vector),
+              representativePetId: known.representativePetId
+            }))
+            .filter((match) => match.similarity >= 0.52)
+            .sort((left, right) => right.similarity - left.similarity)
+            .slice(0, 5);
+        })()
       }))
     };
   }).filter((candidate) => candidate !== null);
@@ -9747,6 +9803,155 @@ function ignorePersonCandidate(
       ignoredIdentityId,
       faceCount,
       extendedExisting
+    };
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+}
+
+
+function assignPersonCandidateSelection(
+  candidateId: number,
+  rawFaceDetectionIds: unknown,
+  rawName: unknown
+) {
+  const name = typeof rawName === "string" ? rawName.trim() : "";
+  if (!name) {
+    throw new Error("Bitte einen Namen für die ausgewählten Gesichter eingeben.");
+  }
+  if (name.length > 120) throw new Error("Der Personenname ist zu lang.");
+
+  const candidate = db.prepare(
+    "SELECT id, source_id FROM person_candidates WHERE id=?"
+  ).get(candidateId);
+  if (!candidate) throw new Error("Die Personengruppe wurde nicht gefunden.");
+
+  const sourceId = Number(candidate.source_id);
+  const members = db.prepare(
+    "SELECT face_detection_id, similarity FROM person_candidate_faces " +
+    "WHERE candidate_id=? ORDER BY face_detection_id"
+  ).all(candidateId).map((row) => ({
+    faceDetectionId: Number(row.face_detection_id),
+    similarity: Number(row.similarity)
+  }));
+
+  const requested = Array.isArray(rawFaceDetectionIds)
+    ? [...new Set(
+        rawFaceDetectionIds
+          .map(Number)
+          .filter((value) => Number.isInteger(value) && value > 0)
+      )]
+    : [];
+  if (requested.length === 0) {
+    throw new Error("Bitte mindestens ein Gesicht auswählen.");
+  }
+
+  const memberIds = new Set(members.map((member) => member.faceDetectionId));
+  const selectedSet = new Set<number>();
+  for (const requestedId of requested) {
+    if (!memberIds.has(requestedId)) continue;
+    const equivalentIds = equivalentFaceIds(requestedId, sourceId);
+    if (equivalentIds.length === 0) {
+      selectedSet.add(requestedId);
+      continue;
+    }
+    for (const equivalentId of equivalentIds) {
+      if (memberIds.has(equivalentId)) selectedSet.add(equivalentId);
+    }
+  }
+
+  const selected = members.filter((member) =>
+    selectedSet.has(member.faceDetectionId)
+  );
+  const remaining = members.filter((member) =>
+    !selectedSet.has(member.faceDetectionId)
+  );
+  if (selected.length === 0) {
+    throw new Error("Das ausgewählte Gesicht gehört nicht mehr zu dieser Gruppe.");
+  }
+
+  const selectedIds = selected.map((member) => member.faceDetectionId);
+  const remainingIds = remaining.map((member) => member.faceDetectionId);
+
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const existing = db.prepare(
+      "SELECT id FROM persons WHERE name=? COLLATE NOCASE ORDER BY id LIMIT 1"
+    ).get(name);
+    const personId = existing
+      ? Number(existing.id)
+      : Number(
+          db.prepare("INSERT INTO persons(name) VALUES(?)")
+            .run(name).lastInsertRowid
+        );
+
+    db.prepare(
+      "UPDATE persons SET name=?, updated_at=CURRENT_TIMESTAMP WHERE id=?"
+    ).run(name, personId);
+
+    insertCannotLinks(selectedIds, remainingIds, "USER_DIRECT_ASSIGN");
+
+    const clearExclusion = db.prepare(
+      "DELETE FROM person_face_exclusions WHERE person_id=? AND face_detection_id=?"
+    );
+    const assign = db.prepare(
+      "INSERT INTO person_face_assignments(" +
+      "face_detection_id,person_id,assignment_source,confidence,updated_at" +
+      ") VALUES(?,?,\'CONFIRMED\',?,CURRENT_TIMESTAMP) " +
+      "ON CONFLICT(face_detection_id) DO UPDATE SET " +
+      "person_id=excluded.person_id,assignment_source=\'CONFIRMED\'," +
+      "confidence=excluded.confidence,updated_at=CURRENT_TIMESTAMP"
+    );
+    const removeFromCandidate = db.prepare(
+      "DELETE FROM person_candidate_faces WHERE face_detection_id=?"
+    );
+
+    for (const member of selected) {
+      clearExclusion.run(personId, member.faceDetectionId);
+      assign.run(
+        member.faceDetectionId,
+        personId,
+        Number.isFinite(member.similarity) ? member.similarity : null
+      );
+      removeFromCandidate.run(member.faceDetectionId);
+    }
+
+    db.prepare(
+      "DELETE FROM person_candidates WHERE NOT EXISTS (" +
+      "SELECT 1 FROM person_candidate_faces pcf " +
+      "WHERE pcf.candidate_id=person_candidates.id)"
+    ).run();
+
+    if (remaining.length > 0) {
+      const similarities = remaining
+        .map((member) => member.similarity)
+        .filter(Number.isFinite);
+      const averageSimilarity =
+        similarities.length > 0
+          ? similarities.reduce((sum, value) => sum + value, 0) /
+            similarities.length
+          : 1;
+      const minSimilarity =
+        similarities.length > 0 ? Math.min(...similarities) : 1;
+
+      db.prepare(
+        "UPDATE person_candidates SET representative_face_id=?," +
+        "average_similarity=?,min_similarity=? WHERE id=?"
+      ).run(
+        remaining[0].faceDetectionId,
+        averageSimilarity,
+        minSimilarity,
+        candidateId
+      );
+    }
+
+    db.exec("COMMIT");
+    return {
+      personId,
+      name,
+      faceCount: selected.length,
+      remainingCount: remaining.length
     };
   } catch (error) {
     db.exec("ROLLBACK");
@@ -11166,6 +11371,12 @@ async function dispatch(method: CatalogMethod, payload: Record<string, unknown> 
       );
     case "listPersons":
       return listPersons(asNumber(payload.sourceId, "sourceId"));
+    case "assignPersonCandidateSelection":
+      return assignPersonCandidateSelection(
+        asNumber(payload.candidateId, "candidateId"),
+        payload.faceDetectionIds,
+        payload.name
+      );
     case "confirmPersonCandidate":
       return confirmPersonCandidate(
         asNumber(payload.candidateId, "candidateId"),
