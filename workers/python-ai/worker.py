@@ -6654,6 +6654,12 @@ PARALLEL_FAST_METHODS = {
     "extract_dog_embeddings",
 }
 
+HEAVY_BACKGROUND_METHODS = {
+    "analyze_video_frames",
+    "extract_semantic_image_embedding",
+    "analyze_catalog_qwen3vl4b",
+}
+
 CONTROL_METHODS = {"ping", "status", "configure"}
 
 
@@ -6744,7 +6750,12 @@ def main() -> int:
         max_workers=8,
         thread_name_prefix="image-sorter-fast",
     )
+    heavy_executor = ThreadPoolExecutor(
+        max_workers=1,
+        thread_name_prefix="image-sorter-heavy",
+    )
     parallel_futures: set[Future[bool]] = set()
+    heavy_future: Future[bool] | None = None
 
     try:
         for line in sys.stdin:
@@ -6772,14 +6783,42 @@ def main() -> int:
                     )
                     continue
 
-                # Status/Configure müssen auch während laufender Fast-Lanes
-                # unmittelbar antworten können. Alle übrigen Methoden
-                # (Clustering, SigLIP, Video, Qwen, Shutdown) laufen exklusiv.
+                if method in HEAVY_BACKGROUND_METHODS:
+                    # Es gibt genau eine schwere Standard-Lane. Sie blockiert
+                    # aber nicht mehr stdin und damit auch keine später
+                    # eintreffenden Fast-Jobs.
+                    if heavy_future is not None:
+                        try:
+                            heavy_future.result()
+                        except Exception as exc:
+                            dev_log(
+                                "PY_HEAVY_REQUEST_THREAD_ERROR",
+                                error=str(exc),
+                            )
+
+                    heavy_future = heavy_executor.submit(
+                        process_request_message,
+                        message,
+                    )
+                    continue
+
+                # Status/Configure müssen auch während laufender Fast-/Heavy-
+                # Jobs unmittelbar antworten können. Wartungs-, Benchmark- und
+                # Shutdown-Methoden laufen dagegen exklusiv.
                 if method not in CONTROL_METHODS:
                     reap_parallel_requests(
                         parallel_futures,
                         wait_for_all=True,
                     )
+                    if heavy_future is not None:
+                        try:
+                            heavy_future.result()
+                        except Exception as exc:
+                            dev_log(
+                                "PY_HEAVY_REQUEST_THREAD_ERROR",
+                                error=str(exc),
+                            )
+                        heavy_future = None
 
                 keep_running = process_request_message(message)
                 if not keep_running:
@@ -6788,7 +6827,13 @@ def main() -> int:
                 respond(request_id, error=str(exc))
     finally:
         reap_parallel_requests(parallel_futures, wait_for_all=True)
+        if heavy_future is not None:
+            try:
+                heavy_future.result()
+            except Exception as exc:
+                dev_log("PY_HEAVY_REQUEST_THREAD_ERROR", error=str(exc))
         executor.shutdown(wait=True, cancel_futures=False)
+        heavy_executor.shutdown(wait=True, cancel_futures=False)
         dev_log("PYTHON_WORKER_SHUTDOWN_BEGIN")
         unload_qwen3vl()
         dev_log(
