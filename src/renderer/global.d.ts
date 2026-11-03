@@ -13,6 +13,11 @@ import type {
   ExplorerRoot,
   FolderTreeNode,
   GeoMediaPoint,
+  LifeAreaRecord,
+  LifeAreaMediaItem,
+  ApplyLifeAreaRulesResult,
+  LifeAreaMutationResult,
+  LifeAreaRuleConditionType,
   ConfirmPersonResult,
   ConfirmPetResult,
   IgnorePersonResult,
@@ -171,6 +176,34 @@ declare global {
         getWatchSnapshot(): Promise<CatalogWatchSnapshot>;
         listMedia(sourceId: number, limit?: number): Promise<MediaRecord[]>;
         listGeoMedia(sourceId?: number): Promise<GeoMediaPoint[]>;
+        listLifeAreas(): Promise<LifeAreaRecord[]>;
+        createLifeArea(name: string): Promise<{ id: number; name: string }>;
+        renameLifeArea(
+          lifeAreaId: number,
+          name: string
+        ): Promise<LifeAreaMutationResult>;
+        deleteLifeArea(lifeAreaId: number): Promise<LifeAreaMutationResult>;
+        addLifeAreaRule(
+          lifeAreaId: number,
+          conditionType: LifeAreaRuleConditionType,
+          conditionValue: string | null,
+          dateFrom: string | null,
+          dateTo: string | null
+        ): Promise<{ id: number }>;
+        deleteLifeAreaRule(ruleId: number): Promise<LifeAreaMutationResult>;
+        setLifeAreaRuleEnabled(
+          ruleId: number,
+          enabled: boolean
+        ): Promise<LifeAreaMutationResult>;
+        applyLifeAreaRules(
+          lifeAreaId?: number
+        ): Promise<ApplyLifeAreaRulesResult>;
+        listLifeAreaMedia(lifeAreaId: number): Promise<LifeAreaMediaItem[]>;
+        setMediaLifeArea(
+          mediaId: number,
+          lifeAreaId: number,
+          assigned: boolean
+        ): Promise<LifeAreaMutationResult>;
         getSearchFacets(sourceId?: number): Promise<SearchFacets>;
         searchMedia(
           sourceId: number | undefined,
