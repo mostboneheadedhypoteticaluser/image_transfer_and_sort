@@ -777,6 +777,14 @@ export class AnalysisCoordinator {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
 
+      this.analysis.logDiagnostic("ANALYSIS_STAGE_ERROR", {
+        module: spec.module,
+        method: spec.workerMethod,
+        mediaId: job.mediaId,
+        target: job.absolutePath,
+        error: message
+      });
+
       try {
         await this.catalog.request("failAnalysisJob", {
           jobId: job.id,
