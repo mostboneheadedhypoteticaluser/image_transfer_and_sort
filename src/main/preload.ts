@@ -14,6 +14,11 @@ import type {
   ExplorerRoot,
   FolderTreeNode,
   GeoMediaPoint,
+  LifeAreaRecord,
+  LifeAreaMediaItem,
+  ApplyLifeAreaRulesResult,
+  LifeAreaMutationResult,
+  LifeAreaRuleConditionType,
   ConfirmPersonResult,
   ConfirmPetResult,
   IgnorePersonResult,
@@ -273,6 +278,51 @@ const api = {
       ipcRenderer.invoke("catalog:listMedia", sourceId, limit),
     listGeoMedia: (sourceId?: number): Promise<GeoMediaPoint[]> =>
       ipcRenderer.invoke("catalog:listGeoMedia", sourceId),
+    listLifeAreas: (): Promise<LifeAreaRecord[]> =>
+      ipcRenderer.invoke("catalog:listLifeAreas"),
+    createLifeArea: (name: string): Promise<{ id: number; name: string }> =>
+      ipcRenderer.invoke("catalog:createLifeArea", name),
+    renameLifeArea: (
+      lifeAreaId: number,
+      name: string
+    ): Promise<LifeAreaMutationResult> =>
+      ipcRenderer.invoke("catalog:renameLifeArea", lifeAreaId, name),
+    deleteLifeArea: (lifeAreaId: number): Promise<LifeAreaMutationResult> =>
+      ipcRenderer.invoke("catalog:deleteLifeArea", lifeAreaId),
+    addLifeAreaRule: (
+      lifeAreaId: number,
+      conditionType: LifeAreaRuleConditionType,
+      conditionValue: string | null,
+      dateFrom: string | null,
+      dateTo: string | null
+    ): Promise<{ id: number }> =>
+      ipcRenderer.invoke(
+        "catalog:addLifeAreaRule",
+        lifeAreaId,
+        conditionType,
+        conditionValue,
+        dateFrom,
+        dateTo
+      ),
+    deleteLifeAreaRule: (ruleId: number): Promise<LifeAreaMutationResult> =>
+      ipcRenderer.invoke("catalog:deleteLifeAreaRule", ruleId),
+    setLifeAreaRuleEnabled: (
+      ruleId: number,
+      enabled: boolean
+    ): Promise<LifeAreaMutationResult> =>
+      ipcRenderer.invoke("catalog:setLifeAreaRuleEnabled", ruleId, enabled),
+    applyLifeAreaRules: (
+      lifeAreaId?: number
+    ): Promise<ApplyLifeAreaRulesResult> =>
+      ipcRenderer.invoke("catalog:applyLifeAreaRules", lifeAreaId),
+    listLifeAreaMedia: (lifeAreaId: number): Promise<LifeAreaMediaItem[]> =>
+      ipcRenderer.invoke("catalog:listLifeAreaMedia", lifeAreaId),
+    setMediaLifeArea: (
+      mediaId: number,
+      lifeAreaId: number,
+      assigned: boolean
+    ): Promise<LifeAreaMutationResult> =>
+      ipcRenderer.invoke("catalog:setMediaLifeArea", mediaId, lifeAreaId, assigned),
     getSearchFacets: (sourceId?: number): Promise<SearchFacets> =>
       ipcRenderer.invoke("catalog:getSearchFacets", sourceId),
     searchMedia: (
