@@ -28,7 +28,6 @@ export class ThumbnailCoordinator {
     this.shutdownRequested = false;
     this.stopped = false;
 
-    await this.enqueueExistingSources();
     await this.refreshStats();
 
     this.timer = setInterval(() => {
@@ -37,6 +36,12 @@ export class ThumbnailCoordinator {
     this.timer.unref();
 
     void this.pump();
+
+    // Fehlende Thumbnail-Jobs im Hintergrund ergänzen. Der Scheduler darf
+    // bereits vorhandene bzw. vom Live-Scan neu angelegte Jobs sofort abarbeiten.
+    void this.enqueueExistingSources().catch(() => {
+      // Der nächste Scan/Neustart ergänzt fehlende Jobs erneut.
+    });
   }
 
   stop(): void {
@@ -69,6 +74,9 @@ export class ThumbnailCoordinator {
     this.thumbnails.start();
     this.userPaused = false;
     void this.pump();
+    void this.enqueueExistingSources().catch(() => {
+      // Idempotenter Backfill; ein späterer Lauf kann erneut ergänzen.
+    });
   }
 
   async waitUntilIdle(timeoutMs = 15000): Promise<void> {
@@ -91,11 +99,14 @@ export class ThumbnailCoordinator {
     const sources = await this.catalog.request<SourceRecord[]>("listSources");
 
     for (const source of sources) {
-      if (!source.enabled) continue;
+      if (!source.enabled || this.stopped || this.userPaused) continue;
+
       await this.catalog.request("enqueueAnalysisJobs", {
         sourceId: source.id,
         module: MODULE
       });
+
+      void this.pump();
     }
   }
 
