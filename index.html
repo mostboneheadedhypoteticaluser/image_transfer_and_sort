@@ -885,6 +885,47 @@
       </div>
     </dialog>
 
+    <dialog id="candidateReviewDialog" class="app-dialog candidate-review-dialog">
+      <div class="dialog-header">
+        <div>
+          <h2 id="candidateReviewTitle">Gruppe einzeln prüfen</h2>
+          <p id="candidateReviewMeta">—</p>
+        </div>
+        <button id="closeCandidateReview" class="dialog-close" type="button" aria-label="Schließen">×</button>
+      </div>
+      <div class="candidate-review-layout">
+        <section class="candidate-review-main">
+          <div class="candidate-review-stage">
+            <div id="candidateReviewImageWrap" class="candidate-review-image-wrap">
+              <img id="candidateReviewImage" alt="" />
+              <div id="candidateReviewBox" class="candidate-review-box" aria-hidden="true"></div>
+            </div>
+          </div>
+          <div class="candidate-review-navigation">
+            <button id="candidateReviewPrev" class="ghost" type="button">← Vorheriges</button>
+            <strong id="candidateReviewPosition">1 / 1</strong>
+            <button id="candidateReviewNext" class="ghost" type="button">Nächstes →</button>
+          </div>
+          <p id="candidateReviewPath" class="candidate-review-path">—</p>
+          <div id="candidateReviewThumbnails" class="candidate-review-thumbnails"></div>
+        </section>
+        <aside class="candidate-review-sidebar">
+          <div>
+            <strong>Ähnlichste Zuordnungen</strong>
+            <small>Die Vorschläge werden für genau diese Fundstelle berechnet.</small>
+          </div>
+          <div id="candidateReviewSuggestions" class="candidate-review-suggestions"></div>
+          <label class="candidate-review-name">
+            <span>Name zuweisen</span>
+            <input id="candidateReviewName" list="candidateReviewNames" maxlength="120" autocomplete="off" placeholder="Name eingeben oder Vorschlag wählen" />
+            <datalist id="candidateReviewNames"></datalist>
+          </label>
+          <button id="candidateReviewAssign" class="primary" type="button">Diese Fundstelle zuweisen</button>
+          <p class="candidate-review-note">Nach der Zuordnung bleibt der Dialog geöffnet und springt zur nächsten Fundstelle der Gruppe.</p>
+        </aside>
+      </div>
+    </dialog>
+
     <div id="shutdownOverlay" class="shutdown-overlay" hidden aria-live="assertive">
       <div class="shutdown-card" role="status" aria-label="App wird sicher beendet">
         <div class="shutdown-spinner" aria-hidden="true"></div>
