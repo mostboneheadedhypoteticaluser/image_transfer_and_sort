@@ -617,7 +617,7 @@
                     <div>
                       <span class="section-kicker">Automatik</span>
                       <h3>Wenn-dann-Regeln</h3>
-                      <p>Regeln werden mit ODER ausgewertet. Manuelle Zuordnungen und manuelle Ausschlüsse haben immer Vorrang.</p>
+                      <p>Regelgruppen werden mit ODER verknüpft. Innerhalb einer Regelgruppe gelten alle Bedingungen mit UND. Manuelle Zuordnungen und Ausschlüsse haben immer Vorrang.</p>
                     </div>
                     <button id="lifeAreaApplyRules" class="ghost" type="button">Regeln neu anwenden</button>
                   </div>
@@ -642,11 +642,17 @@
                       <label><span>Von</span><input id="lifeAreaRuleDateFrom" type="date" /></label>
                       <label><span>Bis</span><input id="lifeAreaRuleDateTo" type="date" /></label>
                     </div>
+                    <label>
+                      <span>Verknüpfung</span>
+                      <select id="lifeAreaRuleGroupMode">
+                        <option value="new">Neue ODER-Regel</option>
+                      </select>
+                    </label>
                     <div class="life-area-rule-result">
                       <span>Dann</span>
                       <strong id="lifeAreaRuleThenLabel">Lebensbereich zuweisen</strong>
                     </div>
-                    <button id="lifeAreaAddRuleButton" class="primary" type="button">Regel hinzufügen</button>
+                    <button id="lifeAreaAddRuleButton" class="primary" type="button">Bedingung hinzufügen</button>
                   </div>
 
                   <div id="lifeAreaRules" class="life-area-rules"></div>
@@ -803,6 +809,29 @@
         </div>
       </div>
       <div id="analysisErrorList" class="analysis-error-list"></div>
+    </dialog>
+
+    <dialog id="lifeAreaCreateDialog" class="app-dialog life-area-create-dialog">
+      <form id="lifeAreaCreateForm" method="dialog">
+        <div class="dialog-header">
+          <div>
+            <h2>Lebensbereich anlegen</h2>
+            <p>Zum Beispiel DRK, Privat, Familie, Arbeit oder ein Lebensabschnitt.</p>
+          </div>
+          <button id="closeLifeAreaCreate" class="dialog-close" type="button" aria-label="Schließen">×</button>
+        </div>
+        <div class="life-area-create-body">
+          <label>
+            <span>Name</span>
+            <input id="lifeAreaCreateName" type="text" maxlength="120" autocomplete="off" placeholder="z. B. DRK" required />
+          </label>
+          <p id="lifeAreaCreateError" class="life-area-create-error" hidden></p>
+          <div class="dialog-actions">
+            <button id="cancelLifeAreaCreate" class="ghost" type="button">Abbrechen</button>
+            <button id="saveLifeAreaCreate" class="primary" type="submit">Lebensbereich anlegen</button>
+          </div>
+        </div>
+      </form>
     </dialog>
 
     <dialog id="lifeAreaAssignDialog" class="app-dialog life-area-assign-dialog">
