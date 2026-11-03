@@ -373,13 +373,15 @@ export function createLifeAreaStore(db: DatabaseSync) {
     let intersection: Set<number> | null = null;
 
     for (const rule of ruleRows) {
-      const current = new Set(mediaIdsForRule(rule));
+      const current = new Set<number>(mediaIdsForRule(rule));
       if (intersection === null) {
         intersection = current;
       } else {
-        intersection = new Set(
-          [...intersection].filter((mediaId) => current.has(mediaId))
-        );
+        const next = new Set<number>();
+        for (const mediaId of intersection) {
+          if (current.has(mediaId)) next.add(mediaId);
+        }
+        intersection = next;
       }
 
       if (intersection.size === 0) break;
