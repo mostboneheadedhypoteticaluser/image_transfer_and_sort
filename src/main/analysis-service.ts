@@ -898,10 +898,15 @@ export class AnalysisService {
   }
 
   async refreshStatus(): Promise<AnalysisWorkerStatus> {
-    if (!this.child) return this.getStatus();
+    // Während STARTING läuft bereits der 60-s-Ping aus start(). Eine zusätzliche
+    // 2-s-status-Anfrage landet sonst ebenfalls in stdin, obwohl Python noch
+    // PIL/OpenCV importiert, und erzeugt einen irreführenden Timeout.
+    if (!this.child || this.status.state !== "READY") {
+      return this.getStatus();
+    }
 
     try {
-      const result = await this.request<Record<string, unknown>>("status", {}, 2000);
+      const result = await this.request<Record<string, unknown>>("status", {}, 5000);
       this.applyWorkerResult(result);
     } catch {
       // Der Exit-Handler setzt bei einem Prozessabbruch den eigentlichen Fehlerstatus.
