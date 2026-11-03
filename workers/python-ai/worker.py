@@ -1034,6 +1034,9 @@ def extract_face_embeddings(file_path: str, faces: list[dict]) -> dict:
     return {
         "module": "face-embed-sface-v1",
         "model": "SFace 2021dec",
+        "inputFaceCount": len(faces),
+        "skipped": skipped,
+        "firstErrors": first_errors,
         "embeddings": embeddings,
     }
 
