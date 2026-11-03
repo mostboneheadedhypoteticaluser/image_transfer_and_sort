@@ -23,6 +23,19 @@
             <button class="sidebar-nav-item" type="button" data-app-page="map"><span>⌖</span>Karte</button>
           </nav>
           <div class="sidebar-status">
+            <button
+              id="backgroundPauseButton"
+              class="background-pause-button"
+              type="button"
+              aria-pressed="false"
+              title="Hintergrundverarbeitung pausieren und CPU/GPU freigeben"
+            >
+              <span id="backgroundPauseIcon" class="background-pause-icon">Ⅱ</span>
+              <span class="background-pause-copy">
+                <strong id="backgroundPauseLabel">Hintergrund pausieren</strong>
+                <small id="backgroundPauseHint">CPU/GPU freigeben</small>
+              </span>
+            </button>
             <span class="status-pill" id="workerState">Katalog-Worker wird gestartet …</span>
           </div>
         </aside>
