@@ -15,6 +15,7 @@ import type {
   AnalysisQueueStats,
   AssignPersonSelectionResult,
   AnalysisWorkerStatus,
+  BackgroundPauseState,
   QwenBenchmarkModel,
   QwenBenchmarkProfile,
   QwenBenchmarkRunResult,
@@ -82,6 +83,8 @@ let allowQuit = false;
 let shutdownPromise: Promise<void> | null = null;
 let qwenBenchmarkMode = false;
 let qwenBenchmarkPreparing: Promise<void> | null = null;
+let backgroundPaused = false;
+let backgroundPauseChanging = false;
 
 const IDENTITY_FACE_BATCH_SIZE = 100;
 const IDENTITY_DOG_BATCH_SIZE = 20;
@@ -159,6 +162,22 @@ function sendToRenderer(channel: string, payload: unknown): void {
   win.webContents.send(channel, payload);
 }
 
+function backgroundPauseState(): BackgroundPauseState {
+  return {
+    paused: backgroundPaused,
+    changing: backgroundPauseChanging,
+    message: backgroundPauseChanging
+      ? (backgroundPaused ? "Hintergrundarbeit wird pausiert …" : "Hintergrundarbeit wird fortgesetzt …")
+      : backgroundPaused
+        ? "Hintergrundarbeit pausiert · CPU/GPU-Worker gestoppt."
+        : "Hintergrundarbeit läuft."
+  };
+}
+
+function publishBackgroundPauseState(): void {
+  sendToRenderer("app:backgroundPauseState", backgroundPauseState());
+}
+
 function publishShutdownStatus(
   phase: ShutdownStatus["phase"],
   message: string
@@ -233,6 +252,7 @@ function schedulePersonRefresh(): void {
   if (
     isQuitting ||
     shutdownInProgress ||
+    backgroundPaused ||
     (!personService && !petService) ||
     personRefreshRunning ||
     personRefreshTimer
@@ -249,6 +269,7 @@ function schedulePersonRefresh(): void {
     if (
       (!personService && !petService) ||
       isQuitting ||
+      backgroundPaused ||
       personRefreshRunning
     ) {
       return;
@@ -364,13 +385,15 @@ function schedulePersonRefresh(): void {
 }
 
 function scheduleLifeAreaRuleRefresh(): void {
+  if (backgroundPaused) return;
+
   if (lifeAreaRuleRefreshTimer) {
     clearTimeout(lifeAreaRuleRefreshTimer);
   }
 
   lifeAreaRuleRefreshTimer = setTimeout(() => {
     lifeAreaRuleRefreshTimer = null;
-    if (!catalog || isQuitting || shutdownInProgress) return;
+    if (!catalog || isQuitting || shutdownInProgress || backgroundPaused) return;
 
     void catalog
       .request<ApplyLifeAreaRulesResult>("applyLifeAreaRules")
@@ -709,7 +732,65 @@ async function leaveQwenBenchmarkMode(): Promise<void> {
   }
 }
 
+async function setBackgroundPaused(paused: boolean): Promise<BackgroundPauseState> {
+  if (backgroundPauseChanging || backgroundPaused === paused) {
+    return backgroundPauseState();
+  }
+
+  backgroundPauseChanging = true;
+
+  // Den Zielzustand sofort publizieren, damit der große Button während des
+  // Übergangs nicht mehrfach geklickt werden kann.
+  if (paused) backgroundPaused = true;
+  publishBackgroundPauseState();
+
+  try {
+    if (paused) {
+      if (personRefreshTimer) {
+        clearTimeout(personRefreshTimer);
+        personRefreshTimer = null;
+      }
+      if (lifeAreaRuleRefreshTimer) {
+        clearTimeout(lifeAreaRuleRefreshTimer);
+        lifeAreaRuleRefreshTimer = null;
+      }
+
+      // Die globale Pause hat Vorrang vor einem laufenden Einzelbildtest.
+      qwenBenchmarkMode = false;
+      analysisCoordinator?.endBenchmarkPause();
+
+      await Promise.all([
+        catalogWatchService?.pauseForUser() ?? Promise.resolve(),
+        analysisCoordinator?.pauseForUser() ?? Promise.resolve(),
+        thumbnailCoordinator?.pauseForUser() ?? Promise.resolve()
+      ]);
+    } else {
+      await catalogWatchService?.resumeFromUserPause();
+      thumbnailCoordinator?.resumeFromUserPause();
+      await analysisCoordinator?.resumeFromUserPause();
+
+      backgroundPaused = false;
+      schedulePersonRefresh();
+      scheduleLifeAreaRuleRefresh();
+    }
+  } catch (error) {
+    // Bei fehlgeschlagener Pause nicht fälschlich "pausiert" anzeigen.
+    if (paused) backgroundPaused = false;
+    throw error;
+  } finally {
+    backgroundPauseChanging = false;
+    publishBackgroundPauseState();
+  }
+
+  return backgroundPauseState();
+}
+
 function registerIpc(): void {
+  ipcMain.handle("app:getBackgroundPauseState", () => backgroundPauseState());
+  ipcMain.handle("app:setBackgroundPaused", async (_event, paused: boolean) =>
+    setBackgroundPaused(paused === true)
+  );
+
   ipcMain.handle("dialog:pickSource", async (event) => {
     const owner = BrowserWindow.fromWebContents(event.sender) ?? windowRef ?? undefined;
     const options: OpenDialogOptions = {
