@@ -797,6 +797,20 @@
       <div id="analysisErrorList" class="analysis-error-list"></div>
     </dialog>
 
+    <dialog id="lifeAreaAssignDialog" class="app-dialog life-area-assign-dialog">
+      <div class="dialog-header">
+        <div>
+          <h2>Lebensbereiche zuweisen</h2>
+          <p id="lifeAreaAssignPath">—</p>
+        </div>
+        <button id="closeLifeAreaAssign" class="dialog-close" type="button" aria-label="Schließen">×</button>
+      </div>
+      <div class="life-area-assign-body">
+        <p>Manuelle Änderungen haben Vorrang vor Wenn-dann-Regeln. Entfernst du eine automatische Zuordnung, wird für dieses Medium eine dauerhafte Ausnahme gespeichert.</p>
+        <div id="lifeAreaAssignList" class="media-life-area-editor"></div>
+      </div>
+    </dialog>
+
     <dialog id="imagePreviewDialog" class="image-preview-dialog">
       <button id="closeImagePreview" class="image-preview-close" type="button" aria-label="Schließen">×</button>
       <div class="image-preview-layout">
