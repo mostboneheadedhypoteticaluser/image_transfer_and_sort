@@ -1697,7 +1697,8 @@ app.whenReady().then(() => {
 
   thumbnailService = new ThumbnailService(
     thumbnailWorkerPath,
-    thumbnailCacheRoot
+    thumbnailCacheRoot,
+    (event, fields = {}) => analysis?.logDiagnostic(event, fields)
   );
 
   analysisCoordinator = new AnalysisCoordinator(
