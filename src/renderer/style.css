@@ -650,6 +650,11 @@ td .badge + .badge {
   color: #25653c;
 }
 
+.analysis-state.running {
+  background: #e8f5ec;
+  color: #1f6a39;
+}
+
 .analysis-state.starting {
   background: #eef3f8;
   color: #3e5f7d;
