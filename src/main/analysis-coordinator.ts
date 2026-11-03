@@ -332,6 +332,13 @@ export class AnalysisCoordinator {
       await this.start();
     } else {
       void this.pump();
+      // Ein während der Benutzerpause abgebrochener Job-Backfill wird hier
+      // erneut aufgenommen. ON CONFLICT macht das idempotent.
+      void this.enqueueExistingSources().catch((error) => {
+        this.analysis.logDiagnostic("ANALYSIS_BACKFILL_RESUME_ERROR", {
+          error: error instanceof Error ? error.message : String(error)
+        });
+      });
     }
   }
 
