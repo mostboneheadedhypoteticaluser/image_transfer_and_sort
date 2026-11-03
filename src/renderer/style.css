@@ -3683,3 +3683,57 @@ body {
   color: #a91916;
   box-shadow: inset 0 0 0 1px rgba(215, 38, 34, 0.24);
 }
+
+
+/* Video-Treffer in Personen & Tiere */
+.identity-video-card {
+  border-color: #d7dfe7;
+}
+
+.identity-video-preview {
+  width: 100%;
+  height: auto;
+  aspect-ratio: 4 / 3;
+  display: grid;
+  place-content: center;
+  gap: 7px;
+  border: 0;
+  border-radius: 0;
+  background:
+    radial-gradient(circle at 50% 42%, rgba(255,255,255,.12), transparent 34%),
+    linear-gradient(145deg, #263340, #111820);
+  color: #fff;
+  cursor: pointer;
+}
+
+.identity-video-preview span {
+  display: grid;
+  place-items: center;
+  width: 46px;
+  height: 46px;
+  margin: 0 auto;
+  padding-left: 3px;
+  border-radius: 50%;
+  background: rgba(255,255,255,.16);
+  font-size: 20px;
+}
+
+.identity-video-preview strong {
+  font-size: 12px;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+
+.identity-video-preview:hover {
+  background:
+    radial-gradient(circle at 50% 42%, rgba(255,255,255,.16), transparent 34%),
+    linear-gradient(145deg, #334556, #17212b);
+}
+
+.identity-video-segment {
+  display: block;
+  margin-top: 3px;
+  color: #b61d1a;
+  font-size: 11px;
+  font-weight: 750;
+}
