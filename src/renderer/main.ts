@@ -155,6 +155,22 @@ const closeImagePreviewButton = document.querySelector<HTMLButtonElement>("#clos
 const imagePreviewImage = document.querySelector<HTMLImageElement>("#imagePreviewImage")!;
 const imagePreviewCaption = document.querySelector<HTMLDivElement>("#imagePreviewCaption")!;
 const imagePreviewDetails = document.querySelector<HTMLDivElement>("#imagePreviewDetails")!;
+const candidateReviewDialog = document.querySelector<HTMLDialogElement>("#candidateReviewDialog")!;
+const closeCandidateReviewButton = document.querySelector<HTMLButtonElement>("#closeCandidateReview")!;
+const candidateReviewTitle = document.querySelector<HTMLElement>("#candidateReviewTitle")!;
+const candidateReviewMeta = document.querySelector<HTMLElement>("#candidateReviewMeta")!;
+const candidateReviewImageWrap = document.querySelector<HTMLDivElement>("#candidateReviewImageWrap")!;
+const candidateReviewImage = document.querySelector<HTMLImageElement>("#candidateReviewImage")!;
+const candidateReviewBox = document.querySelector<HTMLDivElement>("#candidateReviewBox")!;
+const candidateReviewPrev = document.querySelector<HTMLButtonElement>("#candidateReviewPrev")!;
+const candidateReviewNext = document.querySelector<HTMLButtonElement>("#candidateReviewNext")!;
+const candidateReviewPosition = document.querySelector<HTMLElement>("#candidateReviewPosition")!;
+const candidateReviewPath = document.querySelector<HTMLElement>("#candidateReviewPath")!;
+const candidateReviewThumbnails = document.querySelector<HTMLDivElement>("#candidateReviewThumbnails")!;
+const candidateReviewSuggestions = document.querySelector<HTMLDivElement>("#candidateReviewSuggestions")!;
+const candidateReviewName = document.querySelector<HTMLInputElement>("#candidateReviewName")!;
+const candidateReviewNames = document.querySelector<HTMLDataListElement>("#candidateReviewNames")!;
+const candidateReviewAssign = document.querySelector<HTMLButtonElement>("#candidateReviewAssign")!;
 const shutdownOverlay = document.querySelector<HTMLDivElement>("#shutdownOverlay")!;
 const shutdownMessage = document.querySelector<HTMLParagraphElement>("#shutdownMessage")!;
 const searchPanel = document.querySelector<HTMLElement>("#searchPanel")!;
@@ -202,6 +218,33 @@ let personConfirmationMediaFilter: ConfirmationMediaFilter = "all";
 let petConfirmationMediaFilter: ConfirmationMediaFilter = "all";
 let lastPersonOverview: PersonOverview | null = null;
 let lastPetOverview: PetOverview | null = null;
+
+type CandidateReviewSuggestion = {
+  name: string;
+  similarity: number;
+  previewUrl: string | null;
+};
+
+type CandidateReviewItem = {
+  detectionId: number;
+  mediaId: number;
+  relativePath: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  suggestions: CandidateReviewSuggestion[];
+};
+
+type CandidateReviewState = {
+  kind: "person" | "pet";
+  candidateId: number;
+  items: CandidateReviewItem[];
+  index: number;
+  knownNames: string[];
+};
+
+let candidateReviewState: CandidateReviewState | null = null;
 let identityBrowserSelectionToken = 0;
 let scanning = false;
 let restoring = false;
@@ -1040,6 +1083,288 @@ function createIdentitySimilarityList(
 function fullPreviewUrl(mediaId: number): string {
   return `image-sorter-preview://media/${mediaId}`;
 }
+
+
+function renderCandidateReviewBox(): void {
+  const state = candidateReviewState;
+  const item = state?.items[state.index];
+  if (!item || !candidateReviewImage.naturalWidth || !candidateReviewImage.naturalHeight) {
+    candidateReviewBox.hidden = true;
+    return;
+  }
+
+  const imageWidth = candidateReviewImage.naturalWidth;
+  const imageHeight = candidateReviewImage.naturalHeight;
+  const left = Math.max(0, Math.min(100, (item.x / imageWidth) * 100));
+  const top = Math.max(0, Math.min(100, (item.y / imageHeight) * 100));
+  const width = Math.max(0, Math.min(100 - left, (item.width / imageWidth) * 100));
+  const height = Math.max(0, Math.min(100 - top, (item.height / imageHeight) * 100));
+
+  candidateReviewBox.hidden = !(width > 0 && height > 0);
+  candidateReviewBox.style.left = left + "%";
+  candidateReviewBox.style.top = top + "%";
+  candidateReviewBox.style.width = width + "%";
+  candidateReviewBox.style.height = height + "%";
+}
+
+function renderCandidateReview(): void {
+  const state = candidateReviewState;
+  if (!state || state.items.length === 0) {
+    candidateReviewDialog.close();
+    candidateReviewState = null;
+    return;
+  }
+
+  state.index = Math.max(0, Math.min(state.index, state.items.length - 1));
+  const item = state.items[state.index];
+  const kindLabel = state.kind === "person" ? "Personengruppe" : "Hundegruppe";
+
+  candidateReviewTitle.textContent = kindLabel + " einzeln prüfen";
+  candidateReviewMeta.textContent =
+    state.items.length.toLocaleString("de-DE") +
+    (state.items.length === 1 ? " verbleibende Fundstelle" : " verbleibende Fundstellen");
+  candidateReviewPosition.textContent =
+    (state.index + 1).toLocaleString("de-DE") +
+    " / " +
+    state.items.length.toLocaleString("de-DE");
+  candidateReviewPath.textContent = item.relativePath;
+  candidateReviewPrev.disabled = state.index === 0;
+  candidateReviewNext.disabled = state.index >= state.items.length - 1;
+
+  candidateReviewBox.hidden = true;
+  candidateReviewImage.src = fullPreviewUrl(item.mediaId);
+  candidateReviewImage.alt = item.relativePath;
+
+  candidateReviewSuggestions.replaceChildren();
+  if (item.suggestions.length === 0) {
+    const empty = document.createElement("p");
+    empty.className = "candidate-review-empty";
+    empty.textContent = "Keine ausreichend ähnliche bestätigte Identität gefunden.";
+    candidateReviewSuggestions.appendChild(empty);
+  } else {
+    for (const suggestion of item.suggestions) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "candidate-review-suggestion";
+
+      if (suggestion.previewUrl) {
+        const img = document.createElement("img");
+        img.src = suggestion.previewUrl;
+        img.alt = "";
+        img.loading = "lazy";
+        button.appendChild(img);
+      }
+
+      const text = document.createElement("span");
+      const name = document.createElement("strong");
+      name.textContent = suggestion.name;
+      const similarity = document.createElement("small");
+      similarity.textContent = "Ähnlichkeit " + suggestion.similarity.toFixed(3);
+      text.append(name, similarity);
+      button.appendChild(text);
+
+      button.addEventListener("click", () => {
+        candidateReviewName.value = suggestion.name;
+        candidateReviewName.focus();
+      });
+      candidateReviewSuggestions.appendChild(button);
+    }
+  }
+
+  candidateReviewNames.replaceChildren();
+  for (const knownName of [...new Set(state.knownNames)].sort((a, b) =>
+    a.localeCompare(b, "de", { sensitivity: "base" })
+  )) {
+    const option = document.createElement("option");
+    option.value = knownName;
+    candidateReviewNames.appendChild(option);
+  }
+
+  candidateReviewThumbnails.replaceChildren();
+  state.items.forEach((entry, index) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "candidate-review-thumb";
+    button.classList.toggle("active", index === state.index);
+    button.title = entry.relativePath;
+
+    const img = document.createElement("img");
+    img.src = fullPreviewUrl(entry.mediaId);
+    img.alt = "";
+    img.loading = "lazy";
+    button.appendChild(img);
+
+    button.addEventListener("click", () => {
+      if (!candidateReviewState) return;
+      candidateReviewState.index = index;
+      candidateReviewName.value = "";
+      renderCandidateReview();
+    });
+    candidateReviewThumbnails.appendChild(button);
+  });
+
+  candidateReviewName.value = "";
+  candidateReviewAssign.disabled = false;
+}
+
+function openPersonCandidateReview(
+  candidate: PersonOverview["candidates"][number],
+  overview: PersonOverview
+): void {
+  candidateReviewState = {
+    kind: "person",
+    candidateId: candidate.id,
+    index: 0,
+    knownNames: overview.persons.map((person) => person.name),
+    items: candidate.faces.map((face) => ({
+      detectionId: face.faceDetectionId,
+      mediaId: face.mediaId,
+      relativePath: face.relativePath,
+      x: face.x,
+      y: face.y,
+      width: face.width,
+      height: face.height,
+      suggestions: face.suggestedPersons.map((suggestion) => ({
+        name: suggestion.personName,
+        similarity: suggestion.similarity,
+        previewUrl:
+          suggestion.representativeFaceId === null
+            ? null
+            : faceCropUrl(suggestion.representativeFaceId)
+      }))
+    }))
+  };
+  renderCandidateReview();
+  candidateReviewDialog.showModal();
+}
+
+function openPetCandidateReview(
+  candidate: PetOverview["candidates"][number],
+  overview: PetOverview
+): void {
+  candidateReviewState = {
+    kind: "pet",
+    candidateId: candidate.id,
+    index: 0,
+    knownNames: overview.pets
+      .filter((pet) => pet.petClass === candidate.petClass)
+      .map((pet) => pet.name),
+    items: candidate.pets.map((pet) => ({
+      detectionId: pet.petDetectionId,
+      mediaId: pet.mediaId,
+      relativePath: pet.relativePath,
+      x: pet.x,
+      y: pet.y,
+      width: pet.width,
+      height: pet.height,
+      suggestions: pet.suggestedPets.map((suggestion) => ({
+        name: suggestion.petName,
+        similarity: suggestion.similarity,
+        previewUrl:
+          suggestion.representativePetId === null
+            ? null
+            : petCropUrl(suggestion.representativePetId)
+      }))
+    }))
+  };
+  renderCandidateReview();
+  candidateReviewDialog.showModal();
+}
+
+candidateReviewImage.addEventListener("load", renderCandidateReviewBox);
+
+candidateReviewPrev.addEventListener("click", () => {
+  if (!candidateReviewState || candidateReviewState.index <= 0) return;
+  candidateReviewState.index -= 1;
+  renderCandidateReview();
+});
+
+candidateReviewNext.addEventListener("click", () => {
+  if (
+    !candidateReviewState ||
+    candidateReviewState.index >= candidateReviewState.items.length - 1
+  ) return;
+  candidateReviewState.index += 1;
+  renderCandidateReview();
+});
+
+closeCandidateReviewButton.addEventListener("click", () => {
+  candidateReviewDialog.close();
+});
+
+candidateReviewAssign.addEventListener("click", () => {
+  const state = candidateReviewState;
+  const item = state?.items[state.index];
+  const name = candidateReviewName.value.trim();
+  if (!state || !item) return;
+  if (!name) {
+    candidateReviewName.focus();
+    return;
+  }
+
+  void runSafely(async () => {
+    candidateReviewAssign.disabled = true;
+    progressText.textContent =
+      "Fundstelle wird „" + name + "“ zugewiesen …";
+
+    if (state.kind === "person") {
+      await window.imageSorter.people.assignCandidateSelection(
+        state.candidateId,
+        [item.detectionId],
+        name
+      );
+    } else {
+      await window.imageSorter.pets.assignCandidateSelection(
+        state.candidateId,
+        [item.detectionId],
+        name
+      );
+    }
+
+    if (!state.knownNames.some(
+      (entry) => normalizedIdentityName(entry) === normalizedIdentityName(name)
+    )) {
+      state.knownNames.push(name);
+    }
+
+    state.items.splice(state.index, 1);
+    if (state.index >= state.items.length) {
+      state.index = Math.max(0, state.items.length - 1);
+    }
+
+    const sourceId = selectedSourceId();
+    if (sourceId !== null) {
+      if (state.kind === "person") {
+        await loadPersonOverview(sourceId);
+      } else {
+        await loadPetOverview(sourceId);
+      }
+    }
+
+    progressText.textContent =
+      "Fundstelle wurde „" + name + "“ zugewiesen. " +
+      state.items.length.toLocaleString("de-DE") +
+      (state.items.length === 1
+        ? " Fundstelle bleibt in der Gruppe."
+        : " Fundstellen bleiben in der Gruppe.");
+
+    if (state.items.length === 0) {
+      candidateReviewDialog.close();
+      candidateReviewState = null;
+      return;
+    }
+
+    renderCandidateReview();
+  });
+});
+
+candidateReviewName.addEventListener("keydown", (event) => {
+  if (event.key === "Enter") {
+    event.preventDefault();
+    candidateReviewAssign.click();
+  }
+});
+
 
 type IdentityBrowserMediaRef = {
   mediaId: number;
@@ -3463,7 +3788,16 @@ function renderPersonOverview(overview: PersonOverview): void {
         titleBlock.appendChild(warning);
       }
 
-      heading.appendChild(titleBlock);
+      const reviewGroupButton = document.createElement("button");
+      reviewGroupButton.type = "button";
+      reviewGroupButton.className = "ghost candidate-review-open";
+      reviewGroupButton.textContent = "Gruppe öffnen";
+      reviewGroupButton.title =
+        "Alle Fundstellen groß anzeigen und einzeln zuordnen";
+      reviewGroupButton.addEventListener("click", () => {
+        openPersonCandidateReview(candidate, overview);
+      });
+      heading.append(titleBlock, reviewGroupButton);
 
       const confirmRow = document.createElement("div");
       confirmRow.className = "person-confirm-row";
@@ -4095,7 +4429,16 @@ function renderPetOverview(overview: PetOverview): void {
         titleBlock.appendChild(warning);
       }
 
-      heading.appendChild(titleBlock);
+      const reviewGroupButton = document.createElement("button");
+      reviewGroupButton.type = "button";
+      reviewGroupButton.className = "ghost candidate-review-open";
+      reviewGroupButton.textContent = "Gruppe öffnen";
+      reviewGroupButton.title =
+        "Alle Fundstellen groß anzeigen und einzeln zuordnen";
+      reviewGroupButton.addEventListener("click", () => {
+        openPetCandidateReview(candidate, overview);
+      });
+      heading.append(titleBlock, reviewGroupButton);
 
       const confirmRow = document.createElement("div");
       confirmRow.className = "person-confirm-row";
