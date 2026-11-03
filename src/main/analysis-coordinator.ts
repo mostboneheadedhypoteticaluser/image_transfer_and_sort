@@ -72,7 +72,7 @@ const MODULES: ModuleSpec[] = [
     workerMethod: "detect_faces",
     completeMethod: "completeFaceDetectionJob",
     label: "Gesichtsdetektion",
-    timeoutMs: 60000
+    timeoutMs: 180000
   },
   {
     module: "face-embed-sface-v1",
@@ -80,7 +80,7 @@ const MODULES: ModuleSpec[] = [
     workerMethod: "extract_face_embeddings",
     completeMethod: "completeFaceEmbeddingJob",
     label: "Gesichtsmerkmale",
-    timeoutMs: 60000
+    timeoutMs: 180000
   },
   {
     module: "pet-detect-nanodet-v1",
@@ -88,7 +88,7 @@ const MODULES: ModuleSpec[] = [
     workerMethod: "detect_pets",
     completeMethod: "completePetDetectionJob",
     label: "Haustiere · NanoDet",
-    timeoutMs: 60000
+    timeoutMs: 180000
   },
   {
     module: "pet-detect-yolox-v1",
@@ -96,7 +96,7 @@ const MODULES: ModuleSpec[] = [
     workerMethod: "detect_pets_yolox",
     completeMethod: "completePetDetectionJob",
     label: "Haustiere · YOLOX-S",
-    timeoutMs: 90000
+    timeoutMs: 240000
   },
   {
     module: "pet-fuse-ensemble-v1",
@@ -112,7 +112,7 @@ const MODULES: ModuleSpec[] = [
     workerMethod: "extract_dog_embeddings",
     completeMethod: "completePetEmbeddingJob",
     label: "Individuelle Hundemerkmale",
-    timeoutMs: 120000
+    timeoutMs: 240000
   },
   {
     module: "semantic-embed-siglip2-v1",
@@ -133,6 +133,11 @@ const MODULES: ModuleSpec[] = [
     timeoutMs: 1800000
   }
 ];
+
+const FACE_INFERENCE_MODULE_NAMES = new Set([
+  "face-detect-yunet-v1",
+  "face-embed-sface-v1"
+]);
 
 const HEAVY_MODULE_NAMES = new Set([
   // Nur die großen semantischen Modelle bleiben exklusiv hinten. Videos sind
@@ -196,6 +201,7 @@ export class AnalysisCoordinator {
   private readonly fastLaneBusy: boolean[] =
     Array.from({ length: MAX_FAST_CONCURRENCY }, () => false);
   private readonly activeTasks = new Set<Promise<void>>();
+  private readonly activeModuleCounts = new Map<string, number>();
   private heavyRunning = false;
   private backfillRunning = false;
 
@@ -540,6 +546,26 @@ export class AnalysisCoordinator {
     return result;
   }
 
+  private markModuleActive(module: string, delta: number): void {
+    const next = Math.max(0, (this.activeModuleCounts.get(module) ?? 0) + delta);
+    if (next === 0) this.activeModuleCounts.delete(module);
+    else this.activeModuleCounts.set(module, next);
+  }
+
+  private faceInferenceBusy(): boolean {
+    for (const module of FACE_INFERENCE_MODULE_NAMES) {
+      if ((this.activeModuleCounts.get(module) ?? 0) > 0) return true;
+    }
+    return false;
+  }
+
+  private mayClaimSpec(spec: ModuleSpec): boolean {
+    return !(
+      FACE_INFERENCE_MODULE_NAMES.has(spec.module) &&
+      this.faceInferenceBusy()
+    );
+  }
+
   private async claimFastJob(laneIndex: number): Promise<{
     spec: ModuleSpec;
     job: AnalysisJob;
@@ -551,6 +577,7 @@ export class AnalysisCoordinator {
     if (currentMediaId !== null) {
       for (const spec of FAST_MODULES) {
         if (!this.analysis.isWorkerMethodAvailable(spec.workerMethod)) continue;
+        if (!this.mayClaimSpec(spec)) continue;
 
         const job = await this.catalog.request<AnalysisJob | null>(
           "claimAnalysisJob",
@@ -570,6 +597,7 @@ export class AnalysisCoordinator {
     // priorisiert weiterhin neu hinzugekommene Medien vor altem Backlog.
     for (const spec of FAST_MODULES) {
       if (!this.analysis.isWorkerMethodAvailable(spec.workerMethod)) continue;
+      if (!this.mayClaimSpec(spec)) continue;
 
       const job = await this.catalog.request<AnalysisJob | null>(
         "claimAnalysisJob",
@@ -621,6 +649,7 @@ export class AnalysisCoordinator {
   ): void {
     if (laneIndex !== null) this.fastLaneBusy[laneIndex] = true;
     if (heavy) this.heavyRunning = true;
+    this.markModuleActive(selection.spec.module, 1);
 
     const task = this.runSelection(selection);
 
@@ -629,6 +658,7 @@ export class AnalysisCoordinator {
       this.activeTasks.delete(task);
       if (laneIndex !== null) this.fastLaneBusy[laneIndex] = false;
       if (heavy) this.heavyRunning = false;
+      this.markModuleActive(selection.spec.module, -1);
 
       if (
         !this.stopped &&
