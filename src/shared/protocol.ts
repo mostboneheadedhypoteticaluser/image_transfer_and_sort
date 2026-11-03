@@ -449,6 +449,21 @@ export type PetCorrectionResult = {
   affectedPets: number;
 };
 
+export type SplitPetCandidateResult = {
+  changed: true;
+  selectedCount: number;
+  remainingCount: number;
+  selectedCandidateId: number | null;
+  remainingCandidateId: number | null;
+};
+
+export type AssignPetSelectionResult = {
+  petId: number;
+  name: string;
+  detectionCount: number;
+  remainingCount: number;
+};
+
 export type MergePetsResult = {
   petId: number;
   name: string;
@@ -862,6 +877,8 @@ export type CatalogMethod =
   | "confirmPetCandidate"
   | "ignorePetCandidate"
   | "removePetFromCandidate"
+  | "splitPetCandidate"
+  | "assignPetCandidateSelection"
   | "removePetFromPet"
   | "confirmPetDetection"
   | "mergePets"
