@@ -574,10 +574,24 @@ export class AnalysisCoordinator {
   }
 
   private mayClaimSpec(spec: ModuleSpec): boolean {
-    return !(
+    if (
       FACE_INFERENCE_MODULE_NAMES.has(spec.module) &&
       this.faceInferenceBusy()
-    );
+    ) {
+      return false;
+    }
+
+    // Video bleibt ein normaler Fast-Job, darf aber nicht mehrere Lanes
+    // gleichzeitig belegen. Bei concurrency >= 2 bleibt dadurch mindestens
+    // eine Lane für Fotos/Metadaten/Gesichter/Haustiere verfügbar.
+    if (
+      spec.module === "video-analyze-v1" &&
+      (this.activeModuleCounts.get("video-analyze-v1") ?? 0) > 0
+    ) {
+      return false;
+    }
+
+    return true;
   }
 
   private async claimFastJob(laneIndex: number): Promise<{
