@@ -127,6 +127,7 @@ const videoAnalysisStageCounts = document.querySelector<HTMLElement>("#videoAnal
 const analysisErrorsButton = document.querySelector<HTMLButtonElement>("#analysisErrorsButton")!;
 const analysisDevLogButton = document.querySelector<HTMLButtonElement>("#analysisDevLogButton")!;
 const analysisCopyDevLogButton = document.querySelector<HTMLButtonElement>("#analysisCopyDevLogButton")!;
+const analysisClearDevLogButton = document.querySelector<HTMLButtonElement>("#analysisClearDevLogButton")!;
 const qwenAutomaticButton = document.querySelector<HTMLButtonElement>("#qwenAutomaticButton")!;
 const qwenBenchmarkButton = document.querySelector<HTMLButtonElement>("#qwenBenchmarkButton")!;
 const qwenBenchmarkDialog = document.querySelector<HTMLDialogElement>("#qwenBenchmarkDialog")!;
@@ -5693,6 +5694,24 @@ analysisCopyDevLogButton.addEventListener("click", () => {
         " Zeichen.";
     } finally {
       analysisCopyDevLogButton.disabled = false;
+    }
+  });
+});
+
+analysisClearDevLogButton.addEventListener("click", () => {
+  if (!window.confirm(
+    "Dev-Protokoll wirklich löschen? Ab diesem Zeitpunkt werden nur neue Diagnoseeinträge gespeichert."
+  )) return;
+
+  void runSafely(async () => {
+    analysisClearDevLogButton.disabled = true;
+    try {
+      const result = await window.imageSorter.analysis.clearDevLog();
+      progressText.textContent =
+        "Dev-Protokoll gelöscht. Ab jetzt enthält es nur neue Einträge · " +
+        result.path;
+    } finally {
+      analysisClearDevLogButton.disabled = false;
     }
   });
 });
