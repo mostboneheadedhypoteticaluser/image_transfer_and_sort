@@ -72,6 +72,7 @@ let catalogWatchService: CatalogWatchService | null = null;
 let thumbnailCacheRoot = "";
 let personRefreshTimer: NodeJS.Timeout | null = null;
 let personRefreshRunning = false;
+let lifeAreaRuleRefreshTimer: NodeJS.Timeout | null = null;
 const groupedFaceEmbeddingCounts = new Map<number, number>();
 const groupedPetEmbeddingCounts = new Map<number, number>();
 let isQuitting = false;
@@ -361,6 +362,29 @@ function schedulePersonRefresh(): void {
   personRefreshTimer.unref();
 }
 
+function scheduleLifeAreaRuleRefresh(): void {
+  if (lifeAreaRuleRefreshTimer) {
+    clearTimeout(lifeAreaRuleRefreshTimer);
+  }
+
+  lifeAreaRuleRefreshTimer = setTimeout(() => {
+    lifeAreaRuleRefreshTimer = null;
+    if (!catalog || isQuitting || shutdownInProgress) return;
+
+    void catalog
+      .request<ApplyLifeAreaRulesResult>("applyLifeAreaRules")
+      .then(() => {
+        sendToRenderer("lifeAreas:updated", {});
+      })
+      .catch((error) => {
+        analysis?.logDiagnostic("LIFE_AREA_RULE_REFRESH_ERROR", {
+          error: error instanceof Error ? error.message : String(error)
+        });
+      });
+  }, 1800);
+  lifeAreaRuleRefreshTimer.unref();
+}
+
 function updatePipelineStage(
   stage: keyof PipelineStatus,
   stats: AnalysisQueueStats
@@ -377,6 +401,17 @@ function updatePipelineStage(
     stage === "petEmbeddings"
   ) {
     schedulePersonRefresh();
+  }
+
+  if (
+    stage === "technical" ||
+    stage === "imageMetadata" ||
+    stage === "faceEmbeddings" ||
+    stage === "petEmbeddings" ||
+    stage === "objectVerification" ||
+    stage === "videoAnalysis"
+  ) {
+    scheduleLifeAreaRuleRefresh();
   }
 }
 
