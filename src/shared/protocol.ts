@@ -123,6 +123,7 @@ export type PipelineStatus = {
   petEmbeddings: AnalysisQueueStats;
   objectVerification: AnalysisQueueStats;
   semanticEmbeddings: AnalysisQueueStats;
+  videoAnalysis: AnalysisQueueStats;
 };
 
 export type AnalysisJob = {
@@ -240,6 +241,29 @@ export type GeoMediaPoint = {
   thumbnailVersion: string | null;
 };
 
+export type VideoIdentityHit = {
+  kind: "person" | "pet";
+  identityId: number | null;
+  name: string | null;
+  petClass: "dog" | "cat" | null;
+  startMs: number;
+  endMs: number;
+  hitCount: number;
+  maxSimilarity: number | null;
+};
+
+export type VideoAnalysisDetails = {
+  durationMs: number;
+  width: number;
+  height: number;
+  fps: number;
+  sampleIntervalMs: number;
+  sampledFrames: number;
+  sceneCount: number;
+  tags: Array<{ label: string; score: number; hitCount: number }>;
+  identityHits: VideoIdentityHit[];
+};
+
 export type MediaDetails = {
   mediaId: number;
   sourceId: number;
@@ -300,6 +324,7 @@ export type MediaDetails = {
     updatedAt: string;
   } | null;
   analysisJobs: MediaDetailAnalysisJob[];
+  videoAnalysis: VideoAnalysisDetails | null;
 };
 
 export type PetDetectionForEmbedding = {
@@ -387,6 +412,14 @@ export type PetRecord = {
     relativePath: string;
     confidence: number | null;
     assignmentSource: "CONFIRMED" | "AUTO_HIGH_CONFIDENCE";
+  }>;
+  videoHits: Array<{
+    mediaId: number;
+    relativePath: string;
+    startMs: number;
+    endMs: number;
+    hitCount: number;
+    maxSimilarity: number | null;
   }>;
 };
 
@@ -502,6 +535,14 @@ export type PersonRecord = {
   faceCount: number;
   representativeFaceId: number | null;
   faces: PersonFace[];
+  videoHits: Array<{
+    mediaId: number;
+    relativePath: string;
+    startMs: number;
+    endMs: number;
+    hitCount: number;
+    maxSimilarity: number | null;
+  }>;
 };
 
 export type PersonOverview = {
@@ -812,6 +853,7 @@ export type CatalogMethod =
   | "getPetDetectionsForEmbedding"
   | "completePetEmbeddingJob"
   | "completeSemanticEmbeddingJob"
+  | "completeVideoAnalysisJob"
   | "getPetEmbeddingsForClustering"
   | "replacePetCandidates"
   | "autoAssignKnownPetCandidates"
