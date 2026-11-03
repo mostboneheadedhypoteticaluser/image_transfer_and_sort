@@ -1369,6 +1369,27 @@ function registerIpc(): void {
   );
 
   ipcMain.handle(
+    "pets:splitCandidate",
+    (
+      _event,
+      candidateId: number,
+      petDetectionIds: number[]
+    ): Promise<SplitPetCandidateResult> =>
+      petService!.splitCandidate(candidateId, petDetectionIds)
+  );
+
+  ipcMain.handle(
+    "pets:assignCandidateSelection",
+    (
+      _event,
+      candidateId: number,
+      petDetectionIds: number[],
+      name: string
+    ): Promise<AssignPetSelectionResult> =>
+      petService!.assignCandidateSelection(candidateId, petDetectionIds, name)
+  );
+
+  ipcMain.handle(
     "pets:removePetDetection",
     (
       _event,
