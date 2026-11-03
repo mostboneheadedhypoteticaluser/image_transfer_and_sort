@@ -6081,20 +6081,7 @@ function completePetEmbeddingJob(jobId: number, result: unknown) {
   }
 
   const value = result as Record<string, unknown>;
-
-  if (value.module !== "face-embed-sface-v1") {
-    throw new Error(
-      "Gesichtsmerkmal-Ergebnis enthält ein falsches oder fehlendes Modul."
-    );
-  }
-
-  if (!Array.isArray(value.embeddings)) {
-    throw new Error(
-      "Gesichtsmerkmal-Ergebnis enthält keine gültige Embedding-Liste."
-    );
-  }
-
-  const rawEmbeddings = value.embeddings;
+  const rawEmbeddings = Array.isArray(value.embeddings) ? value.embeddings : [];
   const modelVersion =
     typeof value.model === "string" && value.model.trim()
       ? value.model.trim()
@@ -6149,12 +6136,7 @@ function completePetEmbeddingJob(jobId: number, result: unknown) {
           AND pet_class='dog'
       `).get(petDetectionId, mediaId, inputSha256);
 
-      if (!belongsToMedia) {
-        throw new Error(
-          "Gesichtsmerkmal #" + (index + 1) +
-          " gehört nicht zum aktuellen Bildstand."
-        );
-      }
+      if (!belongsToMedia) continue;
 
       const vector = Array.isArray(item.vector) ? item.vector : [];
       const blob = embeddingToBlob(vector);
@@ -6190,11 +6172,7 @@ function completePetEmbeddingJob(jobId: number, result: unknown) {
     throw error;
   }
 
-  return {
-    completed: true,
-    embeddingCount: written,
-    expectedFaceCount
-  };
+  return { completed: true, embeddingCount: written };
 }
 
 function completeSemanticEmbeddingJob(jobId: number, result: unknown) {
@@ -8853,7 +8831,18 @@ function completeFaceEmbeddingJob(jobId: number, result: unknown) {
   }
 
   const value = result as Record<string, unknown>;
-  const rawEmbeddings = Array.isArray(value.embeddings) ? value.embeddings : [];
+  if (value.module !== "face-embed-sface-v1") {
+    throw new Error(
+      "Gesichtsmerkmal-Ergebnis enthält ein falsches oder fehlendes Modul."
+    );
+  }
+  if (!Array.isArray(value.embeddings)) {
+    throw new Error(
+      "Gesichtsmerkmal-Ergebnis enthält keine gültige Embedding-Liste."
+    );
+  }
+
+  const rawEmbeddings = value.embeddings;
   const modelVersion =
     typeof value.model === "string" && value.model.trim()
       ? value.model.trim()
@@ -8871,6 +8860,22 @@ function completeFaceEmbeddingJob(jobId: number, result: unknown) {
         AND input_sha256=?
     `).get(mediaId, inputSha256)?.count ?? 0
   );
+
+  const reportedInputFaceCount = Number(
+    value.inputFaceCount ?? expectedFaceCount
+  );
+  if (
+    !Number.isInteger(reportedInputFaceCount) ||
+    reportedInputFaceCount !== expectedFaceCount
+  ) {
+    throw new Error(
+      "SFace erhielt einen inkonsistenten Gesichtsstand: " +
+      reportedInputFaceCount +
+      " statt " +
+      expectedFaceCount +
+      "."
+    );
+  }
 
   if (rawEmbeddings.length !== expectedFaceCount) {
     const skipped = Number(value.skipped ?? 0);
@@ -8949,7 +8954,12 @@ function completeFaceEmbeddingJob(jobId: number, result: unknown) {
           AND input_sha256=?
       `).get(faceDetectionId, mediaId, inputSha256);
 
-      if (!belongsToMedia) continue;
+      if (!belongsToMedia) {
+        throw new Error(
+          "Gesichtsmerkmal #" + (index + 1) +
+          " gehört nicht zum aktuellen Bildstand."
+        );
+      }
 
       const vector = Array.isArray(item.vector) ? item.vector : [];
       const blob = embeddingToBlob(vector);
@@ -8975,7 +8985,11 @@ function completeFaceEmbeddingJob(jobId: number, result: unknown) {
         updated_at=CURRENT_TIMESTAMP
       WHERE id=?
     `).run(
-      JSON.stringify({ model: modelVersion, embeddingCount: written }),
+      JSON.stringify({
+        model: modelVersion,
+        embeddingCount: written,
+        expectedFaceCount
+      }),
       jobId
     );
 
@@ -8985,7 +8999,11 @@ function completeFaceEmbeddingJob(jobId: number, result: unknown) {
     throw error;
   }
 
-  return { completed: true, embeddingCount: written };
+  return {
+    completed: true,
+    embeddingCount: written,
+    expectedFaceCount
+  };
 }
 
 function vectorFromBlob(value: unknown, dimension: number): number[] {
