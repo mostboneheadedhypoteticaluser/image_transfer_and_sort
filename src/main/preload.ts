@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer } from "electron";
 import type {
   AnalysisErrorRecord,
   AnalysisWorkerStatus,
+  BackgroundPauseState,
   AssignPersonSelectionResult,
   QwenBenchmarkModel,
   QwenBenchmarkProfile,
@@ -58,6 +59,20 @@ const api = {
       ) => listener(status);
       ipcRenderer.on("app:shutdownStatus", handler);
       return () => ipcRenderer.removeListener("app:shutdownStatus", handler);
+    },
+    getBackgroundPauseState: (): Promise<BackgroundPauseState> =>
+      ipcRenderer.invoke("app:getBackgroundPauseState"),
+    setBackgroundPaused: (paused: boolean): Promise<BackgroundPauseState> =>
+      ipcRenderer.invoke("app:setBackgroundPaused", paused),
+    onBackgroundPauseState: (
+      listener: (status: BackgroundPauseState) => void
+    ) => {
+      const handler = (
+        _event: Electron.IpcRendererEvent,
+        status: BackgroundPauseState
+      ) => listener(status);
+      ipcRenderer.on("app:backgroundPauseState", handler);
+      return () => ipcRenderer.removeListener("app:backgroundPauseState", handler);
     }
   },
   analysis: {
