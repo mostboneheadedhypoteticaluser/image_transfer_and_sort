@@ -3930,3 +3930,49 @@ body {
     grid-column: 1 / -1;
   }
 }
+
+
+.confirmation-media-filter {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  margin-top: 0.7rem;
+  flex-wrap: wrap;
+}
+
+.confirmation-media-filter > span {
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--muted);
+}
+
+.confirmation-media-filter > div {
+  display: inline-flex;
+  gap: 0.25rem;
+  padding: 0.2rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-muted);
+}
+
+.confirmation-media-filter button {
+  min-height: 0;
+  padding: 0.38rem 0.78rem;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.confirmation-media-filter button:hover {
+  color: var(--text);
+  background: var(--surface);
+}
+
+.confirmation-media-filter button.active {
+  color: var(--text);
+  background: var(--surface);
+  box-shadow: 0 1px 3px rgb(0 0 0 / 12%);
+}
