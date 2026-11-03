@@ -7264,17 +7264,18 @@ function listPetCandidates(
         y: Number(row.y),
         width: Number(row.width),
         height: Number(row.height),
-        suggestedPersons: (() => {
-          const vector = vectorByFaceId.get(Number(row.face_detection_id));
+        suggestedPets: (() => {
+          const vector = vectorByPetId.get(Number(row.pet_detection_id));
           if (!vector) return [];
-          return knownPersons
+          return knownPets
+            .filter((known) => known.petClass === String(candidate.pet_class))
             .map((known) => ({
-              personId: known.id,
-              personName: known.name,
+              petId: known.id,
+              petName: known.name,
               similarity: cosineSimilarity(vector, known.vector),
-              representativeFaceId: known.representativeFaceId
+              representativePetId: known.representativePetId
             }))
-            .filter((match) => match.similarity >= 0.48)
+            .filter((match) => match.similarity >= 0.52)
             .sort((left, right) => right.similarity - left.similarity)
             .slice(0, 5);
         })()
@@ -9174,18 +9175,17 @@ function listPersonCandidates(
         y: Number(row.y),
         width: Number(row.width),
         height: Number(row.height),
-        suggestedPets: (() => {
-          const vector = vectorByPetId.get(Number(row.pet_detection_id));
+        suggestedPersons: (() => {
+          const vector = vectorByFaceId.get(Number(row.face_detection_id));
           if (!vector) return [];
-          return knownPets
-            .filter((known) => known.petClass === String(candidate.pet_class))
+          return knownPersons
             .map((known) => ({
-              petId: known.id,
-              petName: known.name,
+              personId: known.id,
+              personName: known.name,
               similarity: cosineSimilarity(vector, known.vector),
-              representativePetId: known.representativePetId
+              representativeFaceId: known.representativeFaceId
             }))
-            .filter((match) => match.similarity >= 0.52)
+            .filter((match) => match.similarity >= 0.48)
             .sort((left, right) => right.similarity - left.similarity)
             .slice(0, 5);
         })()
