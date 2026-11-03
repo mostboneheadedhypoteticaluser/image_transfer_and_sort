@@ -6652,10 +6652,12 @@ PARALLEL_FAST_METHODS = {
     "detect_pets_yolox",
     "fuse_pet_detections",
     "extract_dog_embeddings",
+    "analyze_video_frames",
+    "cluster_face_embeddings",
+    "cluster_pet_embeddings",
 }
 
 HEAVY_BACKGROUND_METHODS = {
-    "analyze_video_frames",
     "extract_semantic_image_embedding",
     "analyze_catalog_qwen3vl4b",
 }
