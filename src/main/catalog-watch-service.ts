@@ -63,7 +63,11 @@ export class CatalogWatchService {
 
   constructor(
     private readonly catalog: CatalogService,
-    private readonly onEvent: (event: CatalogWatchEvent) => void
+    private readonly onEvent: (event: CatalogWatchEvent) => void,
+    private readonly onDiagnostic?: (
+      event: string,
+      fields?: Record<string, unknown>
+    ) => void
   ) {}
 
   async start(runInitialSafetyScan = true): Promise<void> {
@@ -384,6 +388,14 @@ export class CatalogWatchService {
         }
       }
 
+      this.onDiagnostic?.("WATCH_SCAN_ERROR", {
+        sourceId,
+        mode: full ? "FULL" : "INCREMENTAL",
+        pathCount: paths?.length ?? 0,
+        elapsedMs: Date.now() - scanStartedAt,
+        error: message
+      });
+
       source.mode = "ERROR";
       this.emit({
         sourceId: source.sourceId,
@@ -572,6 +584,15 @@ export class CatalogWatchService {
     const source = this.sources.get(sourceId);
     if (!source || this.stopped) return;
 
+    const scanStartedAt = Date.now();
+    this.onDiagnostic?.("WATCH_SCAN_BEGIN", {
+      sourceId,
+      mode: full ? "FULL" : "INCREMENTAL",
+      pathCount: paths?.length ?? 0,
+      trigger,
+      queuedSources: this.pendingScans.size
+    });
+
     source.scanning = true;
     this.emit({
       sourceId,
@@ -631,6 +652,21 @@ export class CatalogWatchService {
         automatic,
         scanResult: result
       });
+
+      this.onDiagnostic?.("WATCH_SCAN_END", {
+        sourceId,
+        mode: result.mode,
+        pathCount: paths?.length ?? 0,
+        elapsedMs: Date.now() - scanStartedAt,
+        discovered: result.discovered,
+        added: result.added,
+        moved: result.moved,
+        changed: result.changed,
+        missing: result.missing,
+        recycleBin: result.recycleBin,
+        errors: result.errors
+      });
+
       this.resolveScanWaiters(sourceId, result);
     } catch (error) {
       source.scanning = false;
