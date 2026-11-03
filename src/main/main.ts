@@ -1710,7 +1710,8 @@ app.whenReady().then(() => {
   thumbnailCoordinator = new ThumbnailCoordinator(
     catalog,
     thumbnailService,
-    (stats) => updatePipelineStage("thumbnails", stats)
+    (stats) => updatePipelineStage("thumbnails", stats),
+    (event, fields = {}) => analysis?.logDiagnostic(event, fields)
   );
 
   personService = new PersonService(catalog, analysis);
