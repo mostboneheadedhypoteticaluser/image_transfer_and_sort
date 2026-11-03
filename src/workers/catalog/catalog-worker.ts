@@ -10847,7 +10847,8 @@ async function dispatch(method: CatalogMethod, payload: Record<string, unknown> 
         payload.conditionType,
         payload.conditionValue,
         payload.dateFrom,
-        payload.dateTo
+        payload.dateTo,
+        payload.groupId
       );
     case "deleteLifeAreaRule":
       return lifeAreaStore.deleteRule(
