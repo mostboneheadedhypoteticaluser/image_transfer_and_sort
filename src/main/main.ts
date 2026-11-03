@@ -279,6 +279,14 @@ function schedulePersonRefresh(): void {
 
     void (async () => {
       const counts = await getIdentityEmbeddingCounts();
+
+      // Der Katalogaufruf kann bei großen Importen einige Sekunden warten.
+      // Falls in dieser Zeit der App-Shutdown begonnen hat, darf danach weder
+      // Clustering noch ein neuer Python-Request gestartet werden.
+      if (shutdownInProgress || isQuitting || backgroundPaused) {
+        return;
+      }
+
       const faceQueueIdle =
         pipelineStatus.faceEmbeddings.pending === 0 &&
         pipelineStatus.faceEmbeddings.running === 0;
@@ -326,6 +334,8 @@ function schedulePersonRefresh(): void {
       // Gruppierung läuft jetzt als normaler paralleler Python-Job mit.
       // Sie darf die Bild-/Video-Lanes nicht mehr exklusiv anhalten.
       try {
+        if (shutdownInProgress || isQuitting || backgroundPaused) return;
+
         if (personService) {
           for (const entry of faceChangedSources) {
             // Nur die tatsächlich geänderte Quelle prüfen. forceRefresh=false
@@ -338,6 +348,7 @@ function schedulePersonRefresh(): void {
               true
             );
             groupedFaceEmbeddingCounts.set(entry.sourceId, entry.faces);
+            if (shutdownInProgress || isQuitting || backgroundPaused) return;
           }
           if (faceChangedSources.length > 0) {
             sendToRenderer("people:updated", {});
@@ -353,6 +364,7 @@ function schedulePersonRefresh(): void {
               true
             );
             groupedPetEmbeddingCounts.set(entry.sourceId, entry.dogs);
+            if (shutdownInProgress || isQuitting || backgroundPaused) return;
           }
           if (petChangedSources.length > 0) {
             sendToRenderer("pets:updated", {});
