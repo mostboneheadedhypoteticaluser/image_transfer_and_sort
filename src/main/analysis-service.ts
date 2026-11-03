@@ -47,6 +47,7 @@ type WorkerResponse = {
   processState?: string;
   pid?: number;
   port?: number;
+  logRecord?: Record<string, unknown>;
 };
 
 type PythonCandidate = {
@@ -184,26 +185,29 @@ export class AnalysisService {
     }
   }
 
+  private appendDevLogRecord(record: Record<string, unknown>): void {
+    try {
+      appendFileSync(this.devLogPath, JSON.stringify(record) + "\n", "utf8");
+    } catch {
+      // Diagnose darf die Anwendung nicht beeinflussen.
+    }
+  }
+
   private devLog(
     event: string,
     fields: Record<string, unknown> = {}
   ): void {
-    try {
-      const memory = process.memoryUsage();
-      const line = JSON.stringify({
-        ts: new Date().toISOString(),
-        source: "electron-analysis",
-        pid: process.pid,
-        event,
-        electronRssMiB: Math.round(memory.rss / 1024 / 1024),
-        systemFreeMiB: Math.round(os.freemem() / 1024 / 1024),
-        systemTotalMiB: Math.round(os.totalmem() / 1024 / 1024),
-        ...fields
-      });
-      appendFileSync(this.devLogPath, line + "\n", "utf8");
-    } catch {
-      // Diagnose darf die Anwendung nicht beeinflussen.
-    }
+    const memory = process.memoryUsage();
+    this.appendDevLogRecord({
+      ts: new Date().toISOString(),
+      source: "electron-analysis",
+      pid: process.pid,
+      event,
+      electronRssMiB: Math.round(memory.rss / 1024 / 1024),
+      systemFreeMiB: Math.round(os.freemem() / 1024 / 1024),
+      systemTotalMiB: Math.round(os.totalmem() / 1024 / 1024),
+      ...fields
+    });
   }
 
   private requestTarget(payload: Record<string, unknown>): string | null {
@@ -548,6 +552,17 @@ export class AnalysisService {
       try {
         message = JSON.parse(line) as WorkerResponse;
       } catch {
+        return;
+      }
+
+      if (
+        message.event === "devlog" &&
+        message.logRecord &&
+        typeof message.logRecord === "object"
+      ) {
+        // Python schreibt nicht mehr parallel direkt in die Datei. Dadurch
+        // bleibt jede JSON-Zeile auch unter hoher Parallelität atomar.
+        this.appendDevLogRecord(message.logRecord);
         return;
       }
 
