@@ -11,6 +11,53 @@ type RuleRow = {
   enabled?: unknown;
 };
 
+const FOLDER_RULE_PREFIX = "@folder:";
+
+type FolderRuleValue = {
+  sourceId: number;
+  relativePath: string;
+};
+
+function normalizeFolderRelativePath(value: unknown): string {
+  if (typeof value !== "string") return "";
+  return value
+    .replace(/\\/g, "/")
+    .replace(/^\/+|\/+$/g, "")
+    .replace(/\/{2,}/g, "/");
+}
+
+function parseFolderRuleValue(value: unknown): FolderRuleValue | null {
+  if (typeof value !== "string" || !value.startsWith(FOLDER_RULE_PREFIX)) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(value.slice(FOLDER_RULE_PREFIX.length));
+    const sourceId = Number(parsed?.s);
+    if (!Number.isInteger(sourceId) || sourceId <= 0) return null;
+
+    const relativePath = normalizeFolderRelativePath(parsed?.p ?? "");
+    if (
+      relativePath === ".." ||
+      relativePath.startsWith("../") ||
+      relativePath.includes("/../")
+    ) {
+      return null;
+    }
+
+    return { sourceId, relativePath };
+  } catch {
+    return null;
+  }
+}
+
+function encodeFolderRuleValue(value: FolderRuleValue): string {
+  return FOLDER_RULE_PREFIX + JSON.stringify({
+    s: value.sourceId,
+    p: normalizeFolderRelativePath(value.relativePath)
+  });
+}
+
 export function createLifeAreaStore(db: DatabaseSync) {
   function normalizeName(value: unknown): string {
     const name = typeof value === "string" ? value.trim() : "";
@@ -35,7 +82,20 @@ export function createLifeAreaStore(db: DatabaseSync) {
       return "Haustier: " + (pet ? String(pet.name) : "#" + value);
     }
     if (type === "tag") return "Merkmal: " + value;
-    if (type === "path") return "Pfad enthält: " + value;
+    if (type === "path") {
+      const folderRule = parseFolderRuleValue(value);
+      if (folderRule) {
+        const source = db.prepare(
+          "SELECT path FROM media_sources WHERE id=?"
+        ).get(folderRule.sourceId);
+        const sourcePath = source ? String(source.path) : "Medienquelle #" + folderRule.sourceId;
+        const folderPath = folderRule.relativePath
+          ? sourcePath.replace(/[\\/]+$/g, "") + "\\" + folderRule.relativePath.replace(/\//g, "\\")
+          : sourcePath;
+        return "Ordner rekursiv: " + folderPath;
+      }
+      return "Pfad enthält: " + value;
+    }
     if (type === "date") {
       const from = row.date_from ? String(row.date_from) : "…";
       const to = row.date_to ? String(row.date_to) : "…";
@@ -225,11 +285,47 @@ export function createLifeAreaStore(db: DatabaseSync) {
     if (!value) {
       throw new Error(
         type === "path"
-          ? "Bitte einen Pfadbestandteil eingeben."
+          ? "Bitte einen Pfadbestandteil oder Ordner auswählen."
           : "Bitte ein Merkmal eingeben."
       );
     }
-    if (value.length > 300) throw new Error("Der Regelwert ist zu lang.");
+
+    if (type === "path" && value.startsWith(FOLDER_RULE_PREFIX)) {
+      const folderRule = parseFolderRuleValue(value);
+      if (!folderRule) {
+        throw new Error("Der ausgewählte Ordner ist ungültig.");
+      }
+
+      const source = db.prepare(
+        "SELECT id FROM media_sources WHERE id=? AND enabled=1"
+      ).get(folderRule.sourceId);
+      if (!source) {
+        throw new Error("Die zugehörige Medienquelle ist nicht mehr aktiv.");
+      }
+
+      if (folderRule.relativePath) {
+        const directory = db.prepare(`
+          SELECT 1
+          FROM media_directories
+          WHERE source_id=?
+            AND relative_path=? COLLATE NOCASE
+            AND availability=1
+          LIMIT 1
+        `).get(folderRule.sourceId, folderRule.relativePath);
+
+        if (!directory) {
+          throw new Error(
+            "Der ausgewählte Ordner wurde im aktuellen Scan der Medienquelle nicht gefunden."
+          );
+        }
+      }
+
+      const encoded = encodeFolderRuleValue(folderRule);
+      if (encoded.length > 1000) throw new Error("Der ausgewählte Ordnerpfad ist zu lang.");
+      return { type, value: encoded, dateFrom: null, dateTo: null };
+    }
+
+    if (value.length > 1000) throw new Error("Der Regelwert ist zu lang.");
 
     return { type, value, dateFrom: null, dateTo: null };
   }
@@ -342,6 +438,30 @@ export function createLifeAreaStore(db: DatabaseSync) {
     }
 
     if (type === "path") {
+      const folderRule = parseFolderRuleValue(value);
+      if (folderRule) {
+        const relativePath = folderRule.relativePath;
+        if (!relativePath) {
+          return db.prepare(base + " AND m.source_id=?")
+            .all(folderRule.sourceId)
+            .map((row) => Number(row.id));
+        }
+
+        const prefix = relativePath + "/";
+        return db.prepare(base + `
+          AND m.source_id=?
+          AND (
+            lower(m.relative_path)=lower(?)
+            OR substr(lower(m.relative_path),1,length(?))=lower(?)
+          )
+        `).all(
+          folderRule.sourceId,
+          relativePath,
+          prefix,
+          prefix
+        ).map((row) => Number(row.id));
+      }
+
       const needle = "%" + String(value ?? "").toLocaleLowerCase("de-DE") + "%";
       return db.prepare(base + " AND lower(m.relative_path) LIKE ?")
         .all(needle)
