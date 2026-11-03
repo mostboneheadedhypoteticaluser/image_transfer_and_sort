@@ -86,8 +86,8 @@ let qwenBenchmarkPreparing: Promise<void> | null = null;
 let backgroundPaused = false;
 let backgroundPauseChanging = false;
 
-const IDENTITY_FACE_BATCH_SIZE = 100;
-const IDENTITY_DOG_BATCH_SIZE = 20;
+const IDENTITY_FACE_BATCH_SIZE = 250;
+const IDENTITY_DOG_BATCH_SIZE = 50;
 
 const EMPTY_QUEUE: AnalysisQueueStats = {
   pending: 0,
@@ -216,23 +216,14 @@ async function getIdentityEmbeddingCounts(): Promise<Array<{
 }>> {
   if (!catalog) return [];
 
-  const sources = await catalog.request<SourceRecord[]>("listSources");
-  const result: Array<{ sourceId: number; faces: number; dogs: number }> = [];
-
-  for (const source of sources) {
-    if (!source.enabled) continue;
-
-    const stats = await catalog.request<CatalogStats>("getStats", {
-      sourceId: source.id
-    });
-    result.push({
-      sourceId: source.id,
-      faces: stats.embeddedFaces,
-      dogs: stats.embeddedDogs
-    });
-  }
-
-  return result;
+  // Der Identity-Refresh braucht nur diese beiden Zähler. Früher wurde dafür
+  // pro Quelle getStats() aufgerufen, das zusätzlich Duplikate, Kandidaten,
+  // Recycle-Bin und mehrere große JOINs berechnet hat.
+  return catalog.request<Array<{
+    sourceId: number;
+    faces: number;
+    dogs: number;
+  }>>("getIdentityEmbeddingCounts");
 }
 
 async function waitForIdentityRefreshIdle(timeoutMs = 15000): Promise<void> {
@@ -641,7 +632,8 @@ function createSourceManagerWindow(): BrowserWindow {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: true
+      sandbox: true,
+      backgroundThrottling: false
     }
   });
 
@@ -672,7 +664,8 @@ function createWindow(): BrowserWindow {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: true
+      sandbox: true,
+      backgroundThrottling: false
     }
   });
 
@@ -682,6 +675,20 @@ function createWindow(): BrowserWindow {
   } else {
     void win.loadFile(path.join(__dirname, "..", "renderer", "index.html"));
   }
+
+  win.on("minimize", () => {
+    analysis?.logDiagnostic("WINDOW_STATE", {
+      state: "minimized",
+      backgroundThrottling: false
+    });
+  });
+
+  win.on("restore", () => {
+    analysis?.logDiagnostic("WINDOW_STATE", {
+      state: "restored",
+      backgroundThrottling: false
+    });
+  });
 
   win.on("close", (event) => {
     if (allowQuit) return;
