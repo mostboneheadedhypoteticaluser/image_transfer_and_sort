@@ -191,6 +191,7 @@ export class AnalysisCoordinator {
   private stopped = true;
   private benchmarkPaused = false;
   private maintenancePaused = false;
+  private userPaused = false;
   private shutdownRequested = false;
   private readonly fastLaneMediaIds: Array<number | null> =
     Array.from({ length: FAST_CONCURRENCY }, () => null);
@@ -280,7 +281,45 @@ export class AnalysisCoordinator {
   resumeAfterMaintenance(): void {
     this.maintenancePaused = false;
 
-    if (!this.stopped && !this.benchmarkPaused) {
+    if (!this.stopped && !this.benchmarkPaused && !this.userPaused) {
+      void this.pump();
+    }
+  }
+
+  async pauseForUser(): Promise<void> {
+    if (this.userPaused) return;
+    this.userPaused = true;
+
+    // Laufende Python-/Qwen-Arbeit hart stoppen, damit CPU/GPU sofort frei
+    // werden. Die betroffenen Queue-Jobs werden unten wieder auf PENDING gesetzt.
+    this.analysis.stopForUserPause();
+
+    const deadline = Date.now() + 15000;
+    while (
+      (this.pumping || this.activeTasks.size > 0) &&
+      Date.now() < deadline
+    ) {
+      await new Promise<void>((resolve) => setTimeout(resolve, 50));
+    }
+
+    this.analysis.setQueueState(
+      0,
+      0,
+      "Hintergrundanalyse pausiert."
+    );
+  }
+
+  async resumeFromUserPause(): Promise<void> {
+    if (!this.userPaused) return;
+
+    await this.analysis.start();
+    this.userPaused = false;
+
+    // Falls zuvor ein exklusiver Benchmark den Coordinator gestoppt hatte,
+    // normal starten; sonst die bestehenden Fast-Lanes direkt fortsetzen.
+    if (this.stopped) {
+      await this.start();
+    } else {
       void this.pump();
     }
   }
@@ -322,7 +361,7 @@ export class AnalysisCoordinator {
 
     // Falls alle leichteren Stufen bereits fertig sind, muss die Queue nicht
     // bis zum nächsten Intervall warten.
-    if (!this.stopped && !this.benchmarkPaused) {
+    if (!this.stopped && !this.benchmarkPaused && !this.userPaused) {
       void this.pump();
     }
   }
@@ -525,7 +564,12 @@ export class AnalysisCoordinator {
       if (laneIndex !== null) this.fastLaneBusy[laneIndex] = false;
       if (heavy) this.heavyRunning = false;
 
-      if (!this.stopped && !this.maintenancePaused && !this.benchmarkPaused) {
+      if (
+        !this.stopped &&
+        !this.maintenancePaused &&
+        !this.benchmarkPaused &&
+        !this.userPaused
+      ) {
         void this.pump();
       }
     });
@@ -646,7 +690,7 @@ export class AnalysisCoordinator {
         // Benchmarkpause und App-Shutdown sind kontrollierte Unterbrechungen,
         // keine echten Analysefehler. Der gerade beanspruchte Job wird deshalb
         // wieder auf PENDING gesetzt und beim nächsten Start sauber wiederholt.
-        if (this.benchmarkPaused || this.shutdownRequested) {
+        if (this.benchmarkPaused || this.userPaused || this.shutdownRequested) {
           await this.catalog.request("retryAnalysisJob", {
             jobId: job.id
           });
@@ -671,7 +715,12 @@ export class AnalysisCoordinator {
   }
 
   private async pump(): Promise<void> {
-    if (this.stopped || this.pumping || this.maintenancePaused) return;
+    if (
+      this.stopped ||
+      this.pumping ||
+      this.maintenancePaused ||
+      this.userPaused
+    ) return;
     if (this.analysis.getStatus().state !== "READY") return;
 
     this.pumping = true;
