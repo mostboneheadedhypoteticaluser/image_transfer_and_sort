@@ -850,6 +850,18 @@ db.prepare(`
 `).run();
 
 let scanRunning = false;
+let processingPaused = false;
+
+async function waitForProcessingResume(): Promise<void> {
+  while (processingPaused) {
+    await new Promise<void>((resolve) => setTimeout(resolve, 100));
+  }
+}
+
+function setProcessingPaused(paused: boolean) {
+  processingPaused = paused;
+  return { paused: processingPaused };
+}
 
 function post(message: WorkerResponse): void {
   parentPort.postMessage(message);
@@ -3777,6 +3789,7 @@ async function reconcileSourceChanges(
   // bewusst die sichere Wahrheit.
   const preDirectoryIndex = loadDirectoryIndex(sourceId);
   for (const relativePath of relativePaths) {
+    await waitForProcessingResume();
     const absolutePath = path.join(root, ...relativePath.split("/"));
     try {
       const info = await stat(absolutePath);
@@ -4144,6 +4157,7 @@ async function reconcileSourceChanges(
     // Datei-Rename die neue Stelle die alte media_id übernehmen, bevor das
     // verschwundene alte Watcher-Ereignis betrachtet wird.
     for (const relativePath of relativePaths) {
+      await waitForProcessingResume();
       const absolutePath = path.join(root, ...relativePath.split("/"));
 
       let info;
@@ -4195,6 +4209,7 @@ async function reconcileSourceChanges(
           );
         }
       })) {
+        await waitForProcessingResume();
         const sourceRelative = path
           .relative(root, file.absolutePath)
           .split(path.sep)
@@ -4500,6 +4515,7 @@ async function scanSource(sourceId: number): Promise<ScanResult> {
         );
       }
     })) {
+      await waitForProcessingResume();
       discovered += 1;
 
       try {
@@ -11516,6 +11532,8 @@ async function dispatch(method: CatalogMethod, payload: Record<string, unknown> 
       return getMediaPath(asNumber(payload.mediaId, "mediaId"));
     case "scanSource":
       return scanSource(asNumber(payload.sourceId, "sourceId"));
+    case "setProcessingPaused":
+      return setProcessingPaused(payload.paused === true);
     case "reconcileSourceChanges":
       return reconcileSourceChanges(
         asNumber(payload.sourceId, "sourceId"),
