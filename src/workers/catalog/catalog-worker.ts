@@ -5129,7 +5129,20 @@ function completeFaceDetectionJob(jobId: number, result: unknown) {
   }
 
   const value = result as Record<string, unknown>;
-  const rawFaces = Array.isArray(value.faces) ? value.faces : [];
+
+  if (value.module !== "face-detect-yunet-v1") {
+    throw new Error(
+      "Gesichtsdetektions-Ergebnis enthält ein falsches oder fehlendes Modul."
+    );
+  }
+
+  if (!Array.isArray(value.faces)) {
+    throw new Error(
+      "Gesichtsdetektions-Ergebnis enthält keine gültige Gesichterliste."
+    );
+  }
+
+  const rawFaces = value.faces;
   const detectorVersion =
     typeof value.detector === "string" && value.detector.trim()
       ? value.detector.trim()
@@ -5169,7 +5182,11 @@ function completeFaceDetectionJob(jobId: number, result: unknown) {
 
     for (let index = 0; index < rawFaces.length; index += 1) {
       const face = rawFaces[index];
-      if (!face || typeof face !== "object") continue;
+      if (!face || typeof face !== "object") {
+        throw new Error(
+          "Gesichtsdetektion #" + (index + 1) + " ist kein gültiges Objekt."
+        );
+      }
 
       const item = face as Record<string, unknown>;
       const x = Number(item.x);
@@ -5177,8 +5194,38 @@ function completeFaceDetectionJob(jobId: number, result: unknown) {
       const width = Number(item.width);
       const height = Number(item.height);
       const score = Number(item.score);
+      const landmarks = Array.isArray(item.landmarks) ? item.landmarks : [];
 
-      if (![x, y, width, height, score].every(Number.isFinite)) continue;
+      if (![x, y, width, height, score].every(Number.isFinite)) {
+        throw new Error(
+          "Gesichtsdetektion #" + (index + 1) +
+          " enthält ungültige Zahlenwerte."
+        );
+      }
+
+      if (width <= 0 || height <= 0) {
+        throw new Error(
+          "Gesichtsdetektion #" + (index + 1) +
+          " hat eine ungültige Größe."
+        );
+      }
+
+      if (
+        landmarks.length !== 5 ||
+        landmarks.some((landmark) => {
+          if (!landmark || typeof landmark !== "object") return true;
+          const point = landmark as Record<string, unknown>;
+          return (
+            !Number.isFinite(Number(point.x)) ||
+            !Number.isFinite(Number(point.y))
+          );
+        })
+      ) {
+        throw new Error(
+          "Gesichtsdetektion #" + (index + 1) +
+          " enthält keine fünf gültigen Landmarken."
+        );
+      }
 
       upsert.run(
         Number(job.media_id),
@@ -5190,7 +5237,7 @@ function completeFaceDetectionJob(jobId: number, result: unknown) {
         width,
         height,
         score,
-        JSON.stringify(Array.isArray(item.landmarks) ? item.landmarks : [])
+        JSON.stringify(landmarks)
       );
       written += 1;
     }
@@ -5240,7 +5287,7 @@ function completeFaceDetectionJob(jobId: number, result: unknown) {
     throw error;
   }
 
-  return { completed: true };
+  return { completed: true, faceCount: rawFaces.length };
 }
 
 function completePetDetectionJob(jobId: number, result: unknown) {
