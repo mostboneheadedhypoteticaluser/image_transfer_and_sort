@@ -96,7 +96,8 @@ let pipelineStatus: PipelineStatus = {
   petFusion: { ...EMPTY_QUEUE },
   petEmbeddings: { ...EMPTY_QUEUE },
   objectVerification: { ...EMPTY_QUEUE },
-  semanticEmbeddings: { ...EMPTY_QUEUE }
+  semanticEmbeddings: { ...EMPTY_QUEUE },
+  videoAnalysis: { ...EMPTY_QUEUE }
 };
 
 const semanticTextCache = new Map<string, SemanticTextEmbedding>();
@@ -895,7 +896,8 @@ function registerIpc(): void {
         petFusion: { ...EMPTY_QUEUE },
         petEmbeddings: { ...EMPTY_QUEUE },
         objectVerification: { ...EMPTY_QUEUE },
-        semanticEmbeddings: { ...EMPTY_QUEUE }
+        semanticEmbeddings: { ...EMPTY_QUEUE },
+        videoAnalysis: { ...EMPTY_QUEUE }
       };
       sendToRenderer("analysis:pipelineStatus", pipelineStatus);
 
@@ -1191,7 +1193,8 @@ function registerIpc(): void {
         petFusion,
         petEmbeddings,
         semanticEmbeddings,
-        objectVerification
+        objectVerification,
+        videoAnalysis
       ] = await Promise.all([
         queue("file-probe-v1"),
         queue("thumbnail-v1"),
@@ -1205,7 +1208,8 @@ function registerIpc(): void {
         queue("pet-fuse-ensemble-v1"),
         queue("pet-embed-dogreid-v1"),
         queue("semantic-embed-siglip2-v1"),
-        queue("catalog-semantic-qwen3vl4b-v3")
+        queue("catalog-semantic-qwen3vl4b-v3"),
+        queue("video-analyze-v1")
       ]);
 
       return {
@@ -1218,7 +1222,8 @@ function registerIpc(): void {
         petFusion,
         petEmbeddings,
         objectVerification,
-        semanticEmbeddings
+        semanticEmbeddings,
+        videoAnalysis
       };
     }
   );
