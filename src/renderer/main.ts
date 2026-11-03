@@ -271,6 +271,7 @@ let lastPipelineIssueTotal = -1;
 let analysisRefreshTimer: number | null = null;
 let sourcePipelineRefreshTimer: number | null = null;
 let identityStatsRefreshTimer: number | null = null;
+let watchCatalogRefreshTimer: number | null = null;
 let searchFacetsScopeKey: string | null = null;
 let latestAnalysisStatus: AnalysisWorkerStatus | null = null;
 let backgroundPauseState: BackgroundPauseState = {
@@ -5434,6 +5435,31 @@ async function loadAnalysisErrors(): Promise<void> {
   analysisErrorsButton.hidden = total === 0;
 }
 
+function scheduleWatchCatalogRefresh(): void {
+  if (watchCatalogRefreshTimer !== null) {
+    window.clearTimeout(watchCatalogRefreshTimer);
+  }
+
+  // Mehrere SCAN_FINISHED-Ereignisse einer Kopierwelle erzeugen nur noch
+  // einen UI-Reload. Der Watcher/Katalog selbst läuft davon unabhängig weiter.
+  watchCatalogRefreshTimer = window.setTimeout(() => {
+    watchCatalogRefreshTimer = null;
+
+    if (
+      scanning ||
+      restoring ||
+      resetting ||
+      isEditingPersonView() ||
+      isEditingPetView()
+    ) {
+      scheduleWatchCatalogRefresh();
+      return;
+    }
+
+    void runSafely(refreshCatalog);
+  }, 900);
+}
+
 async function refreshCatalog(): Promise<void> {
   const sourceId = selectedSourceId();
   scanButton.disabled = sourceId === null || scanning || restoring || resetting;
@@ -6138,19 +6164,27 @@ window.imageSorter.catalog.onWatchEvent((event) => {
   }
 
   if (event.kind === "SCAN_FINISHED") {
-    invalidateMapData();
-    invalidateLifeAreas();
     progressBar.classList.remove("active");
     progressText.textContent = event.message;
 
-    if (
-      !scanning &&
-      !restoring &&
-      !resetting &&
-      !isEditingPersonView() &&
-      !isEditingPetView()
-    ) {
-      void runSafely(refreshCatalog);
+    const result = event.scanResult;
+    const hasVisibleChanges =
+      result !== null &&
+      (
+        result.added > 0 ||
+        result.moved > 0 ||
+        result.changed > 0 ||
+        result.missing > 0 ||
+        result.recycleBin > 0 ||
+        result.errors > 0
+      );
+
+    // Ein Abgleich ohne echte Änderung darf keine komplette UI-Neuladung
+    // auslösen. Bei Importwellen werden mehrere echte Änderungen gebündelt.
+    if (hasVisibleChanges) {
+      invalidateMapData();
+      invalidateLifeAreas();
+      scheduleWatchCatalogRefresh();
     }
   }
 
