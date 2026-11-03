@@ -21,6 +21,7 @@ import {
   restoreRecycleBinItem,
   type RecycleBinItem
 } from "./recycle-bin";
+import { createLifeAreaStore } from "./life-areas";
 import type {
   CatalogChange,
   CatalogMethod,
@@ -76,6 +77,7 @@ const dbPath = process.env.IMAGE_SORTER_DB;
 if (!dbPath) throw new Error("IMAGE_SORTER_DB fehlt.");
 
 const db = new DatabaseSync(dbPath);
+const lifeAreaStore = createLifeAreaStore(db);
 
 db.exec(`
   PRAGMA journal_mode=WAL;
