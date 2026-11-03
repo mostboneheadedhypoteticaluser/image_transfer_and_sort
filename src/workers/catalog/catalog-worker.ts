@@ -4021,16 +4021,26 @@ async function reconcileSourceChanges(
 
   // Ein verschwundener katalogisierter Ordner kann ein Rename, Move oder
   // Löschen eines ganzen Teilbaums sein. Dafür ist der bestehende Vollscan
-  // bewusst die sichere Wahrheit.
-  const preDirectoryIndex = loadDirectoryIndex(sourceId);
+  // bewusst die sichere Wahrheit. Für normale Datei-Events aber nicht mehr den
+  // kompletten Ordnerindex laden, sondern nur den betroffenen Pfad prüfen.
+  const knownDirectoryAtPath = db.prepare(`
+    SELECT 1
+    FROM media_directories
+    WHERE source_id=? AND relative_path=?
+    LIMIT 1
+  `);
+  let containsDirectoryPath = false;
+
   for (const relativePath of relativePaths) {
     await waitForProcessingResume();
     const absolutePath = path.join(root, ...relativePath.split("/"));
     try {
       const info = await stat(absolutePath);
-      if (info.isDirectory()) continue;
+      if (info.isDirectory()) {
+        containsDirectoryPath = true;
+      }
     } catch {
-      if (preDirectoryIndex.byPath.has(relativePath)) {
+      if (knownDirectoryAtPath.get(sourceId, relativePath)) {
         return scanSource(sourceId);
       }
     }
@@ -4056,13 +4066,20 @@ async function reconcileSourceChanges(
 
     const token = randomUUID();
     const { byPath, byHash, byIdentity } = loadIndex(sourceId);
-    const directoryIndex = loadDirectoryIndex(sourceId);
+    const directoryIndex: DirectoryIndex = containsDirectoryPath
+      ? loadDirectoryIndex(sourceId)
+      : {
+          byPath: new Map(),
+          byIdentity: new Map(),
+          all: new Map()
+        };
     const seenIds = new Set<number>();
     const seenDirectoryIds = new Set<number>();
     const readErrorPaths: string[] = [];
     const scannedDirectoryPrefixes = new Set<string>();
     const missingPaths: string[] = [];
     const processedFiles = new Set<string>();
+    let needsJobReactivation = false;
 
     const touch = db.prepare(`
       UPDATE media_items
@@ -4165,6 +4182,9 @@ async function reconcileSourceChanges(
 
       if (previous) {
         seenIds.add(previous.id);
+        if (previous.availability !== "AVAILABLE") {
+          needsJobReactivation = true;
+        }
 
         if (
           previous.sizeBytes === file.sizeBytes &&
@@ -4255,6 +4275,9 @@ async function reconcileSourceChanges(
 
       if (identityCandidate) {
         const previousPath = identityCandidate.relativePath;
+        if (identityCandidate.availability !== "AVAILABLE") {
+          needsJobReactivation = true;
+        }
         moveExisting.run(
           file.relativePath,
           file.absolutePath,
@@ -4301,6 +4324,9 @@ async function reconcileSourceChanges(
 
       if (moveCandidate) {
         const previousPath = moveCandidate.relativePath;
+        if (moveCandidate.availability !== "AVAILABLE") {
+          needsJobReactivation = true;
+        }
         moveExisting.run(
           file.relativePath,
           file.absolutePath,
@@ -4495,22 +4521,45 @@ async function reconcileSourceChanges(
       }
     }
 
-    recycleBin = await refreshRecycleStatus(sourceId);
-    const recycleState = db.prepare(`
-      SELECT in_recycle_bin, recycle_ambiguous
-      FROM media_items
-      WHERE id=?
-    `);
+    if (missing > 0) {
+      // Die Windows-Papierkorbsuche ist teuer und darf nicht bei jeder neuen
+      // oder geänderten Datei laufen. Sie ist nur nötig, wenn tatsächlich
+      // Katalogmedien verschwunden sind.
+      recycleBin = await refreshRecycleStatus(sourceId);
 
-    for (const change of changes) {
-      if (change.kind !== "MISSING") continue;
-      const state = recycleState.get(change.mediaId);
-      if (state?.in_recycle_bin) change.kind = "RECYCLE";
-      else if (state?.recycle_ambiguous) change.kind = "RECYCLE_AMBIGUOUS";
+      const recycleState = db.prepare(`
+        SELECT in_recycle_bin, recycle_ambiguous
+        FROM media_items
+        WHERE id=?
+      `);
+
+      for (const change of changes) {
+        if (change.kind !== "MISSING") continue;
+        const state = recycleState.get(change.mediaId);
+        if (state?.in_recycle_bin) change.kind = "RECYCLE";
+        else if (state?.recycle_ambiguous) change.kind = "RECYCLE_AMBIGUOUS";
+      }
+    } else {
+      recycleBin = Number(
+        db.prepare(`
+          SELECT COUNT(*) AS count
+          FROM media_items
+          WHERE source_id=?
+            AND availability='MISSING'
+            AND (in_recycle_bin=1 OR recycle_ambiguous=1)
+        `).get(sourceId)?.count ?? 0
+      );
     }
 
-    reactivateAvailableMediaJobs(sourceId);
-    enqueueAllAnalysisJobs(sourceId);
+    if (needsJobReactivation) {
+      reactivateAvailableMediaJobs(sourceId);
+    }
+
+    // Kein globales enqueueAllAnalysisJobs() mehr im Live-Pfad:
+    // neue/geänderte Medien erhalten file-probe-v1 bereits direkt in
+    // reconcileFile(); completeAnalysisJob() reiht danach exakt die passende
+    // Bild- oder Video-Pipeline ein. Der globale Aufruf war bei jeder kleinen
+    // Watcher-Welle ein vollständiger 12-Modul-Katalogdurchlauf.
 
     const result: ScanResult = {
       mode: "INCREMENTAL",
