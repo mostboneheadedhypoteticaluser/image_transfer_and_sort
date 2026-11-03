@@ -6,6 +6,8 @@ import type {
   PetCandidate,
   PetClusterInput,
   PetCorrectionResult,
+  SplitPetCandidateResult,
+  AssignPetSelectionResult,
   PetEmbeddingSet,
   MergePetsResult,
   PetOverview,
@@ -297,6 +299,27 @@ export class PetService {
     return this.catalog.request<PetCorrectionResult>(
       "removePetFromCandidate",
       { candidateId, petDetectionId }
+    );
+  }
+
+  async splitCandidate(
+    candidateId: number,
+    petDetectionIds: number[]
+  ): Promise<SplitPetCandidateResult> {
+    return this.catalog.request<SplitPetCandidateResult>(
+      "splitPetCandidate",
+      { candidateId, petDetectionIds }
+    );
+  }
+
+  async assignCandidateSelection(
+    candidateId: number,
+    petDetectionIds: number[],
+    name: string
+  ): Promise<AssignPetSelectionResult> {
+    return this.catalog.request<AssignPetSelectionResult>(
+      "assignPetCandidateSelection",
+      { candidateId, petDetectionIds, name }
     );
   }
 
