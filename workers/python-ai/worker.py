@@ -290,6 +290,36 @@ config = WorkerConfig()
 runtime = WorkerRuntime()
 
 
+def apply_runtime_thread_budget() -> int:
+    logical_cpus = max(1, int(os.cpu_count() or 1))
+    budget_threads = max(
+        1,
+        int(round(logical_cpus * config.cpu_budget_percent / 100.0)),
+    )
+    per_job_threads = max(
+        1,
+        min(4, budget_threads // max(1, config.max_concurrent_jobs)),
+    )
+
+    if cv2 is not None:
+        try:
+            cv2.setNumThreads(per_job_threads)
+        except Exception as exc:
+            dev_log(
+                "OPENCV_THREAD_BUDGET_ERROR",
+                error=str(exc),
+            )
+
+    dev_log(
+        "RUNTIME_THREAD_BUDGET",
+        logicalCpus=logical_cpus,
+        cpuBudgetPercent=config.cpu_budget_percent,
+        maxConcurrentJobs=config.max_concurrent_jobs,
+        opencvThreadsPerJob=per_job_threads,
+    )
+    return per_job_threads
+
+
 def find_llama_server() -> str | None:
     global _llama_server_cached, _llama_server_searched
 
@@ -6502,6 +6532,7 @@ def handle(message: dict) -> bool:
         config.max_concurrent_jobs = max(1, min(8, jobs))
         config.cpu_budget_percent = max(10, min(100, cpu_budget))
         config.profile = profile if profile in {"background", "balanced", "full"} else "background"
+        apply_runtime_thread_budget()
 
         respond(request_id, result=snapshot())
         return True
