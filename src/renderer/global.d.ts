@@ -188,8 +188,9 @@ declare global {
           conditionType: LifeAreaRuleConditionType,
           conditionValue: string | null,
           dateFrom: string | null,
-          dateTo: string | null
-        ): Promise<{ id: number }>;
+          dateTo: string | null,
+          groupId?: number | null
+        ): Promise<{ id: number; groupId: number }>;
         deleteLifeAreaRule(ruleId: number): Promise<LifeAreaMutationResult>;
         setLifeAreaRuleEnabled(
           ruleId: number,
