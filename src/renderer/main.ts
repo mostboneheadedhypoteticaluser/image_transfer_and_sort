@@ -165,6 +165,9 @@ const searchSummary = document.querySelector<HTMLSpanElement>("#searchSummary")!
 const searchScope = document.querySelector<HTMLSelectElement>("#searchScope")!;
 const identityBrowserPeopleTab = document.querySelector<HTMLButtonElement>("#identityBrowserPeopleTab")!;
 const identityBrowserPetsTab = document.querySelector<HTMLButtonElement>("#identityBrowserPetsTab")!;
+const identityBrowserAllMedia = document.querySelector<HTMLButtonElement>("#identityBrowserAllMedia")!;
+const identityBrowserImagesOnly = document.querySelector<HTMLButtonElement>("#identityBrowserImagesOnly")!;
+const identityBrowserVideosOnly = document.querySelector<HTMLButtonElement>("#identityBrowserVideosOnly")!;
 const identityBrowserListTitle = document.querySelector<HTMLElement>("#identityBrowserListTitle")!;
 const identityBrowserCount = document.querySelector<HTMLElement>("#identityBrowserCount")!;
 const identityBrowserList = document.querySelector<HTMLDivElement>("#identityBrowserList")!;
@@ -187,6 +190,7 @@ const identityRangeFill = document.querySelector<HTMLDivElement>("#identityRange
 let sources: SourceRecord[] = [];
 let currentView: CatalogView = "media";
 let identityBrowserMode: "people" | "pets" = "people";
+let identityBrowserMediaFilter: "all" | "image" | "video" = "all";
 let identityBrowserSelectionToken = 0;
 let scanning = false;
 let restoring = false;
@@ -1403,6 +1407,53 @@ function configureIdentityDateRange(detailsList: MediaDetails[]): void {
   updateIdentityRangePresentation();
 }
 
+function identityRefsForMediaFilter(
+  refs: IdentityBrowserMediaRef[]
+): IdentityBrowserMediaRef[] {
+  if (identityBrowserMediaFilter === "all") return refs;
+  return refs.filter((ref) => (ref.kind ?? "image") === identityBrowserMediaFilter);
+}
+
+function identityMediaCounts(refs: IdentityBrowserMediaRef[]): {
+  images: number;
+  videos: number;
+} {
+  return {
+    images: new Set(
+      refs
+        .filter((ref) => (ref.kind ?? "image") === "image")
+        .map((ref) => ref.mediaId)
+    ).size,
+    videos: new Set(
+      refs
+        .filter((ref) => ref.kind === "video")
+        .map((ref) => ref.mediaId)
+    ).size
+  };
+}
+
+function identityPassesMediaFilter(refs: IdentityBrowserMediaRef[]): boolean {
+  if (identityBrowserMediaFilter === "all") return refs.length > 0;
+  return refs.some(
+    (ref) => (ref.kind ?? "image") === identityBrowserMediaFilter
+  );
+}
+
+function renderIdentityMediaFilterState(): void {
+  identityBrowserAllMedia.classList.toggle(
+    "active",
+    identityBrowserMediaFilter === "all"
+  );
+  identityBrowserImagesOnly.classList.toggle(
+    "active",
+    identityBrowserMediaFilter === "image"
+  );
+  identityBrowserVideosOnly.classList.toggle(
+    "active",
+    identityBrowserMediaFilter === "video"
+  );
+}
+
 async function selectIdentityBrowserEntry(
   kind: "Personen" | "Tiere",
   name: string,
@@ -1413,10 +1464,17 @@ async function selectIdentityBrowserEntry(
   identityBrowserDetail.hidden = false;
   identityBrowserKind.textContent = kind;
   identityBrowserName.textContent = name;
+  const counts = identityMediaCounts(refs);
   const uniqueMediaCount = new Set(refs.map((ref) => ref.mediaId)).size;
   identityBrowserMeta.textContent =
     uniqueMediaCount.toLocaleString("de-DE") +
-    (uniqueMediaCount === 1 ? " zugeordnetes Medium" : " zugeordnete Medien");
+    (uniqueMediaCount === 1 ? " zugeordnetes Medium" : " zugeordnete Medien") +
+    " · " +
+    counts.images.toLocaleString("de-DE") +
+    (counts.images === 1 ? " Bild" : " Bilder") +
+    " · " +
+    counts.videos.toLocaleString("de-DE") +
+    (counts.videos === 1 ? " Video" : " Videos");
   identityWordCloud.replaceChildren();
   identityTimeline.replaceChildren();
   identityCloudHint.textContent = "Erkennungen werden zusammengeführt …";
@@ -1436,6 +1494,8 @@ async function loadIdentityBrowser(): Promise<void> {
   const sourceId = selectedSourceId() ?? 0;
   identityBrowserPeopleTab.classList.toggle("active", identityBrowserMode === "people");
   identityBrowserPetsTab.classList.toggle("active", identityBrowserMode === "pets");
+  renderIdentityMediaFilterState();
+
   identityBrowserListTitle.textContent =
     identityBrowserMode === "people" ? "Bestätigte Personen" : "Bestätigte Tiere";
   identityBrowserList.replaceChildren();
@@ -1448,15 +1508,42 @@ async function loadIdentityBrowser(): Promise<void> {
 
   if (identityBrowserMode === "people") {
     const overview = await window.imageSorter.people.getOverview(sourceId, false);
-    identityBrowserCount.textContent = overview.persons.length.toLocaleString("de-DE");
-    if (overview.persons.length === 0) {
-      identityBrowserList.innerHTML = '<div class="identity-browser-empty">Noch keine bestätigten Personen vorhanden.</div>';
+    const entries = overview.persons.map((person) => {
+      const refs: IdentityBrowserMediaRef[] = [
+        ...person.faces.map((face) => ({
+          mediaId: face.mediaId,
+          relativePath: face.relativePath,
+          kind: "image" as const
+        })),
+        ...person.videoHits.map((hit) => ({
+          mediaId: hit.mediaId,
+          relativePath: hit.relativePath,
+          kind: "video" as const,
+          startMs: hit.startMs,
+          endMs: hit.endMs,
+          hitCount: hit.hitCount,
+          maxSimilarity: hit.maxSimilarity
+        }))
+      ];
+      return { person, refs };
+    }).filter(({ refs }) => identityPassesMediaFilter(refs));
+
+    identityBrowserCount.textContent =
+      entries.length.toLocaleString("de-DE") +
+      " / " +
+      overview.persons.length.toLocaleString("de-DE");
+
+    if (entries.length === 0) {
+      identityBrowserList.innerHTML =
+        '<div class="identity-browser-empty">Für diesen Medientyp gibt es keine bestätigten Personen.</div>';
       return;
     }
-    for (const person of overview.persons) {
+
+    for (const { person, refs } of entries) {
       const button = document.createElement("button");
       button.type = "button";
       button.className = "identity-browser-entry";
+
       if (person.representativeFaceId !== null) {
         const image = document.createElement("img");
         image.src = faceCropUrl(person.representativeFaceId);
@@ -1464,57 +1551,75 @@ async function loadIdentityBrowser(): Promise<void> {
         image.loading = "lazy";
         button.appendChild(image);
       }
+
       const text = document.createElement("span");
       const title = document.createElement("strong");
       title.textContent = person.name;
       const count = document.createElement("small");
-      const totalHits = person.faceCount + person.videoHits.length;
+      const counts = identityMediaCounts(refs);
       count.textContent =
-        totalHits.toLocaleString("de-DE") + " Treffer" +
-        (person.videoHits.length > 0
-          ? " · " + person.videoHits.length.toLocaleString("de-DE") + " Video"
-          : "");
+        counts.images.toLocaleString("de-DE") +
+        (counts.images === 1 ? " Bild" : " Bilder") +
+        " · " +
+        counts.videos.toLocaleString("de-DE") +
+        (counts.videos === 1 ? " Video" : " Videos");
       text.append(title, count);
       button.appendChild(text);
+
       button.addEventListener("click", () => {
-        identityBrowserList.querySelectorAll(".identity-browser-entry").forEach((item) => item.classList.remove("active"));
+        identityBrowserList
+          .querySelectorAll(".identity-browser-entry")
+          .forEach((item) => item.classList.remove("active"));
         button.classList.add("active");
         void selectIdentityBrowserEntry(
           "Personen",
           person.name,
-          [
-            ...person.faces.map((face) => ({
-              mediaId: face.mediaId,
-              relativePath: face.relativePath,
-              kind: "image" as const
-            })),
-            ...person.videoHits.map((hit) => ({
-              mediaId: hit.mediaId,
-              relativePath: hit.relativePath,
-              kind: "video" as const,
-              startMs: hit.startMs,
-              endMs: hit.endMs,
-              hitCount: hit.hitCount,
-              maxSimilarity: hit.maxSimilarity
-            }))
-          ]
+          identityRefsForMediaFilter(refs)
         );
       });
+
       identityBrowserList.appendChild(button);
     }
     return;
   }
 
   const overview = await window.imageSorter.pets.getOverview(sourceId, false);
-  identityBrowserCount.textContent = overview.pets.length.toLocaleString("de-DE");
-  if (overview.pets.length === 0) {
-    identityBrowserList.innerHTML = '<div class="identity-browser-empty">Noch keine bestätigten Tiere vorhanden.</div>';
+  const entries = overview.pets.map((pet) => {
+    const refs: IdentityBrowserMediaRef[] = [
+      ...pet.pets.map((item) => ({
+        mediaId: item.mediaId,
+        relativePath: item.relativePath,
+        kind: "image" as const
+      })),
+      ...pet.videoHits.map((hit) => ({
+        mediaId: hit.mediaId,
+        relativePath: hit.relativePath,
+        kind: "video" as const,
+        startMs: hit.startMs,
+        endMs: hit.endMs,
+        hitCount: hit.hitCount,
+        maxSimilarity: hit.maxSimilarity
+      }))
+    ];
+    return { pet, refs };
+  }).filter(({ refs }) => identityPassesMediaFilter(refs));
+
+  identityBrowserCount.textContent =
+    entries.length.toLocaleString("de-DE") +
+    " / " +
+    overview.pets.length.toLocaleString("de-DE");
+
+  if (entries.length === 0) {
+    identityBrowserList.innerHTML =
+      '<div class="identity-browser-empty">Für diesen Medientyp gibt es keine bestätigten Tiere.</div>';
     return;
   }
-  for (const pet of overview.pets) {
+
+  for (const { pet, refs } of entries) {
     const button = document.createElement("button");
     button.type = "button";
     button.className = "identity-browser-entry";
+
     if (pet.representativePetId !== null) {
       const image = document.createElement("img");
       image.src = petCropUrl(pet.representativePetId);
@@ -1522,24 +1627,35 @@ async function loadIdentityBrowser(): Promise<void> {
       image.loading = "lazy";
       button.appendChild(image);
     }
+
     const text = document.createElement("span");
     const title = document.createElement("strong");
     title.textContent = pet.name;
     const count = document.createElement("small");
+    const counts = identityMediaCounts(refs);
     count.textContent =
       (pet.petClass === "cat" ? "Katze" : "Hund") +
-      " · " + pet.detectionCount.toLocaleString("de-DE") + " Treffer";
+      " · " +
+      counts.images.toLocaleString("de-DE") +
+      (counts.images === 1 ? " Bild" : " Bilder") +
+      " · " +
+      counts.videos.toLocaleString("de-DE") +
+      (counts.videos === 1 ? " Video" : " Videos");
     text.append(title, count);
     button.appendChild(text);
+
     button.addEventListener("click", () => {
-      identityBrowserList.querySelectorAll(".identity-browser-entry").forEach((item) => item.classList.remove("active"));
+      identityBrowserList
+        .querySelectorAll(".identity-browser-entry")
+        .forEach((item) => item.classList.remove("active"));
       button.classList.add("active");
       void selectIdentityBrowserEntry(
         "Tiere",
         pet.name,
-        pet.pets.map((item) => ({ mediaId: item.mediaId, relativePath: item.relativePath }))
+        identityRefsForMediaFilter(refs)
       );
     });
+
     identityBrowserList.appendChild(button);
   }
 }
