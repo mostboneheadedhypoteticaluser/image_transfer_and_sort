@@ -25,6 +25,8 @@ import type {
   MergePetsResult,
   PersonCorrectionResult,
   PetCorrectionResult,
+  SplitPetCandidateResult,
+  AssignPetSelectionResult,
   PersonOverview,
   PetOverview,
   RestoreResult,
@@ -211,6 +213,22 @@ const api = {
       petDetectionId: number
     ): Promise<PetCorrectionResult> =>
       ipcRenderer.invoke("pets:removeCandidatePet", candidateId, petDetectionId),
+    splitCandidate: (
+      candidateId: number,
+      petDetectionIds: number[]
+    ): Promise<SplitPetCandidateResult> =>
+      ipcRenderer.invoke("pets:splitCandidate", candidateId, petDetectionIds),
+    assignCandidateSelection: (
+      candidateId: number,
+      petDetectionIds: number[],
+      name: string
+    ): Promise<AssignPetSelectionResult> =>
+      ipcRenderer.invoke(
+        "pets:assignCandidateSelection",
+        candidateId,
+        petDetectionIds,
+        name
+      ),
     removePetDetection: (
       petId: number,
       petDetectionId: number
