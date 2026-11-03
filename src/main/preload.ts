@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer } from "electron";
 import type {
   AnalysisErrorRecord,
   AnalysisWorkerStatus,
+  AssignPersonSelectionResult,
   QwenBenchmarkModel,
   QwenBenchmarkProfile,
   QwenBenchmarkRunResult,
@@ -136,6 +137,17 @@ const api = {
         fallbackFaceDetectionId,
         expectedFaceCount,
         expectedMemberSignature
+      ),
+    assignCandidateSelection: (
+      candidateId: number,
+      faceDetectionIds: number[],
+      name: string
+    ): Promise<AssignPersonSelectionResult> =>
+      ipcRenderer.invoke(
+        "people:assignCandidateSelection",
+        candidateId,
+        faceDetectionIds,
+        name
       ),
     ignoreCandidate: (
       candidateId: number,
