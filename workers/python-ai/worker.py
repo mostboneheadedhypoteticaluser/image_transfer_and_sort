@@ -62,8 +62,17 @@ def dev_log(event: str, **fields) -> None:
             "event": event,
             **fields,
         }
-        with open(_DEV_LOG_PATH, "a", encoding="utf-8") as handle:
-            handle.write(json.dumps(payload, ensure_ascii=False) + "\n")
+
+        # Nicht mehr selbst in dieselbe Datei wie Electron schreiben. Zwei
+        # Prozesse konnten unter Windows ihre JSON-Zeilen ineinanderschieben.
+        # Electron ist ab jetzt der einzige Dateischreiber.
+        envelope = {
+            "event": "devlog",
+            "logRecord": payload,
+        }
+        with _STDOUT_LOCK:
+            sys.stdout.write(json.dumps(envelope, ensure_ascii=False) + "\n")
+            sys.stdout.flush()
     except Exception:
         # Diagnose darf den Worker niemals beeinflussen.
         pass
