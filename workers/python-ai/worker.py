@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 import gc
 import importlib.util
 import io
@@ -15,6 +16,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from urllib import error as urllib_error
 from urllib import request as urllib_request
@@ -44,6 +46,7 @@ for _stream_name in ("stdin", "stdout", "stderr"):
 
 _PROCESS_STARTED_AT = time.perf_counter()
 _DEV_LOG_PATH = os.environ.get("IMAGE_SORTER_DEV_LOG", "").strip()
+_STDOUT_LOCK = threading.Lock()
 
 
 def dev_log(event: str, **fields) -> None:
@@ -236,6 +239,7 @@ COCO_CLASS_NAMES = (
 
 _dog_reid_session = None
 _onnxruntime_module = None
+_DOG_REID_LOCK = threading.Lock()
 _siglip2_model = None
 _siglip2_processor = None
 _siglip2_coco_text_features = None
@@ -557,7 +561,8 @@ def respond(request_id: str | None, *, result=None, error: str | None = None) ->
     # ASCII-escaping hält das Zeilenprotokoll selbst dann robust, wenn eine
     # Windows-Umgebung die Pipe-Encoding-Vorgabe ignoriert. JSON.parse stellt
     # die ursprünglichen Unicode-Zeichen auf der Electron-Seite wieder her.
-    print(json.dumps(message, ensure_ascii=True), flush=True)
+    with _STDOUT_LOCK:
+        print(json.dumps(message, ensure_ascii=True), flush=True)
 
 
 def report_progress(
@@ -583,7 +588,8 @@ def report_progress(
     if total is not None:
         event["total"] = int(total)
 
-    print(json.dumps(event, ensure_ascii=True), flush=True)
+    with _STDOUT_LOCK:
+        print(json.dumps(event, ensure_ascii=True), flush=True)
 
 
 def report_process_event(
@@ -603,7 +609,8 @@ def report_process_event(
     if port is not None:
         event["port"] = int(port)
 
-    print(json.dumps(event, ensure_ascii=True), flush=True)
+    with _STDOUT_LOCK:
+        print(json.dumps(event, ensure_ascii=True), flush=True)
 
 
 def require_file(payload: dict) -> str:
@@ -1671,48 +1678,51 @@ def dog_reid_session():
             "Dog-ReID-Modell fehlt. Einmal 'npm.cmd run setup:ai' ausführen."
         )
 
-    if _onnxruntime_module is None:
-        started = time.perf_counter()
-        dev_log("DOG_REID_ONNXRUNTIME_IMPORT_BEGIN")
-        try:
-            import onnxruntime as runtime
-        except Exception as exc:
+    # Zwei Fast-Lanes können gleichzeitig erstmals bei Dog-ReID ankommen.
+    # Modellimport/-initialisierung darf deshalb nur genau einmal stattfinden.
+    with _DOG_REID_LOCK:
+        if _onnxruntime_module is None:
+            started = time.perf_counter()
+            dev_log("DOG_REID_ONNXRUNTIME_IMPORT_BEGIN")
+            try:
+                import onnxruntime as runtime
+            except Exception as exc:
+                dev_log(
+                    "DOG_REID_ONNXRUNTIME_IMPORT_ERROR",
+                    elapsedMs=round((time.perf_counter() - started) * 1000, 1),
+                    error=str(exc),
+                )
+                raise RuntimeError(
+                    "ONNX Runtime konnte für Dog-ReID nicht geladen werden: "
+                    f"{exc}"
+                ) from exc
+
+            _onnxruntime_module = runtime
             dev_log(
-                "DOG_REID_ONNXRUNTIME_IMPORT_ERROR",
+                "DOG_REID_ONNXRUNTIME_IMPORT_OK",
                 elapsedMs=round((time.perf_counter() - started) * 1000, 1),
-                error=str(exc),
             )
-            raise RuntimeError(
-                "ONNX Runtime konnte für Dog-ReID nicht geladen werden: "
-                f"{exc}"
-            ) from exc
 
-        _onnxruntime_module = runtime
-        dev_log(
-            "DOG_REID_ONNXRUNTIME_IMPORT_OK",
-            elapsedMs=round((time.perf_counter() - started) * 1000, 1),
-        )
+        runtime = _onnxruntime_module
 
-    runtime = _onnxruntime_module
+        if _dog_reid_session is None:
+            started = time.perf_counter()
+            dev_log("DOG_REID_MODEL_LOAD_BEGIN", model=DOG_REID_MODEL)
+            options = runtime.SessionOptions()
+            options.intra_op_num_threads = 4
+            options.inter_op_num_threads = 1
+            options.execution_mode = runtime.ExecutionMode.ORT_SEQUENTIAL
+            _dog_reid_session = runtime.InferenceSession(
+                DOG_REID_MODEL,
+                sess_options=options,
+                providers=["CPUExecutionProvider"],
+            )
+            dev_log(
+                "DOG_REID_MODEL_LOAD_OK",
+                elapsedMs=round((time.perf_counter() - started) * 1000, 1),
+            )
 
-    if _dog_reid_session is None:
-        started = time.perf_counter()
-        dev_log("DOG_REID_MODEL_LOAD_BEGIN", model=DOG_REID_MODEL)
-        options = runtime.SessionOptions()
-        options.intra_op_num_threads = 4
-        options.inter_op_num_threads = 1
-        options.execution_mode = runtime.ExecutionMode.ORT_SEQUENTIAL
-        _dog_reid_session = runtime.InferenceSession(
-            DOG_REID_MODEL,
-            sess_options=options,
-            providers=["CPUExecutionProvider"],
-        )
-        dev_log(
-            "DOG_REID_MODEL_LOAD_OK",
-            elapsedMs=round((time.perf_counter() - started) * 1000, 1),
-        )
-
-    return _dog_reid_session
+        return _dog_reid_session
 
 
 def dog_crop_with_margin(image, box: dict, margin_fraction: float = 0.10):
@@ -6633,6 +6643,91 @@ def handle(message: dict) -> bool:
     return True
 
 
+PARALLEL_FAST_METHODS = {
+    "probe_media",
+    "extract_image_metadata",
+    "detect_faces",
+    "extract_face_embeddings",
+    "detect_pets",
+    "detect_pets_yolox",
+    "fuse_pet_detections",
+    "extract_dog_embeddings",
+}
+
+CONTROL_METHODS = {"ping", "status", "configure"}
+
+
+def process_request_message(message: dict) -> bool:
+    request_started = time.perf_counter()
+    request_id = message.get("id")
+    method = str(message.get("method", "unknown"))
+    payload = message.get("payload") or {}
+    target = None
+
+    if isinstance(payload, dict):
+        raw_target = payload.get("path")
+        if isinstance(raw_target, str):
+            target = raw_target
+
+    try:
+        dev_log(
+            "PY_REQUEST_BEGIN",
+            requestId=request_id,
+            method=method,
+            target=target,
+        )
+
+        keep_running = handle(message)
+
+        dev_log(
+            "PY_REQUEST_END",
+            requestId=request_id,
+            method=method,
+            target=target,
+            elapsedMs=round((time.perf_counter() - request_started) * 1000, 1),
+            ok=True,
+        )
+        return keep_running
+    except Exception as exc:
+        dev_log(
+            "PY_REQUEST_ERROR",
+            requestId=request_id,
+            method=method,
+            target=target,
+            elapsedMs=round((time.perf_counter() - request_started) * 1000, 1),
+            error=str(exc),
+        )
+        respond(request_id, error=str(exc))
+        return True
+
+
+def reap_parallel_requests(
+    futures: set[Future[bool]],
+    *,
+    wait_for_one: bool = False,
+    wait_for_all: bool = False,
+) -> None:
+    if not futures:
+        return
+
+    if wait_for_all:
+        done, _pending = wait(futures)
+    elif wait_for_one:
+        done, _pending = wait(futures, return_when=FIRST_COMPLETED)
+    else:
+        done = {future for future in futures if future.done()}
+
+    futures.difference_update(done)
+
+    # process_request_message fängt reguläre Jobfehler selbst ab. Diese Abfrage
+    # verhindert trotzdem, dass ein unerwarteter Thread-Fehler unbemerkt bleibt.
+    for future in done:
+        try:
+            future.result()
+        except Exception as exc:
+            dev_log("PY_PARALLEL_REQUEST_THREAD_ERROR", error=str(exc))
+
+
 def main() -> int:
     dev_log(
         "PYTHON_WORKER_READY_FOR_STDIN",
@@ -6642,58 +6737,58 @@ def main() -> int:
         numpy=np is not None,
     )
 
+    # Der Executor besitzt bis zu acht Threads, tatsächlich freigegeben werden
+    # aber nur config.max_concurrent_jobs. So kann configure() die Parallelität
+    # ändern, ohne den Worker neu starten zu müssen.
+    executor = ThreadPoolExecutor(
+        max_workers=8,
+        thread_name_prefix="image-sorter-fast",
+    )
+    parallel_futures: set[Future[bool]] = set()
+
     try:
         for line in sys.stdin:
             line = line.strip()
             if not line:
                 continue
 
-            request_started = time.perf_counter()
             request_id = None
-            method = "unknown"
-            target = None
-
             try:
                 message = json.loads(line)
                 request_id = message.get("id")
                 method = str(message.get("method", "unknown"))
-                payload = message.get("payload") or {}
-                if isinstance(payload, dict):
-                    raw_target = payload.get("path")
-                    if isinstance(raw_target, str):
-                        target = raw_target
 
-                dev_log(
-                    "PY_REQUEST_BEGIN",
-                    requestId=request_id,
-                    method=method,
-                    target=target,
-                )
+                reap_parallel_requests(parallel_futures)
 
-                keep_running = handle(message)
+                if method in PARALLEL_FAST_METHODS:
+                    while len(parallel_futures) >= config.max_concurrent_jobs:
+                        reap_parallel_requests(
+                            parallel_futures,
+                            wait_for_one=True,
+                        )
 
-                dev_log(
-                    "PY_REQUEST_END",
-                    requestId=request_id,
-                    method=method,
-                    target=target,
-                    elapsedMs=round((time.perf_counter() - request_started) * 1000, 1),
-                    ok=True,
-                )
+                    parallel_futures.add(
+                        executor.submit(process_request_message, message)
+                    )
+                    continue
 
+                # Status/Configure müssen auch während laufender Fast-Lanes
+                # unmittelbar antworten können. Alle übrigen Methoden
+                # (Clustering, SigLIP, Video, Qwen, Shutdown) laufen exklusiv.
+                if method not in CONTROL_METHODS:
+                    reap_parallel_requests(
+                        parallel_futures,
+                        wait_for_all=True,
+                    )
+
+                keep_running = process_request_message(message)
                 if not keep_running:
                     break
             except Exception as exc:
-                dev_log(
-                    "PY_REQUEST_ERROR",
-                    requestId=request_id,
-                    method=method,
-                    target=target,
-                    elapsedMs=round((time.perf_counter() - request_started) * 1000, 1),
-                    error=str(exc),
-                )
                 respond(request_id, error=str(exc))
     finally:
+        reap_parallel_requests(parallel_futures, wait_for_all=True)
+        executor.shutdown(wait=True, cancel_futures=False)
         dev_log("PYTHON_WORKER_SHUTDOWN_BEGIN")
         unload_qwen3vl()
         dev_log(
@@ -6702,7 +6797,6 @@ def main() -> int:
         )
 
     return 0
-
 
 if __name__ == "__main__":
     raise SystemExit(main())
