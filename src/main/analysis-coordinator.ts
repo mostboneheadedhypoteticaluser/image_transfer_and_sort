@@ -168,6 +168,11 @@ type PythonPipelineStats = Pick<
   | "videoAnalysis"
 >;
 
+type PipelineQueueSnapshot = {
+  byModule: Record<string, AnalysisQueueStats>;
+  petDetection: AnalysisQueueStats;
+};
+
 function emptyStats(): AnalysisQueueStats {
   return { pending: 0, running: 0, done: 0, failed: 0, unavailable: 0 };
 }
@@ -202,6 +207,7 @@ export class AnalysisCoordinator {
     Array.from({ length: MAX_FAST_CONCURRENCY }, () => false);
   private readonly activeTasks = new Set<Promise<void>>();
   private readonly activeModuleCounts = new Map<string, number>();
+  private statsRefreshPromise: Promise<PythonPipelineStats> | null = null;
   private heavyRunning = false;
   private backfillRunning = false;
 
@@ -451,7 +457,24 @@ export class AnalysisCoordinator {
     }
   }
 
-  private async refreshAllStats(): Promise<PythonPipelineStats> {
+  private refreshAllStats(): Promise<PythonPipelineStats> {
+    // Mehrere parallele Jobs können nahezu gleichzeitig fertig werden.
+    // Früher startete jeder davon einen kompletten Statistikdurchlauf und hielt
+    // seine Fast-Lane bis zum Ende dieser DB-Abfragen blockiert. Einen bereits
+    // laufenden Refresh teilen deshalb jetzt alle Aufrufer.
+    if (this.statsRefreshPromise) return this.statsRefreshPromise;
+
+    const task = this.refreshAllStatsNow();
+    this.statsRefreshPromise = task;
+    void task.finally(() => {
+      if (this.statsRefreshPromise === task) {
+        this.statsRefreshPromise = null;
+      }
+    });
+    return task;
+  }
+
+  private async refreshAllStatsNow(): Promise<PythonPipelineStats> {
     const result: PythonPipelineStats = {
       technical: emptyStats(),
       imageMetadata: emptyStats(),
@@ -465,33 +488,24 @@ export class AnalysisCoordinator {
       videoAnalysis: emptyStats()
     };
 
+    // Statt 10+ serieller IPC-/SQLite-Abfragen kommt der komplette Queue-
+    // Snapshot in einem einzigen Katalogaufruf zurück.
+    const snapshot = await this.catalog.request<PipelineQueueSnapshot>(
+      "getPipelineQueueStats"
+    );
+
     for (const spec of MODULES) {
-      // Die beiden Haustierdetektoren werden für die Anzeige weiter unten
-      // bildbezogen zusammengeführt. Einfaches Addieren würde jedes Bild
-      // doppelt zählen.
       if (spec.stage === "petDetection") continue;
-
-      const stats = await this.catalog.request<AnalysisQueueStats>(
-        "getAnalysisQueueStats",
-        { module: spec.module }
-      );
-
+      const stats = snapshot.byModule[spec.module] ?? emptyStats();
       result[spec.stage] = addStats(result[spec.stage], stats);
     }
 
-    result.petDetection =
-      await this.catalog.request<AnalysisQueueStats>(
-        "getPetDetectionQueueStats"
-      );
+    result.petDetection = snapshot.petDetection ?? emptyStats();
 
     for (const stage of Object.keys(result) as PythonStage[]) {
       this.onStats(stage, result[stage]);
     }
 
-    // Qwen gehört wieder automatisch zum normalen Flow. Nur wenn die
-    // benötigte 4B-GGUF-/llama.cpp-Kombination auf diesem Rechner nicht
-    // verfügbar ist, bleibt die Stufe pausiert und wird nicht als aktive
-    // Worker-Warteschlange gezählt.
     const qwenRunnable =
       this.automaticQwenEnabled && this.analysis.isQwen3vl4bAvailable();
     const qwenQueued = qwenRunnable
@@ -811,11 +825,11 @@ export class AnalysisCoordinator {
       }
     }
 
-    try {
-      await this.refreshAllStats();
-    } catch {
+    // Anzeige-Statistik darf den nächsten Analysejob nicht blockieren.
+    // Ein paralleler/folgender Refresh wird über statsRefreshPromise gebündelt.
+    void this.refreshAllStats().catch(() => {
       // Der nächste Scheduler-Durchlauf aktualisiert die Anzeige erneut.
-    }
+    });
   }
 
   private async pump(): Promise<void> {
