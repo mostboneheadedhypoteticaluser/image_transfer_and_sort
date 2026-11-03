@@ -372,6 +372,11 @@ export type PetCandidateItem = {
   mediaId: number;
   relativePath: string;
   similarity: number;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  suggestedPets: PetMatchSuggestion[];
 };
 
 export type PetMatchSuggestion = {
@@ -465,6 +470,13 @@ export type AssignPetSelectionResult = {
   remainingCount: number;
 };
 
+export type AssignPersonSelectionResult = {
+  personId: number;
+  name: string;
+  faceCount: number;
+  remainingCount: number;
+};
+
 export type MergePetsResult = {
   petId: number;
   name: string;
@@ -515,6 +527,11 @@ export type PersonCandidateFace = {
   mediaId: number;
   relativePath: string;
   similarity: number;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  suggestedPersons: PersonMatchSuggestion[];
 };
 
 export type PersonMatchSuggestion = {
@@ -964,6 +981,7 @@ export type CatalogMethod =
   | "listPersonCandidates"
   | "listPersons"
   | "confirmPersonCandidate"
+  | "assignPersonCandidateSelection"
   | "ignorePersonCandidate"
   | "removeFaceFromPersonCandidate"
   | "removeFaceFromPerson"
