@@ -204,6 +204,27 @@
   gap: 8px;
 }
 
+.life-area-folder-value {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+}
+
+.life-area-folder-value > small {
+  min-width: 0;
+  overflow: hidden;
+  color: #68737d;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.life-area-folder-value > button {
+  height: 38px;
+  white-space: nowrap;
+}
+
 .life-area-rule-result {
   min-height: 38px;
   align-content: center;
@@ -569,6 +590,132 @@
   font-size: 10px;
   font-weight: 900;
   letter-spacing: .08em;
+}
+
+.life-area-folder-dialog {
+  width: min(820px, calc(100vw - 36px));
+  max-height: min(760px, calc(100vh - 36px));
+}
+
+.life-area-folder-dialog-body {
+  display: grid;
+  gap: 12px;
+  padding: 16px 18px 18px;
+}
+
+.life-area-folder-status {
+  padding: 12px;
+  border: 1px dashed #d6dde2;
+  border-radius: 9px;
+  background: #fafbfc;
+  color: #68737d;
+  font-size: 11px;
+}
+
+.life-area-folder-tree {
+  min-height: 220px;
+  max-height: min(560px, calc(100vh - 230px));
+  overflow: auto;
+  border: 1px solid #dfe4e8;
+  border-radius: 10px;
+  background: #fff;
+}
+
+.life-area-folder-node {
+  min-width: 0;
+}
+
+.life-area-folder-row {
+  display: grid;
+  grid-template-columns: 26px 24px minmax(0, 1fr) auto;
+  gap: 7px;
+  align-items: center;
+  min-height: 46px;
+  padding: 6px 9px 6px calc(9px + var(--folder-depth, 0) * 20px);
+  border-bottom: 1px solid #edf0f2;
+}
+
+.life-area-folder-row:hover {
+  background: #f8fafb;
+}
+
+.life-area-folder-toggle {
+  display: grid;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  place-items: center;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #5f6973;
+  font-size: 19px;
+  line-height: 1;
+  transition: transform .12s ease;
+}
+
+.life-area-folder-toggle.expanded {
+  transform: rotate(90deg);
+}
+
+.life-area-folder-toggle.loading {
+  opacity: .45;
+}
+
+.life-area-folder-toggle:disabled {
+  opacity: .2;
+}
+
+.life-area-folder-icon {
+  color: #d39b2b;
+  font-size: 15px;
+}
+
+.life-area-folder-info {
+  min-width: 0;
+}
+
+.life-area-folder-info strong,
+.life-area-folder-info small {
+  display: block;
+}
+
+.life-area-folder-info strong {
+  overflow: hidden;
+  color: #26313a;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.life-area-folder-info small {
+  margin-top: 2px;
+  color: #75808a;
+  font-size: 10px;
+}
+
+.life-area-folder-choose {
+  min-width: 84px;
+}
+
+.life-area-folder-children {
+  min-width: 0;
+}
+
+.life-area-folder-empty-child,
+.life-area-folder-load-error {
+  padding: 9px 12px 9px 54px;
+  color: #78828b;
+  font-size: 10px;
+}
+
+.life-area-folder-load-error {
+  color: #a51e1b;
+}
+
+.life-area-folder-dialog-body .dialog-actions {
+  display: flex;
+  justify-content: flex-end;
 }
 
 .life-area-create-dialog {
