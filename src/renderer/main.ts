@@ -739,8 +739,14 @@ function renderAnalysisStatus(status: AnalysisWorkerStatus): void {
 
   switch (status.state) {
     case "READY":
-      analysisWorkerState.classList.add("ready");
-      analysisWorkerState.textContent = "Bereit";
+      if (status.activeJobs > 0) {
+        analysisWorkerState.classList.add("running");
+        analysisWorkerState.textContent =
+          `Läuft · ${status.activeJobs} ${status.activeJobs === 1 ? "Job" : "Jobs"}`;
+      } else {
+        analysisWorkerState.classList.add("ready");
+        analysisWorkerState.textContent = "Bereit";
+      }
       break;
     case "STARTING":
       analysisWorkerState.classList.add("starting");
