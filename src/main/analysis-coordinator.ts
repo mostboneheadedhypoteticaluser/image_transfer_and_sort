@@ -135,6 +135,11 @@ const MODULES: ModuleSpec[] = [
 ];
 
 const HEAVY_MODULE_NAMES = new Set([
+  // Videoanalyse ist absichtlich eine schwere Stufe: Ein einziges Video kann
+  // hunderte Analyseframes und damit viele Minuten Workerzeit belegen. Würde
+  // sie in der Fast-Lane bleiben, blockiert ein Video die normalen Foto-Stufen
+  // (Gesichter/Haustiere) und damit auch deren laufende Gruppierung.
+  "video-analyze-v1",
   "semantic-embed-siglip2-v1",
   "catalog-semantic-qwen3vl4b-v3"
 ]);
@@ -459,8 +464,9 @@ export class AnalysisCoordinator {
 
   private async nextHeavySpec(): Promise<ModuleSpec | null> {
     // Schwere Stufen werden erst betrachtet, wenn kein schneller Job im
-    // gesamten Katalog mehr ausführbar ist. SigLIP2 steht vor Qwen4B, sodass
-    // zunächst alle Vektoren und erst danach die 5-fache 4B-Analyse laufen.
+    // gesamten Katalog mehr ausführbar ist. Dadurch laufen zuerst alle
+    // Foto-Stufen bis einschließlich Personen-/Haustiermerkmalen durch.
+    // Anschließend folgen Videoanalyse, SigLIP2 und zuletzt Qwen4B.
     for (const spec of HEAVY_MODULES) {
       if (
         spec.module === "catalog-semantic-qwen3vl4b-v3" &&
