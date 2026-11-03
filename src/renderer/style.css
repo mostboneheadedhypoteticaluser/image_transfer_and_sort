@@ -4248,3 +4248,43 @@ body {
     border-top: 1px solid var(--border);
   }
 }
+
+
+.analysis-live-activity {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 12px 0 16px;
+  padding: 10px 12px;
+  border: 1px solid #d9dee5;
+  border-radius: 10px;
+  background: #f7f9fb;
+}
+
+.analysis-live-activity > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.analysis-live-activity small {
+  color: #66717e;
+}
+
+.analysis-live-dot {
+  width: 10px;
+  height: 10px;
+  flex: 0 0 10px;
+  border-radius: 999px;
+  background: #9aa4af;
+}
+
+.analysis-live-activity.running {
+  border-color: #b8d5c4;
+  background: #f2f8f4;
+}
+
+.analysis-live-activity.running .analysis-live-dot {
+  background: #247a45;
+  box-shadow: 0 0 0 4px rgba(36, 122, 69, 0.12);
+}
