@@ -1,6 +1,19 @@
 import { randomUUID } from "node:crypto";
+import {
+  closeSync,
+  mkdirSync,
+  openSync,
+  readSync,
+  statSync,
+  writeFileSync
+} from "node:fs";
 import path from "node:path";
-import { utilityProcess, type UtilityProcess } from "electron";
+import {
+  nativeImage,
+  utilityProcess,
+  type NativeImage,
+  type UtilityProcess
+} from "electron";
 
 const THUMBNAIL_WORKER_COUNT = 2;
 
@@ -144,6 +157,113 @@ export class ThumbnailService {
     return worker;
   }
 
+  private inputSignature(inputPath: string): Record<string, unknown> {
+    try {
+      const info = statSync(inputPath);
+      const fd = openSync(inputPath, "r");
+      try {
+        const buffer = Buffer.alloc(32);
+        const bytesRead = readSync(fd, buffer, 0, buffer.length, 0);
+        return {
+          sizeBytes: info.size,
+          firstBytesHex: buffer.subarray(0, bytesRead).toString("hex")
+        };
+      } finally {
+        closeSync(fd);
+      }
+    } catch (error) {
+      return {
+        signatureError: error instanceof Error ? error.message : String(error)
+      };
+    }
+  }
+
+  private nativeImageCrop(
+    image: NativeImage,
+    crop: CropBox,
+    marginFraction: number
+  ): NativeImage {
+    const size = image.getSize();
+    const faceWidth = Math.max(1, crop.width);
+    const faceHeight = Math.max(1, crop.height);
+    const margin = Math.max(faceWidth, faceHeight) * marginFraction;
+
+    const left = Math.max(0, Math.floor(crop.x - margin));
+    const top = Math.max(0, Math.floor(crop.y - margin));
+    const right = Math.min(
+      size.width,
+      Math.ceil(crop.x + faceWidth + margin)
+    );
+    const bottom = Math.min(
+      size.height,
+      Math.ceil(crop.y + faceHeight + margin)
+    );
+
+    return image.crop({
+      x: left,
+      y: top,
+      width: Math.max(1, right - left),
+      height: Math.max(1, bottom - top)
+    });
+  }
+
+  private nativeImageFallback(request: ThumbnailRequest): ThumbnailResult {
+    let image = nativeImage.createFromPath(request.inputPath);
+    if (image.isEmpty()) {
+      throw new Error(
+        "Datei konnte weder von Sharp noch vom Electron-Bilddecoder gelesen werden."
+      );
+    }
+
+    if (request.mode === "face-crop" || request.mode === "pet-crop") {
+      if (!request.crop) {
+        throw new Error("Crop enthält keine gültige Bounding Box.");
+      }
+
+      image = this.nativeImageCrop(
+        image,
+        request.crop,
+        request.mode === "pet-crop" ? 0.16 : 0.42
+      );
+      image = image.resize({
+        width: request.maxWidth,
+        height: request.maxHeight,
+        quality: "best"
+      });
+    } else {
+      const size = image.getSize();
+      if (size.width <= 0 || size.height <= 0) {
+        throw new Error("Electron-Bilddecoder lieferte ungültige Abmessungen.");
+      }
+
+      const scale = Math.min(
+        1,
+        request.maxWidth / size.width,
+        request.maxHeight / size.height
+      );
+      image = image.resize({
+        width: Math.max(1, Math.round(size.width * scale)),
+        height: Math.max(1, Math.round(size.height * scale)),
+        quality: "best"
+      });
+    }
+
+    mkdirSync(path.dirname(request.outputPath), { recursive: true });
+    writeFileSync(
+      request.outputPath,
+      image.toJPEG(request.mode === "thumbnail" ? 78 : 82)
+    );
+
+    const size = image.getSize();
+    return {
+      path: request.outputPath,
+      width: size.width,
+      height: size.height,
+      format: "jpeg",
+      reused: false
+    };
+  }
+
   private request(request: ThumbnailRequest): Promise<ThumbnailResult> {
     // Der Cache ist SHA-basiert. Zwei Medien mit identischem Inhalt können
     // deshalb exakt denselben outputPath besitzen. Mit mehreren Workern darf
@@ -189,7 +309,40 @@ export class ThumbnailService {
       ...request
     });
 
-    return result;
+    return result.catch((error) => {
+      const message = error instanceof Error ? error.message : String(error);
+      if (!message.toLowerCase().includes("unsupported image format")) {
+        throw error;
+      }
+
+      this.onDiagnostic?.("THUMBNAIL_SHARP_UNSUPPORTED", {
+        inputPath: request.inputPath,
+        mode: request.mode,
+        ...this.inputSignature(request.inputPath)
+      });
+
+      try {
+        const fallback = this.nativeImageFallback(request);
+        this.onDiagnostic?.("THUMBNAIL_NATIVE_FALLBACK_OK", {
+          inputPath: request.inputPath,
+          mode: request.mode,
+          width: fallback.width,
+          height: fallback.height
+        });
+        return fallback;
+      } catch (fallbackError) {
+        this.onDiagnostic?.("THUMBNAIL_NATIVE_FALLBACK_ERROR", {
+          inputPath: request.inputPath,
+          mode: request.mode,
+          ...this.inputSignature(request.inputPath),
+          error:
+            fallbackError instanceof Error
+              ? fallbackError.message
+              : String(fallbackError)
+        });
+        throw fallbackError;
+      }
+    });
   }
 
   async generate(
