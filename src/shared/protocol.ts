@@ -729,6 +729,7 @@ export type LifeAreaRuleConditionType =
 export type LifeAreaRule = {
   id: number;
   lifeAreaId: number;
+  groupId: number;
   conditionType: LifeAreaRuleConditionType;
   conditionValue: string | null;
   dateFrom: string | null;
@@ -743,6 +744,7 @@ export type LifeAreaRecord = {
   mediaCount: number;
   manualCount: number;
   ruleCount: number;
+  conditionCount: number;
   rules: LifeAreaRule[];
 };
 
