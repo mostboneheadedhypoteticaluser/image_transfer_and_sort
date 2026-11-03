@@ -224,7 +224,10 @@ export class AnalysisCoordinator {
     this.automaticQwenEnabled = true;
     this.stopped = false;
 
-    await this.enqueueExistingSources();
+    // Scheduler sofort aktivieren. Der frühere Startpfad hat zuerst für alle
+    // Quellen und Module einen vollständigen Job-Backfill durchgeführt. Bei
+    // großen Katalogen liefen deshalb minutenlang nur die separaten Thumbnails,
+    // obwohl bereits fertige Bilder für technische Analyse bereitstanden.
     await this.refreshAllStats();
 
     this.timer = setInterval(() => {
@@ -233,6 +236,14 @@ export class AnalysisCoordinator {
     this.timer.unref();
 
     void this.pump();
+
+    // Fehlende Jobs parallel zum laufenden Scheduler ergänzen. Bereits vom
+    // Live-Scan angelegte Fast-Jobs können dadurch sofort verarbeitet werden.
+    void this.enqueueExistingSources().catch((error) => {
+      this.analysis.logDiagnostic("ANALYSIS_BACKFILL_ERROR", {
+        error: error instanceof Error ? error.message : String(error)
+      });
+    });
   }
 
   stop(): void {
@@ -373,14 +384,26 @@ export class AnalysisCoordinator {
   private async enqueueExistingSources(): Promise<void> {
     const sources = await this.catalog.request<SourceRecord[]>("listSources");
 
-    for (const source of sources) {
-      if (!source.enabled) continue;
+    // Erst alle schnellen Stufen bereitstellen. So wartet ein Bild nicht auf
+    // das Einreihen der schweren Video-/SigLIP-/Qwen-Jobs des gesamten Katalogs.
+    for (const specs of [FAST_MODULES, HEAVY_MODULES]) {
+      for (const source of sources) {
+        if (!source.enabled || this.stopped || this.userPaused) continue;
 
-      for (const spec of MODULES) {
-        await this.catalog.request("enqueueAnalysisJobs", {
-          sourceId: source.id,
-          module: spec.module
-        });
+        for (const spec of specs) {
+          if (this.stopped || this.userPaused) return;
+
+          await this.catalog.request("enqueueAnalysisJobs", {
+            sourceId: source.id,
+            module: spec.module
+          });
+
+          // Sobald ein Fast-Modul für eine Quelle eingereiht wurde, den
+          // Scheduler direkt anstoßen statt auf das 600-ms-Intervall zu warten.
+          if (!HEAVY_MODULE_NAMES.has(spec.module)) {
+            void this.pump();
+          }
+        }
       }
     }
   }
