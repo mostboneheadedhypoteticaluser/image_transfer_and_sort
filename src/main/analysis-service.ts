@@ -11,7 +11,8 @@ import {
   readdirSync,
   renameSync,
   statSync,
-  unlinkSync
+  unlinkSync,
+  writeFileSync
 } from "node:fs";
 import path from "node:path";
 import os from "node:os";
@@ -127,6 +128,26 @@ export class AnalysisService {
 
   getDevLogPath(): string {
     return this.devLogPath;
+  }
+
+  clearDevLog(): { path: string; cleared: true } {
+    mkdirSync(path.dirname(this.devLogPath), { recursive: true });
+
+    // Die laufenden Electron-/Python-Worker öffnen die Datei für jeden
+    // Logeintrag neu. Deshalb kann sie im Betrieb sicher auf 0 Byte gesetzt
+    // werden; neue Einträge beginnen anschließend unmittelbar frisch.
+    writeFileSync(this.devLogPath, "", "utf8");
+
+    const rotated = this.devLogPath + ".1";
+    try {
+      if (existsSync(rotated)) unlinkSync(rotated);
+    } catch {
+      // Das aktuelle Protokoll ist bereits geleert; eine alte Rotationsdatei
+      // darf die Funktion nicht scheitern lassen.
+    }
+
+    this.devLog("DEV_LOG_CLEARED");
+    return { path: this.devLogPath, cleared: true };
   }
 
   logDiagnostic(
