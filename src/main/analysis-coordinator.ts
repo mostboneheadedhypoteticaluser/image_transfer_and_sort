@@ -183,6 +183,8 @@ function addStats(
   };
 }
 
+const FAST_CONCURRENCY = 2;
+
 export class AnalysisCoordinator {
   private timer: NodeJS.Timeout | null = null;
   private pumping = false;
@@ -190,7 +192,12 @@ export class AnalysisCoordinator {
   private benchmarkPaused = false;
   private maintenancePaused = false;
   private shutdownRequested = false;
-  private currentFastMediaId: number | null = null;
+  private readonly fastLaneMediaIds: Array<number | null> =
+    Array.from({ length: FAST_CONCURRENCY }, () => null);
+  private readonly fastLaneBusy: boolean[] =
+    Array.from({ length: FAST_CONCURRENCY }, () => false);
+  private readonly activeTasks = new Set<Promise<void>>();
+  private heavyRunning = false;
 
   // Die 4B-Kataloganalyse läuft wieder automatisch. Sie bleibt bewusst die
   // letzte Pipeline-Stufe, damit neue Bilder zuerst alle schnellen technischen,
@@ -230,7 +237,7 @@ export class AnalysisCoordinator {
   stop(): void {
     this.stopped = true;
     this.maintenancePaused = false;
-    this.currentFastMediaId = null;
+    this.fastLaneMediaIds.fill(null);
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
   }
@@ -242,11 +249,14 @@ export class AnalysisCoordinator {
 
   async waitUntilIdle(timeoutMs = 15000): Promise<void> {
     const deadline = Date.now() + timeoutMs;
-    while (this.pumping && Date.now() < deadline) {
+    while (
+      (this.pumping || this.activeTasks.size > 0) &&
+      Date.now() < deadline
+    ) {
       await new Promise<void>((resolve) => setTimeout(resolve, 50));
     }
 
-    if (this.pumping) {
+    if (this.pumping || this.activeTasks.size > 0) {
       throw new Error(
         "Analyse-Pipeline konnte vor dem Datenbank-Reset nicht sauber angehalten werden."
       );
@@ -259,7 +269,10 @@ export class AnalysisCoordinator {
     // Einen bereits laufenden schnellen Bildschritt sauber fertigstellen.
     // Nicht abbrechen: danach kann die Gruppierung denselben Worker exklusiv
     // nutzen und die Fast-Lane setzt exakt beim aktuellen Bild fort.
-    while (this.pumping && !this.stopped) {
+    while (
+      (this.pumping || this.activeTasks.size > 0) &&
+      !this.stopped
+    ) {
       await new Promise<void>((resolve) => setTimeout(resolve, 50));
     }
   }
@@ -282,7 +295,10 @@ export class AnalysisCoordinator {
     this.analysis.stopForBenchmark();
 
     const deadline = Date.now() + 15000;
-    while (this.pumping && Date.now() < deadline) {
+    while (
+      (this.pumping || this.activeTasks.size > 0) &&
+      Date.now() < deadline
+    ) {
       await new Promise<void>((resolve) => setTimeout(resolve, 50));
     }
 
@@ -412,7 +428,9 @@ export class AnalysisCoordinator {
       queued,
       active,
       queued > 0 || active > 0
-        ? "Bildanalyse verarbeitet Medien im Hintergrund."
+        ? active > 1
+          ? `${active} Bildanalysen laufen parallel im Hintergrund.`
+          : "Bildanalyse verarbeitet Medien im Hintergrund."
         : pausedQwen
           ? this.analysis.isQwen3vl4bAvailable()
             ? "Qwen-Serienanalyse pausiert · Einzelbildtest ist frei."
@@ -423,30 +441,32 @@ export class AnalysisCoordinator {
     return result;
   }
 
-  private async claimFastJob(): Promise<{
+  private async claimFastJob(laneIndex: number): Promise<{
     spec: ModuleSpec;
     job: AnalysisJob;
   } | null> {
-    // Ein angefangenes Bild wird bewusst durch alle schnellen Stufen geführt,
-    // bevor ein anderes Bild an die Reihe kommt.
-    if (this.currentFastMediaId !== null) {
+    // Jede Fast-Lane hält ihr eigenes Bild fest und führt es durch die
+    // schnellen Stufen. So entstehen früh vollständige Gesichts-/Haustierdaten,
+    // obwohl zwei Bilder gleichzeitig bearbeitet werden.
+    const currentMediaId = this.fastLaneMediaIds[laneIndex];
+    if (currentMediaId !== null) {
       for (const spec of FAST_MODULES) {
         const job = await this.catalog.request<AnalysisJob | null>(
           "claimAnalysisJob",
           {
             module: spec.module,
-            mediaId: this.currentFastMediaId
+            mediaId: currentMediaId
           }
         );
 
         if (job) return { spec, job };
       }
 
-      this.currentFastMediaId = null;
+      this.fastLaneMediaIds[laneIndex] = null;
     }
 
-    // Danach beginnt das nächste Bild. Durch die Sortierung im Katalog-Worker
-    // werden neu hinzugekommene Bilder vor altem Backlog bevorzugt.
+    // Freie Lane mit dem nächsten frischen Bild belegen. Die Katalogsortierung
+    // priorisiert weiterhin neu hinzugekommene Medien vor altem Backlog.
     for (const spec of FAST_MODULES) {
       const job = await this.catalog.request<AnalysisJob | null>(
         "claimAnalysisJob",
@@ -454,7 +474,7 @@ export class AnalysisCoordinator {
       );
 
       if (job) {
-        this.currentFastMediaId = job.mediaId;
+        this.fastLaneMediaIds[laneIndex] = job.mediaId;
         return { spec, job };
       }
     }
@@ -489,175 +509,135 @@ export class AnalysisCoordinator {
     return null;
   }
 
-  private async pump(): Promise<void> {
-    if (this.stopped || this.pumping || this.maintenancePaused) return;
-    if (this.analysis.getStatus().state !== "READY") return;
+  private launchSelection(
+    selection: { spec: ModuleSpec; job: AnalysisJob },
+    laneIndex: number | null,
+    heavy: boolean
+  ): void {
+    if (laneIndex !== null) this.fastLaneBusy[laneIndex] = true;
+    if (heavy) this.heavyRunning = true;
 
-    this.pumping = true;
+    const task = this.runSelection(selection);
+
+    this.activeTasks.add(task);
+    void task.finally(() => {
+      this.activeTasks.delete(task);
+      if (laneIndex !== null) this.fastLaneBusy[laneIndex] = false;
+      if (heavy) this.heavyRunning = false;
+
+      if (!this.stopped && !this.maintenancePaused && !this.benchmarkPaused) {
+        void this.pump();
+      }
+    });
+  }
+
+  private async runSelection(
+    selection: { spec: ModuleSpec; job: AnalysisJob }
+  ): Promise<void> {
+    const { spec, job } = selection;
 
     try {
-      const stats = await this.refreshAllStats();
-      const totalRunning =
-        stats.technical.running +
-        stats.imageMetadata.running +
-        stats.faces.running +
-        stats.faceEmbeddings.running +
-        stats.petDetection.running +
-        stats.petFusion.running +
-        stats.petEmbeddings.running +
-        stats.objectVerification.running +
-        stats.semanticEmbeddings.running +
-        stats.videoAnalysis.running;
+      let extraPayload: Record<string, unknown> = {};
 
-      if (totalRunning > 0) return;
-
-      let selection = await this.claimFastJob();
-
-      if (!selection) {
-        const heavySpec = await this.nextHeavySpec();
-        if (heavySpec) {
-          const heavyJob = await this.catalog.request<AnalysisJob | null>(
-            "claimAnalysisJob",
-            { module: heavySpec.module }
-          );
-
-          if (heavyJob) {
-            selection = { spec: heavySpec, job: heavyJob };
+      if (spec.module === "face-embed-sface-v1") {
+        const faces = await this.catalog.request<FaceDetectionForEmbedding[]>(
+          "getFaceDetectionsForEmbedding",
+          {
+            mediaId: job.mediaId,
+            inputSha256: job.sha256
           }
-        }
+        );
+
+        extraPayload = { faces };
       }
 
-      if (!selection) {
-        await this.refreshAllStats();
-        return;
+      if (spec.module === "pet-fuse-ensemble-v1") {
+        const detections = await this.catalog.request<
+          Array<Record<string, unknown>>
+        >("getPetDetectionsForFusion", {
+          mediaId: job.mediaId,
+          inputSha256: job.sha256
+        });
+        const objects = await this.catalog.request<
+          Array<Record<string, unknown>>
+        >("getObjectDetectionsForFusion", {
+          mediaId: job.mediaId,
+          inputSha256: job.sha256
+        });
+
+        extraPayload = { detections, objects };
       }
 
-      const { spec, job } = selection;
+      if (spec.module === "pet-embed-dogreid-v1") {
+        const pets = await this.catalog.request<PetDetectionForEmbedding[]>(
+          "getPetDetectionsForEmbedding",
+          {
+            mediaId: job.mediaId,
+            inputSha256: job.sha256
+          }
+        );
 
-      const queued =
-        stats.technical.pending +
-        stats.imageMetadata.pending +
-        stats.faces.pending +
-        stats.faceEmbeddings.pending +
-        stats.petDetection.pending +
-        stats.petFusion.pending +
-        stats.petEmbeddings.pending +
-        stats.objectVerification.pending +
-        stats.semanticEmbeddings.pending +
-        stats.videoAnalysis.pending - 1;
+        extraPayload = { pets };
+      }
 
-      this.analysis.setQueueState(
-        Math.max(0, queued),
-        1,
-        `${spec.label}: ${job.absolutePath}`
+      const result = await this.analysis.request<Record<string, unknown>>(
+        spec.workerMethod,
+        {
+          path: job.absolutePath,
+          expectedSizeBytes: job.sizeBytes,
+          expectedSha256: job.sha256,
+          extension: job.extension,
+          ...extraPayload
+        },
+        spec.timeoutMs
       );
 
-      // claimAnalysisJob setzt den Datensatz bereits auf RUNNING. Den Status
-      // sofort erneut aus SQLite lesen und veröffentlichen, damit eine lange
-      // SigLIP-/Qwen-Berechnung nicht minutenlang mit dem Stand vor dem Claim
-      // angezeigt wird.
-      await this.refreshAllStats();
+      const completion = await this.catalog.request<Record<string, unknown>>(
+        spec.completeMethod,
+        {
+          jobId: job.id,
+          result
+        }
+      );
+
+      if (
+        spec.module === "face-detect-yunet-v1" ||
+        spec.module === "face-embed-sface-v1" ||
+        spec.module === "pet-fuse-ensemble-v1" ||
+        spec.module === "pet-embed-dogreid-v1"
+      ) {
+        const workerItems =
+          spec.module === "face-detect-yunet-v1"
+            ? (Array.isArray(result.faces) ? result.faces.length : 0)
+            : spec.module === "face-embed-sface-v1"
+              ? (Array.isArray(result.embeddings) ? result.embeddings.length : 0)
+              : spec.module === "pet-fuse-ensemble-v1"
+                ? (Array.isArray(result.pets)
+                    ? result.pets.filter(
+                        (item) =>
+                          item &&
+                          typeof item === "object" &&
+                          (item as Record<string, unknown>).class === "dog"
+                      ).length
+                    : 0)
+                : (Array.isArray(result.embeddings) ? result.embeddings.length : 0);
+
+        this.analysis.logDiagnostic("IDENTITY_STAGE_RESULT", {
+          module: spec.module,
+          mediaId: job.mediaId,
+          target: job.absolutePath,
+          workerItems,
+          databaseItems:
+            completion.embeddingCount ??
+            completion.petCount ??
+            completion.faceCount ??
+            null
+        });
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
 
       try {
-        let extraPayload: Record<string, unknown> = {};
-
-        if (spec.module === "face-embed-sface-v1") {
-          const faces = await this.catalog.request<FaceDetectionForEmbedding[]>(
-            "getFaceDetectionsForEmbedding",
-            {
-              mediaId: job.mediaId,
-              inputSha256: job.sha256
-            }
-          );
-
-          extraPayload = { faces };
-        }
-
-        if (spec.module === "pet-fuse-ensemble-v1") {
-          const detections = await this.catalog.request<
-            Array<Record<string, unknown>>
-          >("getPetDetectionsForFusion", {
-            mediaId: job.mediaId,
-            inputSha256: job.sha256
-          });
-          const objects = await this.catalog.request<
-            Array<Record<string, unknown>>
-          >("getObjectDetectionsForFusion", {
-            mediaId: job.mediaId,
-            inputSha256: job.sha256
-          });
-
-          extraPayload = { detections, objects };
-        }
-
-        if (spec.module === "pet-embed-dogreid-v1") {
-          const pets = await this.catalog.request<PetDetectionForEmbedding[]>(
-            "getPetDetectionsForEmbedding",
-            {
-              mediaId: job.mediaId,
-              inputSha256: job.sha256
-            }
-          );
-
-          extraPayload = { pets };
-        }
-
-        const result = await this.analysis.request<Record<string, unknown>>(
-          spec.workerMethod,
-          {
-            path: job.absolutePath,
-            expectedSizeBytes: job.sizeBytes,
-            expectedSha256: job.sha256,
-            extension: job.extension,
-            ...extraPayload
-          },
-          spec.timeoutMs
-        );
-
-        const completion = await this.catalog.request<Record<string, unknown>>(
-          spec.completeMethod,
-          {
-            jobId: job.id,
-            result
-          }
-        );
-
-        if (
-          spec.module === "face-detect-yunet-v1" ||
-          spec.module === "face-embed-sface-v1" ||
-          spec.module === "pet-fuse-ensemble-v1" ||
-          spec.module === "pet-embed-dogreid-v1"
-        ) {
-          const workerItems =
-            spec.module === "face-detect-yunet-v1"
-              ? (Array.isArray(result.faces) ? result.faces.length : 0)
-              : spec.module === "face-embed-sface-v1"
-                ? (Array.isArray(result.embeddings) ? result.embeddings.length : 0)
-                : spec.module === "pet-fuse-ensemble-v1"
-                  ? (Array.isArray(result.pets)
-                      ? result.pets.filter(
-                          (item) =>
-                            item &&
-                            typeof item === "object" &&
-                            (item as Record<string, unknown>).class === "dog"
-                        ).length
-                      : 0)
-                  : (Array.isArray(result.embeddings) ? result.embeddings.length : 0);
-
-          this.analysis.logDiagnostic("IDENTITY_STAGE_RESULT", {
-            module: spec.module,
-            mediaId: job.mediaId,
-            target: job.absolutePath,
-            workerItems,
-            databaseItems:
-              completion.embeddingCount ??
-              completion.petCount ??
-              completion.faceCount ??
-              null
-          });
-        }
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
         await this.catalog.request("failAnalysisJob", {
           jobId: job.id,
           error: message
@@ -671,13 +651,76 @@ export class AnalysisCoordinator {
             jobId: job.id
           });
         }
+      } catch (catalogError) {
+        this.analysis.logDiagnostic("PARALLEL_JOB_CATALOG_ERROR", {
+          module: spec.module,
+          mediaId: job.mediaId,
+          error:
+            catalogError instanceof Error
+              ? catalogError.message
+              : String(catalogError)
+        });
+      }
+    }
+
+    try {
+      await this.refreshAllStats();
+    } catch {
+      // Der nächste Scheduler-Durchlauf aktualisiert die Anzeige erneut.
+    }
+  }
+
+  private async pump(): Promise<void> {
+    if (this.stopped || this.pumping || this.maintenancePaused) return;
+    if (this.analysis.getStatus().state !== "READY") return;
+
+    this.pumping = true;
+
+    try {
+      // Eine schwere Stufe bleibt exklusiv. Fast-Lanes werden erst wieder
+      // befüllt, nachdem Video/SigLIP/Qwen vollständig beendet ist.
+      if (this.heavyRunning) {
+        await this.refreshAllStats();
+        return;
+      }
+
+      let launchedFast = false;
+
+      for (let laneIndex = 0; laneIndex < FAST_CONCURRENCY; laneIndex += 1) {
+        if (this.fastLaneBusy[laneIndex]) continue;
+
+        const selection = await this.claimFastJob(laneIndex);
+        if (!selection) continue;
+
+        this.launchSelection(selection, laneIndex, false);
+        launchedFast = true;
+      }
+
+      // Schwere Stufen starten nur, wenn wirklich keine schnelle Lane arbeitet
+      // und auch keine weitere schnelle Aufgabe claimbar war.
+      if (!launchedFast && this.activeTasks.size === 0) {
+        const heavySpec = await this.nextHeavySpec();
+        if (heavySpec) {
+          const heavyJob = await this.catalog.request<AnalysisJob | null>(
+            "claimAnalysisJob",
+            { module: heavySpec.module }
+          );
+
+          if (heavyJob) {
+            this.launchSelection(
+              { spec: heavySpec, job: heavyJob },
+              null,
+              true
+            );
+          }
+        }
       }
 
       await this.refreshAllStats();
     } catch (error) {
       this.analysis.setQueueState(
         0,
-        0,
+        this.activeTasks.size,
         "Analyse-Queue: " +
           (error instanceof Error ? error.message : String(error))
       );
