@@ -13,6 +13,7 @@ import { IMAGE_EXTENSIONS, VIDEO_EXTENSIONS, IGNORED_DIRECTORY_NAMES } from "../
 import type {
   AnalysisErrorRecord,
   AnalysisQueueStats,
+  AssignPersonSelectionResult,
   AnalysisWorkerStatus,
   QwenBenchmarkModel,
   QwenBenchmarkProfile,
@@ -1377,6 +1378,17 @@ function registerIpc(): void {
         expectedFaceCount,
         expectedMemberSignature
       )
+  );
+
+  ipcMain.handle(
+    "people:assignCandidateSelection",
+    (
+      _event,
+      candidateId: number,
+      faceDetectionIds: number[],
+      name: string
+    ): Promise<AssignPersonSelectionResult> =>
+      personService!.assignCandidateSelection(candidateId, faceDetectionIds, name)
   );
 
   ipcMain.handle(
