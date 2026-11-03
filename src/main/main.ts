@@ -1973,6 +1973,18 @@ async function performGracefulShutdown(): Promise<void> {
     personRefreshTimer = null;
   }
 
+  // Eine Benutzerpause kann einen laufenden Katalogscan kooperativ im
+  // Wartestatus halten. Vor dem geordneten App-Shutdown muss dieser eine
+  // aktuelle Datei noch fertigstellen dürfen, sonst würde prepareForShutdown()
+  // dauerhaft SCAN_RUNNING melden.
+  if (backgroundPaused && catalog) {
+    try {
+      await catalog.request("setProcessingPaused", { paused: false });
+    } catch {
+      // Der nachfolgende Shutdown-Fallback behandelt einen bereits beendeten Worker.
+    }
+  }
+
   catalogWatchService?.stop();
   analysisCoordinator?.prepareForShutdown();
   thumbnailCoordinator?.prepareForShutdown();
