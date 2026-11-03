@@ -162,6 +162,11 @@ db.exec(`
     UNIQUE(media_id, module)
   );
 
+  CREATE INDEX IF NOT EXISTS idx_analysis_module_status
+    ON analysis_jobs(module, status);
+  CREATE INDEX IF NOT EXISTS idx_analysis_module_status_priority
+    ON analysis_jobs(module, status, priority, media_id);
+
   CREATE TABLE IF NOT EXISTS catalog_migrations (
     migration_key TEXT PRIMARY KEY,
     applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -3263,6 +3268,109 @@ function countAnalysisErrors(sourceId?: number): number {
   return Number(row?.count ?? 0);
 }
 
+
+function getPipelineQueueStats() {
+  const rows = db.prepare(`
+    SELECT module, status, COUNT(*) AS count
+    FROM analysis_jobs
+    GROUP BY module, status
+  `).all();
+
+  const byModule: Record<string, {
+    pending: number;
+    running: number;
+    done: number;
+    failed: number;
+    unavailable: number;
+  }> = {};
+
+  for (const row of rows) {
+    const module = String(row.module);
+    const stats = byModule[module] ?? {
+      pending: 0,
+      running: 0,
+      done: 0,
+      failed: 0,
+      unavailable: 0
+    };
+
+    const count = Number(row.count ?? 0);
+    switch (String(row.status)) {
+      case "PENDING":
+        stats.pending += count;
+        break;
+      case "RUNNING":
+        stats.running += count;
+        break;
+      case "DONE":
+        stats.done += count;
+        break;
+      case "FAILED":
+        stats.failed += count;
+        break;
+      case "UNAVAILABLE":
+        stats.unavailable += count;
+        break;
+    }
+
+    byModule[module] = stats;
+  }
+
+  return {
+    byModule,
+    petDetection: getPetDetectionQueueStats()
+  };
+}
+
+function getIdentityEmbeddingCounts() {
+  const sources = db.prepare(`
+    SELECT id
+    FROM media_sources
+    WHERE enabled=1
+    ORDER BY id ASC
+  `).all();
+
+  const faceRows = db.prepare(`
+    SELECT m.source_id, COUNT(*) AS count
+    FROM face_embeddings fe
+    JOIN face_detections fd ON fd.id=fe.face_detection_id
+    JOIN media_items m ON m.id=fe.media_id
+    WHERE m.availability='AVAILABLE'
+      AND fe.model_version='SFace 2021dec'
+      AND fe.input_sha256=m.sha256
+      AND fd.input_sha256=m.sha256
+    GROUP BY m.source_id
+  `).all();
+
+  const dogRows = db.prepare(`
+    SELECT m.source_id, COUNT(*) AS count
+    FROM pet_embeddings pe
+    JOIN pet_fused_detections pd ON pd.id=pe.pet_detection_id
+    JOIN media_items m ON m.id=pe.media_id
+    WHERE m.availability='AVAILABLE'
+      AND pd.pet_class='dog'
+      AND pe.model_version='DogReID DINOv2-B14 0.2.0'
+      AND pe.input_sha256=m.sha256
+      AND pd.input_sha256=m.sha256
+    GROUP BY m.source_id
+  `).all();
+
+  const faceCounts = new Map(
+    faceRows.map((row) => [Number(row.source_id), Number(row.count ?? 0)])
+  );
+  const dogCounts = new Map(
+    dogRows.map((row) => [Number(row.source_id), Number(row.count ?? 0)])
+  );
+
+  return sources.map((source) => {
+    const sourceId = Number(source.id);
+    return {
+      sourceId,
+      faces: faceCounts.get(sourceId) ?? 0,
+      dogs: dogCounts.get(sourceId) ?? 0
+    };
+  });
+}
 
 function listAnalysisErrors(sourceId?: number, requestedLimit = 200) {
   const limit = Math.max(1, Math.min(1000, Math.trunc(requestedLimit || 200)));
@@ -11462,10 +11570,14 @@ async function dispatch(method: CatalogMethod, payload: Record<string, unknown> 
         payload.sourceId === undefined ? undefined : asNumber(payload.sourceId, "sourceId"),
         typeof payload.module === "string" ? payload.module : "file-probe-v1"
       );
+    case "getPipelineQueueStats":
+      return getPipelineQueueStats();
     case "getPetDetectionQueueStats":
       return getPetDetectionQueueStats(
         payload.sourceId === undefined ? undefined : asNumber(payload.sourceId, "sourceId")
       );
+    case "getIdentityEmbeddingCounts":
+      return getIdentityEmbeddingCounts();
     case "listAnalysisErrors":
       return listAnalysisErrors(
         payload.sourceId === undefined ? undefined : asNumber(payload.sourceId, "sourceId"),
