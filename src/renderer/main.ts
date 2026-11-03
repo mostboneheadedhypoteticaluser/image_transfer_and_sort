@@ -110,6 +110,8 @@ const objectVerificationStageState = document.querySelector<HTMLSpanElement>("#o
 const objectVerificationStageCounts = document.querySelector<HTMLElement>("#objectVerificationStageCounts")!;
 const semanticStageState = document.querySelector<HTMLSpanElement>("#semanticStageState")!;
 const semanticStageCounts = document.querySelector<HTMLElement>("#semanticStageCounts")!;
+const videoAnalysisStageState = document.querySelector<HTMLSpanElement>("#videoAnalysisStageState")!;
+const videoAnalysisStageCounts = document.querySelector<HTMLElement>("#videoAnalysisStageCounts")!;
 const analysisErrorsButton = document.querySelector<HTMLButtonElement>("#analysisErrorsButton")!;
 const analysisDevLogButton = document.querySelector<HTMLButtonElement>("#analysisDevLogButton")!;
 const analysisCopyDevLogButton = document.querySelector<HTMLButtonElement>("#analysisCopyDevLogButton")!;
@@ -193,6 +195,7 @@ let lastPetFusionDone = -1;
 let lastPetEmbeddingDone = -1;
 let lastObjectVerificationDone = -1;
 let lastSemanticDone = -1;
+let lastVideoAnalysisDone = -1;
 let lastPipelineIssueTotal = -1;
 let analysisRefreshTimer: number | null = null;
 let sourcePipelineRefreshTimer: number | null = null;
@@ -754,6 +757,11 @@ function renderPipelineStatus(status: PipelineStatus): void {
     semanticStageCounts,
     status.semanticEmbeddings
   );
+  renderStage(
+    videoAnalysisStageState,
+    videoAnalysisStageCounts,
+    status.videoAnalysis
+  );
 
   // Ein Pipeline-Refresh darf den feineren Live-Status einer laufenden
   // Qwen-Anfrage nicht mit den groben Job-Zählern überschreiben.
@@ -768,7 +776,8 @@ function renderPipelineStatus(status: PipelineStatus): void {
     status.petFusion.done !== lastPetFusionDone ||
     status.petEmbeddings.done !== lastPetEmbeddingDone ||
     status.objectVerification.done !== lastObjectVerificationDone ||
-    status.semanticEmbeddings.done !== lastSemanticDone;
+    status.semanticEmbeddings.done !== lastSemanticDone ||
+    status.videoAnalysis.done !== lastVideoAnalysisDone;
 
   lastThumbnailDone = status.thumbnails.done;
   lastMetadataDone = status.imageMetadata.done;
@@ -779,6 +788,7 @@ function renderPipelineStatus(status: PipelineStatus): void {
   lastPetEmbeddingDone = status.petEmbeddings.done;
   lastObjectVerificationDone = status.objectVerification.done;
   lastSemanticDone = status.semanticEmbeddings.done;
+  lastVideoAnalysisDone = status.videoAnalysis.done;
 
   const stages = [
     status.technical,
@@ -790,7 +800,8 @@ function renderPipelineStatus(status: PipelineStatus): void {
     status.petFusion,
     status.petEmbeddings,
     status.objectVerification,
-    status.semanticEmbeddings
+    status.semanticEmbeddings,
+    status.videoAnalysis
   ];
 
   const totalIssues = stages.reduce(
@@ -1013,6 +1024,11 @@ function fullPreviewUrl(mediaId: number): string {
 type IdentityBrowserMediaRef = {
   mediaId: number;
   relativePath: string;
+  kind?: "image" | "video";
+  startMs?: number;
+  endMs?: number;
+  hitCount?: number;
+  maxSimilarity?: number | null;
 };
 
 const IDENTITY_TERM_TRANSLATIONS: Record<string, string> = {
@@ -1045,6 +1061,7 @@ const IDENTITY_TERM_TRANSLATIONS: Record<string, string> = {
 };
 
 let identityBrowserDetails: MediaDetails[] = [];
+let identityBrowserRefs: IdentityBrowserMediaRef[] = [];
 let identityBrowserActiveTerm: string | null = null;
 let identityBrowserMinDate = 0;
 let identityBrowserMaxDate = 0;
@@ -1104,6 +1121,9 @@ function identityRangeTimestamp(value: number): number {
 function mediaHasIdentityTerm(details: MediaDetails, termKey: string): boolean {
   for (const object of details.objects) {
     if (identityTermKey(object.label) === termKey) return true;
+  }
+  for (const tag of details.videoAnalysis?.tags ?? []) {
+    if (identityTermKey(tag.label) === termKey) return true;
   }
   const semantic = details.semantic;
   if (!semantic) return false;
@@ -1166,6 +1186,15 @@ function renderIdentityWordCloud(detailsList: MediaDetails[]): void {
       add(object.label, engineWeight * Math.max(0.5, object.score), details.mediaId);
     }
 
+    for (const tag of details.videoAnalysis?.tags ?? []) {
+      const frequencyWeight = Math.max(1, Math.log2(tag.hitCount + 1));
+      add(
+        tag.label,
+        frequencyWeight * Math.max(0.5, tag.score),
+        details.mediaId
+      );
+    }
+
     const semantic = details.semantic;
     if (semantic) {
       const semanticSeen = new Set<string>();
@@ -1211,8 +1240,8 @@ function renderIdentityWordCloud(detailsList: MediaDetails[]): void {
     button.style.fontWeight = String(Math.round(520 + normalized * 260));
     button.textContent = word.label;
     button.title =
-      "Auf " + word.media.size.toLocaleString("de-DE") +
-      (word.media.size === 1 ? " Bild" : " Bildern") +
+      "In " + word.media.size.toLocaleString("de-DE") +
+      (word.media.size === 1 ? " Medium" : " Medien") +
       " erkannt · klicken zum Filtern";
     button.addEventListener("click", () => {
       identityBrowserActiveTerm =
@@ -1227,15 +1256,52 @@ function renderIdentityWordCloud(detailsList: MediaDetails[]): void {
     : "Wort anklicken, um die Bilder zu filtern. Mehrfacherkennungen werden zusammengeführt und stärker gewichtet.";
 }
 
+function videoTimestamp(ms: number): string {
+  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  return hours > 0
+    ? hours.toString().padStart(2, "0") + ":" +
+      minutes.toString().padStart(2, "0") + ":" +
+      seconds.toString().padStart(2, "0")
+    : minutes.toString().padStart(2, "0") + ":" +
+      seconds.toString().padStart(2, "0");
+}
+
 function renderIdentityTimeline(detailsList: MediaDetails[]): void {
-  const sorted = [...detailsList].sort(
-    (a, b) => identityCaptureDate(a) - identityCaptureDate(b)
+  const mediaIds = new Set(detailsList.map((details) => details.mediaId));
+  const entries: Array<{
+    details: MediaDetails;
+    ref: IdentityBrowserMediaRef | null;
+  }> = [];
+
+  for (const details of detailsList) {
+    const videoRefs = identityBrowserRefs.filter(
+      (ref) =>
+        ref.mediaId === details.mediaId &&
+        ref.kind === "video"
+    );
+
+    if (details.videoAnalysis && videoRefs.length > 0) {
+      for (const ref of videoRefs) entries.push({ details, ref });
+    } else {
+      entries.push({ details, ref: null });
+    }
+  }
+
+  entries.sort(
+    (a, b) =>
+      identityCaptureDate(a.details) - identityCaptureDate(b.details) ||
+      (a.ref?.startMs ?? 0) - (b.ref?.startMs ?? 0)
   );
+
   identityTimeline.replaceChildren();
   identityTimelineCount.textContent =
-    sorted.length.toLocaleString("de-DE") + (sorted.length === 1 ? " Bild" : " Bilder");
+    entries.length.toLocaleString("de-DE") +
+    (entries.length === 1 ? " Treffer" : " Treffer");
 
-  if (sorted.length === 0) {
+  if (entries.length === 0) {
     const empty = document.createElement("div");
     empty.className = "identity-browser-empty";
     empty.textContent = "Für die gewählten Filter gibt es keine Aufnahmen.";
@@ -1243,15 +1309,43 @@ function renderIdentityTimeline(detailsList: MediaDetails[]): void {
     return;
   }
 
-  for (const details of sorted) {
+  for (const { details, ref } of entries) {
+    if (!mediaIds.has(details.mediaId)) continue;
+
     const card = document.createElement("article");
     card.className = "identity-timeline-card";
 
-    const image = document.createElement("img");
-    image.src = fullPreviewUrl(details.mediaId);
-    image.alt = details.relativePath;
-    image.loading = "lazy";
-    makePreviewable(image, details.mediaId, details.relativePath);
+    if (details.videoAnalysis && ref?.kind === "video") {
+      card.classList.add("identity-video-card");
+      const preview = document.createElement("button");
+      preview.type = "button";
+      preview.className = "identity-video-preview";
+      preview.innerHTML = "<span>▶</span><strong>Video</strong>";
+      preview.title =
+        "Video öffnen · Treffer " +
+        videoTimestamp(ref.startMs ?? 0) +
+        "–" +
+        videoTimestamp(ref.endMs ?? ref.startMs ?? 0);
+      preview.addEventListener("click", () => {
+        void runSafely(async () => {
+          await window.imageSorter.analysis.openFile(details.mediaId);
+          progressText.textContent =
+            "Video geöffnet · relevanter Abschnitt " +
+            videoTimestamp(ref.startMs ?? 0) +
+            "–" +
+            videoTimestamp(ref.endMs ?? ref.startMs ?? 0) +
+            ".";
+        });
+      });
+      card.appendChild(preview);
+    } else {
+      const image = document.createElement("img");
+      image.src = fullPreviewUrl(details.mediaId);
+      image.alt = details.relativePath;
+      image.loading = "lazy";
+      makePreviewable(image, details.mediaId, details.relativePath);
+      card.appendChild(image);
+    }
 
     const info = document.createElement("div");
     const date = document.createElement("strong");
@@ -1259,10 +1353,26 @@ function renderIdentityTimeline(detailsList: MediaDetails[]): void {
     date.textContent = captured
       ? new Date(captured).toLocaleString("de-DE")
       : new Date(details.mtimeMs).toLocaleString("de-DE");
+
+    if (details.videoAnalysis && ref?.kind === "video") {
+      const segment = document.createElement("span");
+      segment.className = "identity-video-segment";
+      segment.textContent =
+        videoTimestamp(ref.startMs ?? 0) +
+        "–" +
+        videoTimestamp(ref.endMs ?? ref.startMs ?? 0) +
+        " · " +
+        (ref.hitCount ?? 1).toLocaleString("de-DE") +
+        ((ref.hitCount ?? 1) === 1 ? " Treffer" : " Treffer");
+      info.append(date, segment);
+    } else {
+      info.appendChild(date);
+    }
+
     const path = document.createElement("small");
     path.textContent = details.relativePath;
-    info.append(date, path);
-    card.append(image, info);
+    info.appendChild(path);
+    card.appendChild(info);
     identityTimeline.appendChild(card);
   }
 }
@@ -1298,14 +1408,17 @@ async function selectIdentityBrowserEntry(
   identityBrowserDetail.hidden = false;
   identityBrowserKind.textContent = kind;
   identityBrowserName.textContent = name;
+  const uniqueMediaCount = new Set(refs.map((ref) => ref.mediaId)).size;
   identityBrowserMeta.textContent =
-    refs.length.toLocaleString("de-DE") + (refs.length === 1 ? " zugeordnete Aufnahme" : " zugeordnete Aufnahmen");
+    uniqueMediaCount.toLocaleString("de-DE") +
+    (uniqueMediaCount === 1 ? " zugeordnetes Medium" : " zugeordnete Medien");
   identityWordCloud.replaceChildren();
   identityTimeline.replaceChildren();
   identityCloudHint.textContent = "Erkennungen werden zusammengeführt …";
   identityTimelineCount.textContent = "Bilder werden geladen …";
   identityBrowserActiveTerm = null;
   identityBrowserDetails = [];
+  identityBrowserRefs = [...refs];
 
   const details = await loadIdentityMediaDetails(refs, token);
   if (token !== identityBrowserSelectionToken) return;
@@ -1325,6 +1438,7 @@ async function loadIdentityBrowser(): Promise<void> {
   identityBrowserDetail.hidden = true;
   identityBrowserSelectionToken++;
   identityBrowserDetails = [];
+  identityBrowserRefs = [];
   identityBrowserActiveTerm = null;
 
   if (identityBrowserMode === "people") {
@@ -1349,7 +1463,12 @@ async function loadIdentityBrowser(): Promise<void> {
       const title = document.createElement("strong");
       title.textContent = person.name;
       const count = document.createElement("small");
-      count.textContent = person.faceCount.toLocaleString("de-DE") + " Treffer";
+      const totalHits = person.faceCount + person.videoHits.length;
+      count.textContent =
+        totalHits.toLocaleString("de-DE") + " Treffer" +
+        (person.videoHits.length > 0
+          ? " · " + person.videoHits.length.toLocaleString("de-DE") + " Video"
+          : "");
       text.append(title, count);
       button.appendChild(text);
       button.addEventListener("click", () => {
@@ -1358,7 +1477,22 @@ async function loadIdentityBrowser(): Promise<void> {
         void selectIdentityBrowserEntry(
           "Personen",
           person.name,
-          person.faces.map((face) => ({ mediaId: face.mediaId, relativePath: face.relativePath }))
+          [
+            ...person.faces.map((face) => ({
+              mediaId: face.mediaId,
+              relativePath: face.relativePath,
+              kind: "image" as const
+            })),
+            ...person.videoHits.map((hit) => ({
+              mediaId: hit.mediaId,
+              relativePath: hit.relativePath,
+              kind: "video" as const,
+              startMs: hit.startMs,
+              endMs: hit.endMs,
+              hitCount: hit.hitCount,
+              maxSimilarity: hit.maxSimilarity
+            }))
+          ]
         );
       });
       identityBrowserList.appendChild(button);
@@ -4076,6 +4210,7 @@ const analysisModuleLabels: Record<string, string> = {
   "file-probe-v1": "Technische Prüfung",
   "thumbnail-v1": "Thumbnail",
   "image-metadata-v1": "Bildmetadaten",
+  "video-analyze-v1": "Video · Personen, Haustiere & Motive",
   "face-detect-yunet-v1": "Gesichter erkennen (YuNet)",
   "face-embed-sface-v1": "Gesichtsmerkmale (SFace)",
   "pet-detect-nanodet-v1": "Haustierdetektor NanoDet",
@@ -5021,7 +5156,8 @@ void window.imageSorter.analysis
       petFusion: { pending: 0, running: 0, done: 0, failed: 0, unavailable: 0 },
       petEmbeddings: { pending: 0, running: 0, done: 0, failed: 0, unavailable: 0 },
       objectVerification: { pending: 0, running: 0, done: 0, failed: 0, unavailable: 0 },
-      semanticEmbeddings: { pending: 0, running: 0, done: 0, failed: 0, unavailable: 0 }
+      semanticEmbeddings: { pending: 0, running: 0, done: 0, failed: 0, unavailable: 0 },
+      videoAnalysis: { pending: 0, running: 0, done: 0, failed: 0, unavailable: 0 }
     });
   });
 
