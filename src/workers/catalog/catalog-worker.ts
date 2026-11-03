@@ -1587,40 +1587,66 @@ function listMedia(
     searchClauses.push("m.availability='AVAILABLE'");
 
     for (const personId of search.personIds) {
-      searchClauses.push(`EXISTS (
-        SELECT 1
-        FROM person_face_assignments pfa_search
-        JOIN face_detections fd_search
-          ON fd_search.id=pfa_search.face_detection_id
-        WHERE pfa_search.person_id=?
-          AND fd_search.media_id=m.id
-          AND fd_search.input_sha256=m.sha256
+      searchClauses.push(`(
+        EXISTS (
+          SELECT 1
+          FROM person_face_assignments pfa_search
+          JOIN face_detections fd_search
+            ON fd_search.id=pfa_search.face_detection_id
+          WHERE pfa_search.person_id=?
+            AND fd_search.media_id=m.id
+            AND fd_search.input_sha256=m.sha256
+        )
+        OR EXISTS (
+          SELECT 1
+          FROM video_identity_tracks vit_search
+          WHERE vit_search.media_id=m.id
+            AND vit_search.identity_kind='person'
+            AND vit_search.identity_id=?
+        )
       )`);
-      searchArgs.push(personId);
+      searchArgs.push(personId, personId);
     }
 
     for (const petId of search.petIds) {
-      searchClauses.push(`EXISTS (
-        SELECT 1
-        FROM pet_assignments pa_search
-        JOIN pet_fused_detections pd_search
-          ON pd_search.id=pa_search.pet_detection_id
-        WHERE pa_search.pet_id=?
-          AND pd_search.media_id=m.id
-          AND pd_search.input_sha256=m.sha256
+      searchClauses.push(`(
+        EXISTS (
+          SELECT 1
+          FROM pet_assignments pa_search
+          JOIN pet_fused_detections pd_search
+            ON pd_search.id=pa_search.pet_detection_id
+          WHERE pa_search.pet_id=?
+            AND pd_search.media_id=m.id
+            AND pd_search.input_sha256=m.sha256
+        )
+        OR EXISTS (
+          SELECT 1
+          FROM video_identity_tracks vit_search
+          WHERE vit_search.media_id=m.id
+            AND vit_search.identity_kind='pet'
+            AND vit_search.identity_id=?
+        )
       )`);
-      searchArgs.push(petId);
+      searchArgs.push(petId, petId);
     }
 
     for (const label of search.objectLabels) {
-      searchClauses.push(`EXISTS (
-        SELECT 1
-        FROM object_fused_detections od_search
-        WHERE od_search.media_id=m.id
-          AND od_search.input_sha256=m.sha256
-          AND od_search.label=?
+      searchClauses.push(`(
+        EXISTS (
+          SELECT 1
+          FROM object_fused_detections od_search
+          WHERE od_search.media_id=m.id
+            AND od_search.input_sha256=m.sha256
+            AND od_search.label=?
+        )
+        OR EXISTS (
+          SELECT 1
+          FROM video_tags vt_search
+          WHERE vt_search.media_id=m.id
+            AND vt_search.label=?
+        )
       )`);
-      searchArgs.push(label);
+      searchArgs.push(label, label);
     }
 
     if (search.minDogs > 0) {
@@ -1724,16 +1750,30 @@ function listMedia(
           AND pd.agreement_count=1
       ) AS pet_single_model_count,
       (
-        SELECT COUNT(DISTINCT od.label)
-        FROM object_fused_detections od
-        WHERE od.media_id=m.id
-          AND od.input_sha256=m.sha256
+        SELECT COUNT(DISTINCT labels.label)
+        FROM (
+          SELECT od.label AS label
+          FROM object_fused_detections od
+          WHERE od.media_id=m.id
+            AND od.input_sha256=m.sha256
+          UNION
+          SELECT vt.label AS label
+          FROM video_tags vt
+          WHERE vt.media_id=m.id
+        ) labels
       ) AS object_count,
       (
-        SELECT GROUP_CONCAT(DISTINCT od.label)
-        FROM object_fused_detections od
-        WHERE od.media_id=m.id
-          AND od.input_sha256=m.sha256
+        SELECT GROUP_CONCAT(labels.label)
+        FROM (
+          SELECT od.label AS label
+          FROM object_fused_detections od
+          WHERE od.media_id=m.id
+            AND od.input_sha256=m.sha256
+          UNION
+          SELECT vt.label AS label
+          FROM video_tags vt
+          WHERE vt.media_id=m.id
+        ) labels
       ) AS object_labels,
       CASE
         WHEN se.media_id IS NOT NULL AND se.input_sha256=m.sha256 THEN 1
