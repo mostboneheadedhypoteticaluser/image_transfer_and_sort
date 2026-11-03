@@ -3,6 +3,7 @@ import type { DatabaseSync } from "node:sqlite";
 type RuleRow = {
   id?: unknown;
   life_area_id?: unknown;
+  group_id?: unknown;
   condition_type: unknown;
   condition_value: unknown;
   date_from: unknown;
@@ -18,7 +19,7 @@ export function createLifeAreaStore(db: DatabaseSync) {
     return name;
   }
 
-  function ruleLabel(row: RuleRow): string {
+  function conditionLabel(row: RuleRow): string {
     const type = String(row.condition_type);
     const value =
       row.condition_value === null || row.condition_value === undefined
@@ -43,6 +44,24 @@ export function createLifeAreaStore(db: DatabaseSync) {
     return type + ": " + value;
   }
 
+  function ruleGroupLabel(ruleId: number): string | null {
+    const rule = db.prepare(
+      "SELECT life_area_id,group_id FROM life_area_rules WHERE id=?"
+    ).get(ruleId);
+    if (!rule) return null;
+
+    const conditions = db.prepare(`
+      SELECT condition_type,condition_value,date_from,date_to
+      FROM life_area_rules
+      WHERE life_area_id=?
+        AND group_id=?
+      ORDER BY id
+    `).all(Number(rule.life_area_id), Number(rule.group_id));
+
+    if (conditions.length === 0) return null;
+    return conditions.map((condition) => conditionLabel(condition as RuleRow)).join(" UND ");
+  }
+
   function list() {
     const areas = db.prepare(`
       SELECT
@@ -50,7 +69,8 @@ export function createLifeAreaStore(db: DatabaseSync) {
         la.name,
         COUNT(DISTINCT mla.media_id) AS media_count,
         COUNT(DISTINCT CASE WHEN mla.assignment_source='MANUAL' THEN mla.media_id END) AS manual_count,
-        COUNT(DISTINCT lar.id) AS rule_count
+        COUNT(DISTINCT CASE WHEN lar.id IS NOT NULL THEN lar.group_id END) AS rule_count,
+        COUNT(DISTINCT lar.id) AS condition_count
       FROM life_areas la
       LEFT JOIN media_life_areas mla ON mla.life_area_id=la.id
       LEFT JOIN life_area_rules lar ON lar.life_area_id=la.id
@@ -62,19 +82,23 @@ export function createLifeAreaStore(db: DatabaseSync) {
       SELECT
         lar.id,
         lar.life_area_id,
+        lar.group_id,
         lar.condition_type,
         lar.condition_value,
         lar.date_from,
         lar.date_to,
         lar.enabled,
-        COUNT(DISTINCT mla.media_id) AS matched_media_count
+        (
+          SELECT COUNT(DISTINCT mla.media_id)
+          FROM media_life_areas mla
+          JOIN life_area_rules assigned_rule ON assigned_rule.id=mla.rule_id
+          WHERE mla.assignment_source='RULE'
+            AND mla.life_area_id=lar.life_area_id
+            AND assigned_rule.group_id=lar.group_id
+        ) AS matched_media_count
       FROM life_area_rules lar
-      LEFT JOIN media_life_areas mla
-        ON mla.rule_id=lar.id
-        AND mla.assignment_source='RULE'
       WHERE lar.life_area_id=?
-      GROUP BY lar.id
-      ORDER BY lar.id
+      ORDER BY lar.group_id, lar.id
     `);
 
     return areas.map((area) => ({
@@ -83,9 +107,11 @@ export function createLifeAreaStore(db: DatabaseSync) {
       mediaCount: Number(area.media_count ?? 0),
       manualCount: Number(area.manual_count ?? 0),
       ruleCount: Number(area.rule_count ?? 0),
+      conditionCount: Number(area.condition_count ?? 0),
       rules: ruleQuery.all(Number(area.id)).map((rule) => ({
         id: Number(rule.id),
         lifeAreaId: Number(rule.life_area_id),
+        groupId: Number(rule.group_id),
         conditionType: String(rule.condition_type),
         conditionValue:
           rule.condition_value === null || rule.condition_value === undefined
@@ -109,7 +135,14 @@ export function createLifeAreaStore(db: DatabaseSync) {
     }
 
     const inserted = db.prepare("INSERT INTO life_areas(name) VALUES(?)").run(name);
-    return { id: Number(inserted.lastInsertRowid), name };
+    const created = db.prepare("SELECT id,name FROM life_areas WHERE id=?")
+      .get(Number(inserted.lastInsertRowid));
+
+    if (!created) {
+      throw new Error("Der Lebensbereich konnte nicht gespeichert werden.");
+    }
+
+    return { id: Number(created.id), name: String(created.name) };
   }
 
   function rename(lifeAreaId: number, rawName: unknown) {
@@ -336,6 +369,25 @@ export function createLifeAreaStore(db: DatabaseSync) {
       .map((row) => Number(row.id));
   }
 
+  function intersectMediaIds(ruleRows: RuleRow[]): number[] {
+    let intersection: Set<number> | null = null;
+
+    for (const rule of ruleRows) {
+      const current = new Set(mediaIdsForRule(rule));
+      if (intersection === null) {
+        intersection = current;
+      } else {
+        intersection = new Set(
+          [...intersection].filter((mediaId) => current.has(mediaId))
+        );
+      }
+
+      if (intersection.size === 0) break;
+    }
+
+    return intersection ? [...intersection] : [];
+  }
+
   function applyRules(requestedLifeAreaId?: number) {
     const areaIds = requestedLifeAreaId === undefined
       ? db.prepare("SELECT id FROM life_areas ORDER BY id")
@@ -376,21 +428,42 @@ export function createLifeAreaStore(db: DatabaseSync) {
         `).run(areaId);
 
         const rules = db.prepare(`
-          SELECT id,condition_type,condition_value,date_from,date_to
+          SELECT
+            id,
+            life_area_id,
+            group_id,
+            condition_type,
+            condition_value,
+            date_from,
+            date_to,
+            enabled
           FROM life_area_rules
           WHERE life_area_id=?
-            AND enabled=1
-          ORDER BY id
-        `).all(areaId);
+          ORDER BY group_id,id
+        `).all(areaId) as RuleRow[];
 
+        const groups = new Map<number, RuleRow[]>();
         for (const rule of rules) {
-          const mediaIds = mediaIdsForRule(rule as RuleRow);
+          const groupId = Number(rule.group_id);
+          const values = groups.get(groupId) ?? [];
+          values.push(rule);
+          groups.set(groupId, values);
+        }
+
+        for (const groupRows of groups.values()) {
+          if (groupRows.length === 0 || groupRows.some((rule) => !Boolean(rule.enabled))) {
+            continue;
+          }
+
+          const mediaIds = intersectMediaIds(groupRows);
+          const representativeRuleId = Number(groupRows[0].id);
+
           for (const mediaId of mediaIds) {
             assigned += Number(
               insertAssignment.run(
                 mediaId,
                 areaId,
-                Number(rule.id),
+                representativeRuleId,
                 mediaId,
                 areaId
               ).changes
@@ -413,7 +486,8 @@ export function createLifeAreaStore(db: DatabaseSync) {
     conditionType: unknown,
     conditionValue: unknown,
     dateFrom: unknown,
-    dateTo: unknown
+    dateTo: unknown,
+    requestedGroupId?: unknown
   ) {
     if (!db.prepare("SELECT 1 FROM life_areas WHERE id=?").get(lifeAreaId)) {
       throw new Error("Der Lebensbereich wurde nicht gefunden.");
@@ -425,28 +499,88 @@ export function createLifeAreaStore(db: DatabaseSync) {
       dateFrom,
       dateTo
     );
-    const inserted = db.prepare(`
-      INSERT INTO life_area_rules(
-        life_area_id,condition_type,condition_value,date_from,date_to,enabled
-      )
-      VALUES(?,?,?,?,?,1)
-    `).run(
-      lifeAreaId,
-      validated.type,
-      validated.value,
-      validated.dateFrom,
-      validated.dateTo
-    );
 
-    applyRules(lifeAreaId);
-    return { id: Number(inserted.lastInsertRowid) };
+    let groupId: number | null = null;
+    if (
+      requestedGroupId !== null &&
+      requestedGroupId !== undefined &&
+      requestedGroupId !== ""
+    ) {
+      const parsedGroupId = Number(requestedGroupId);
+      if (!Number.isInteger(parsedGroupId) || parsedGroupId <= 0) {
+        throw new Error("Die ausgewählte Regelgruppe ist ungültig.");
+      }
+
+      const existingGroup = db.prepare(`
+        SELECT group_id
+        FROM life_area_rules
+        WHERE life_area_id=?
+          AND group_id=?
+        LIMIT 1
+      `).get(lifeAreaId, parsedGroupId);
+
+      if (!existingGroup) {
+        throw new Error("Die ausgewählte Regelgruppe wurde nicht gefunden.");
+      }
+      groupId = parsedGroupId;
+    }
+
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      const inserted = db.prepare(`
+        INSERT INTO life_area_rules(
+          life_area_id,
+          group_id,
+          condition_type,
+          condition_value,
+          date_from,
+          date_to,
+          enabled
+        )
+        VALUES(?,?,?,?,?,?,1)
+      `).run(
+        lifeAreaId,
+        groupId ?? 0,
+        validated.type,
+        validated.value,
+        validated.dateFrom,
+        validated.dateTo
+      );
+
+      const ruleId = Number(inserted.lastInsertRowid);
+      if (groupId === null) {
+        groupId = ruleId;
+        db.prepare(
+          "UPDATE life_area_rules SET group_id=? WHERE id=?"
+        ).run(groupId, ruleId);
+      }
+
+      if (requestedGroupId !== null && requestedGroupId !== undefined) {
+        const groupState = db.prepare(`
+          SELECT MIN(enabled) AS enabled
+          FROM life_area_rules
+          WHERE life_area_id=?
+            AND group_id=?
+        `).get(lifeAreaId, groupId);
+        db.prepare(
+          "UPDATE life_area_rules SET enabled=? WHERE id=?"
+        ).run(Boolean(groupState?.enabled) ? 1 : 0, ruleId);
+      }
+
+      db.exec("COMMIT");
+      applyRules(lifeAreaId);
+      return { id: ruleId, groupId };
+    } catch (error) {
+      db.exec("ROLLBACK");
+      throw error;
+    }
   }
 
   function deleteRule(ruleId: number) {
     const rule = db.prepare(
-      "SELECT id,life_area_id FROM life_area_rules WHERE id=?"
+      "SELECT id,life_area_id,group_id FROM life_area_rules WHERE id=?"
     ).get(ruleId);
-    if (!rule) throw new Error("Die Lebensbereich-Regel wurde nicht gefunden.");
+    if (!rule) throw new Error("Die Lebensbereich-Bedingung wurde nicht gefunden.");
 
     db.prepare(
       "DELETE FROM media_life_areas WHERE rule_id=? AND assignment_source='RULE'"
@@ -458,15 +592,20 @@ export function createLifeAreaStore(db: DatabaseSync) {
 
   function setRuleEnabled(ruleId: number, enabled: unknown) {
     const rule = db.prepare(
-      "SELECT id,life_area_id FROM life_area_rules WHERE id=?"
+      "SELECT id,life_area_id,group_id FROM life_area_rules WHERE id=?"
     ).get(ruleId);
     if (!rule) throw new Error("Die Lebensbereich-Regel wurde nicht gefunden.");
 
     db.prepare(`
       UPDATE life_area_rules
       SET enabled=?,updated_at=CURRENT_TIMESTAMP
-      WHERE id=?
-    `).run(Boolean(enabled) ? 1 : 0, ruleId);
+      WHERE life_area_id=?
+        AND group_id=?
+    `).run(
+      Boolean(enabled) ? 1 : 0,
+      Number(rule.life_area_id),
+      Number(rule.group_id)
+    );
 
     applyRules(Number(rule.life_area_id));
     return { changed: true as const };
@@ -541,18 +680,13 @@ export function createLifeAreaStore(db: DatabaseSync) {
           ELSE NULL
         END AS thumbnail_version,
         mla.assignment_source,
-        mla.rule_id,
-        lar.condition_type,
-        lar.condition_value,
-        lar.date_from,
-        lar.date_to
+        mla.rule_id
       FROM media_life_areas mla
       JOIN media_items m ON m.id=mla.media_id
       JOIN media_sources ms ON ms.id=m.source_id
       LEFT JOIN media_image_metadata md
         ON md.media_id=m.id AND md.input_sha256=m.sha256
       LEFT JOIN media_thumbnails t ON t.media_id=m.id
-      LEFT JOIN life_area_rules lar ON lar.id=mla.rule_id
       WHERE mla.life_area_id=?
         AND ms.enabled=1
         AND m.availability='AVAILABLE'
@@ -581,14 +715,7 @@ export function createLifeAreaStore(db: DatabaseSync) {
         String(row.assignment_source) === "MANUAL" ? "MANUAL" : "RULE",
       ruleId: row.rule_id === null ? null : Number(row.rule_id),
       ruleLabel:
-        row.rule_id === null
-          ? null
-          : ruleLabel({
-              condition_type: row.condition_type,
-              condition_value: row.condition_value,
-              date_from: row.date_from,
-              date_to: row.date_to
-            })
+        row.rule_id === null ? null : ruleGroupLabel(Number(row.rule_id))
     }));
   }
 
@@ -598,14 +725,9 @@ export function createLifeAreaStore(db: DatabaseSync) {
         la.id AS life_area_id,
         la.name,
         mla.assignment_source,
-        mla.rule_id,
-        lar.condition_type,
-        lar.condition_value,
-        lar.date_from,
-        lar.date_to
+        mla.rule_id
       FROM media_life_areas mla
       JOIN life_areas la ON la.id=mla.life_area_id
-      LEFT JOIN life_area_rules lar ON lar.id=mla.rule_id
       WHERE mla.media_id=?
       ORDER BY la.name COLLATE NOCASE, la.id
     `).all(mediaId).map((row) => ({
@@ -615,14 +737,7 @@ export function createLifeAreaStore(db: DatabaseSync) {
         String(row.assignment_source) === "MANUAL" ? "MANUAL" : "RULE",
       ruleId: row.rule_id === null ? null : Number(row.rule_id),
       ruleLabel:
-        row.rule_id === null
-          ? null
-          : ruleLabel({
-              condition_type: row.condition_type,
-              condition_value: row.condition_value,
-              date_from: row.date_from,
-              date_to: row.date_to
-            })
+        row.rule_id === null ? null : ruleGroupLabel(Number(row.rule_id))
     }));
   }
 
