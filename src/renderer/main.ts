@@ -102,6 +102,8 @@ const analysisParallelSelect = document.querySelector<HTMLSelectElement>("#analy
 const analysisQueue = document.querySelector<HTMLElement>("#analysisQueue")!;
 const analysisActive = document.querySelector<HTMLElement>("#analysisActive")!;
 const analysisMessage = document.querySelector<HTMLSpanElement>("#analysisMessage")!;
+const analysisLiveActivity = document.querySelector<HTMLElement>("#analysisLiveActivity")!;
+const analysisLiveActivityText = document.querySelector<HTMLElement>("#analysisLiveActivityText")!;
 const technicalStageState = document.querySelector<HTMLSpanElement>("#technicalStageState")!;
 const technicalStageCounts = document.querySelector<HTMLElement>("#technicalStageCounts")!;
 const thumbnailStageState = document.querySelector<HTMLSpanElement>("#thumbnailStageState")!;
@@ -834,7 +836,35 @@ function scheduleSelectedPipelineRefresh(): void {
   }, 250);
 }
 
+function renderLivePipelineActivity(status: PipelineStatus): void {
+  const stages: Array<[string, number]> = [
+    ["Technik", status.technical.running],
+    ["Thumbnails", status.thumbnails.running],
+    ["Metadaten", status.imageMetadata.running],
+    ["Gesichter", status.faces.running],
+    ["Gesichtsmerkmale", status.faceEmbeddings.running],
+    ["Haustiererkennung", status.petDetection.running],
+    ["Haustierfusion", status.petFusion.running],
+    ["Dog-ReID", status.petEmbeddings.running],
+    ["SigLIP", status.semanticEmbeddings.running],
+    ["Qwen", status.objectVerification.running],
+    ["Videoanalyse", status.videoAnalysis.running]
+  ];
+
+  const active = stages.filter(([, count]) => count > 0);
+  const total = active.reduce((sum, [, count]) => sum + count, 0);
+
+  analysisLiveActivity.classList.toggle("running", total > 0);
+  analysisLiveActivityText.textContent =
+    total > 0
+      ? active
+          .map(([label, count]) => `${count}× ${label}`)
+          .join(" · ")
+      : "Keine laufenden Pipeline-Jobs.";
+}
+
 function renderPipelineStatus(status: PipelineStatus): void {
+  renderLivePipelineActivity(status);
   renderStage(technicalStageState, technicalStageCounts, status.technical);
   renderStage(thumbnailStageState, thumbnailStageCounts, status.thumbnails);
   renderStage(metadataStageState, metadataStageCounts, status.imageMetadata);
@@ -6151,8 +6181,11 @@ window.imageSorter.analysis.onQwenBenchmarkStage((stage) => {
     renderQwenBenchmarkStage(stage);
   }
 });
-window.imageSorter.analysis.onPipelineStatus(() => {
-  scheduleSelectedPipelineRefresh();
+window.imageSorter.analysis.onPipelineStatus((status) => {
+  // Den vom Main-Prozess bereits gelieferten Live-Zustand sofort anzeigen.
+  // Eine erneute DB-Abfrage hat kurze Jobs bisher oft erst nach deren Ende
+  // sichtbar gemacht.
+  renderPipelineStatus(status);
   scheduleIdentityTabStatsRefresh();
 });
 
