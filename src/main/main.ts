@@ -24,6 +24,10 @@ import type {
   ExplorerRoot,
   FolderTreeNode,
   GeoMediaPoint,
+  LifeAreaRecord,
+  LifeAreaMediaItem,
+  ApplyLifeAreaRulesResult,
+  LifeAreaMutationResult,
   ConfirmPersonResult,
   ConfirmPetResult,
   IgnorePersonResult,
@@ -738,6 +742,89 @@ function registerIpc(): void {
       "listGeoMedia",
       sourceId === undefined ? {} : { sourceId }
     )
+  );
+
+  ipcMain.handle("catalog:listLifeAreas", () =>
+    catalog!.request<LifeAreaRecord[]>("listLifeAreas")
+  );
+
+  ipcMain.handle("catalog:createLifeArea", (_event, name: string) =>
+    catalog!.request<{ id: number; name: string }>("createLifeArea", { name })
+  );
+
+  ipcMain.handle(
+    "catalog:renameLifeArea",
+    (_event, lifeAreaId: number, name: string): Promise<LifeAreaMutationResult> =>
+      catalog!.request<LifeAreaMutationResult>("renameLifeArea", { lifeAreaId, name })
+  );
+
+  ipcMain.handle(
+    "catalog:deleteLifeArea",
+    (_event, lifeAreaId: number): Promise<LifeAreaMutationResult> =>
+      catalog!.request<LifeAreaMutationResult>("deleteLifeArea", { lifeAreaId })
+  );
+
+  ipcMain.handle(
+    "catalog:addLifeAreaRule",
+    (
+      _event,
+      lifeAreaId: number,
+      conditionType: string,
+      conditionValue: string | null,
+      dateFrom: string | null,
+      dateTo: string | null
+    ) =>
+      catalog!.request<{ id: number }>("addLifeAreaRule", {
+        lifeAreaId,
+        conditionType,
+        conditionValue,
+        dateFrom,
+        dateTo
+      })
+  );
+
+  ipcMain.handle(
+    "catalog:deleteLifeAreaRule",
+    (_event, ruleId: number): Promise<LifeAreaMutationResult> =>
+      catalog!.request<LifeAreaMutationResult>("deleteLifeAreaRule", { ruleId })
+  );
+
+  ipcMain.handle(
+    "catalog:setLifeAreaRuleEnabled",
+    (_event, ruleId: number, enabled: boolean): Promise<LifeAreaMutationResult> =>
+      catalog!.request<LifeAreaMutationResult>(
+        "setLifeAreaRuleEnabled",
+        { ruleId, enabled }
+      )
+  );
+
+  ipcMain.handle(
+    "catalog:applyLifeAreaRules",
+    (_event, lifeAreaId?: number): Promise<ApplyLifeAreaRulesResult> =>
+      catalog!.request<ApplyLifeAreaRulesResult>(
+        "applyLifeAreaRules",
+        lifeAreaId === undefined ? {} : { lifeAreaId }
+      )
+  );
+
+  ipcMain.handle(
+    "catalog:listLifeAreaMedia",
+    (_event, lifeAreaId: number): Promise<LifeAreaMediaItem[]> =>
+      catalog!.request<LifeAreaMediaItem[]>("listLifeAreaMedia", { lifeAreaId })
+  );
+
+  ipcMain.handle(
+    "catalog:setMediaLifeArea",
+    (
+      _event,
+      mediaId: number,
+      lifeAreaId: number,
+      assigned: boolean
+    ): Promise<LifeAreaMutationResult> =>
+      catalog!.request<LifeAreaMutationResult>(
+        "setMediaLifeArea",
+        { mediaId, lifeAreaId, assigned }
+      )
   );
 
   ipcMain.handle("catalog:getSearchFacets", (_event, sourceId?: number) =>
