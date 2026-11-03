@@ -646,13 +646,18 @@
                         <option value="person">Person ist</option>
                         <option value="tag">Merkmal / Motiv enthält</option>
                         <option value="path">Dateipfad enthält</option>
+                        <option value="folder">Ordner rekursiv</option>
                         <option value="date">Aufnahme liegt im Zeitraum</option>
                       </select>
                     </label>
                     <label id="lifeAreaRuleValueField">
                       <span>Wert</span>
                       <select id="lifeAreaRuleIdentityValue"></select>
-                      <input id="lifeAreaRuleTextValue" type="text" maxlength="300" placeholder="z. B. Rettungshund" hidden />
+                      <input id="lifeAreaRuleTextValue" type="text" maxlength="1000" placeholder="z. B. Rettungshund" hidden />
+                      <div id="lifeAreaRuleFolderValue" class="life-area-folder-value" hidden>
+                        <button id="lifeAreaRuleFolderPick" class="secondary" type="button">Ordner auswählen …</button>
+                        <small id="lifeAreaRuleFolderSelected">Kein Ordner ausgewählt.</small>
+                      </div>
                     </label>
                     <div id="lifeAreaRuleDateFields" class="life-area-rule-date-fields" hidden>
                       <label><span>Von</span><input id="lifeAreaRuleDateFrom" type="date" /></label>
@@ -848,6 +853,23 @@
           </div>
         </div>
       </form>
+    </dialog>
+
+    <dialog id="lifeAreaFolderDialog" class="app-dialog life-area-folder-dialog">
+      <div class="dialog-header">
+        <div>
+          <h2>Ordner für Lebensbereich-Regel auswählen</h2>
+          <p>Es werden nur aktuell aktive Medienquellen angezeigt. Der gewählte Ordner gilt automatisch für alle Unterordner.</p>
+        </div>
+        <button id="closeLifeAreaFolderDialog" class="dialog-close" type="button" aria-label="Schließen">×</button>
+      </div>
+      <div class="life-area-folder-dialog-body">
+        <div id="lifeAreaFolderStatus" class="life-area-folder-status">Medienquellen werden geladen …</div>
+        <div id="lifeAreaFolderTree" class="life-area-folder-tree"></div>
+        <div class="dialog-actions">
+          <button id="cancelLifeAreaFolderDialog" class="ghost" type="button">Abbrechen</button>
+        </div>
+      </div>
     </dialog>
 
     <dialog id="lifeAreaAssignDialog" class="app-dialog life-area-assign-dialog">
