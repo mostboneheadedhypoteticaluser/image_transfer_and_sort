@@ -19,6 +19,7 @@
             <button class="sidebar-nav-item" type="button" data-app-page="analysis"><span>◫</span>Analyse &amp; KI</button>
             <button class="sidebar-nav-item" type="button" data-app-page="media"><span>▤</span>Medien</button>
             <button class="sidebar-nav-item" type="button" data-app-page="identities"><span>●</span>Personen &amp; Tiere</button>
+            <button class="sidebar-nav-item" type="button" data-app-page="life-areas"><span>◆</span>Lebensbereiche</button>
             <button class="sidebar-nav-item" type="button" data-app-page="map"><span>⌖</span>Karte</button>
           </nav>
           <div class="sidebar-status">
@@ -564,6 +565,122 @@
                     <small id="identityTimelineCount">0 Bilder</small>
                   </div>
                   <div id="identityTimeline" class="identity-timeline"></div>
+                </section>
+              </div>
+            </section>
+          </section>
+        </section>
+
+        <section class="workspace-page life-area-page" data-workspace-page="life-areas" hidden>
+          <section class="life-area-shell">
+            <aside class="life-area-sidebar">
+              <div class="life-area-sidebar-heading">
+                <div>
+                  <span class="section-kicker">Merkmal</span>
+                  <h2>Lebensbereiche</h2>
+                </div>
+                <button id="lifeAreaAddButton" class="secondary" type="button">+ Neu</button>
+              </div>
+              <p class="life-area-sidebar-hint">Ein Medium kann mehreren Lebensbereichen gleichzeitig zugeordnet sein.</p>
+              <div id="lifeAreaList" class="life-area-list"></div>
+            </aside>
+
+            <section class="life-area-content">
+              <div id="lifeAreaEmpty" class="life-area-empty">
+                <strong>Noch kein Lebensbereich ausgewählt.</strong>
+                <p>Lege zum Beispiel „DRK“, „Privat“, „Familie“ oder einen Lebensabschnitt an.</p>
+              </div>
+
+              <div id="lifeAreaDetail" hidden>
+                <header class="life-area-detail-heading">
+                  <div>
+                    <span class="section-kicker">Lebensbereich</span>
+                    <h1 id="lifeAreaTitle">—</h1>
+                    <p id="lifeAreaMeta">—</p>
+                  </div>
+                  <div class="life-area-heading-actions">
+                    <button id="lifeAreaRenameButton" class="ghost" type="button">Umbenennen</button>
+                    <button id="lifeAreaDeleteButton" class="danger" type="button">Löschen</button>
+                  </div>
+                </header>
+
+                <section class="panel life-area-rules-panel">
+                  <div class="life-area-section-heading">
+                    <div>
+                      <span class="section-kicker">Automatik</span>
+                      <h3>Wenn-dann-Regeln</h3>
+                      <p>Regeln werden mit ODER ausgewertet. Manuelle Zuordnungen und manuelle Ausschlüsse haben immer Vorrang.</p>
+                    </div>
+                    <button id="lifeAreaApplyRules" class="ghost" type="button">Regeln neu anwenden</button>
+                  </div>
+
+                  <div class="life-area-rule-builder">
+                    <label>
+                      <span>Wenn</span>
+                      <select id="lifeAreaRuleType">
+                        <option value="pet">Haustier ist</option>
+                        <option value="person">Person ist</option>
+                        <option value="tag">Merkmal / Motiv enthält</option>
+                        <option value="path">Dateipfad enthält</option>
+                        <option value="date">Aufnahme liegt im Zeitraum</option>
+                      </select>
+                    </label>
+                    <label id="lifeAreaRuleValueField">
+                      <span>Wert</span>
+                      <select id="lifeAreaRuleIdentityValue"></select>
+                      <input id="lifeAreaRuleTextValue" type="text" maxlength="300" placeholder="z. B. Rettungshund" hidden />
+                    </label>
+                    <div id="lifeAreaRuleDateFields" class="life-area-rule-date-fields" hidden>
+                      <label><span>Von</span><input id="lifeAreaRuleDateFrom" type="date" /></label>
+                      <label><span>Bis</span><input id="lifeAreaRuleDateTo" type="date" /></label>
+                    </div>
+                    <div class="life-area-rule-result">
+                      <span>Dann</span>
+                      <strong id="lifeAreaRuleThenLabel">Lebensbereich zuweisen</strong>
+                    </div>
+                    <button id="lifeAreaAddRuleButton" class="primary" type="button">Regel hinzufügen</button>
+                  </div>
+
+                  <div id="lifeAreaRules" class="life-area-rules"></div>
+                </section>
+
+                <section class="panel life-area-browser-panel">
+                  <div class="life-area-filter-row">
+                    <div class="life-area-filter-group">
+                      <strong>Zeitraum</strong>
+                      <label>Von <input id="lifeAreaDateFrom" type="date" /></label>
+                      <label>Bis <input id="lifeAreaDateTo" type="date" /></label>
+                      <button id="lifeAreaResetDate" class="ghost" type="button">Alle Zeiten</button>
+                    </div>
+                    <div class="life-area-filter-group">
+                      <strong>Medientyp</strong>
+                      <select id="lifeAreaMediaType">
+                        <option value="all">Fotos &amp; Videos</option>
+                        <option value="image">Nur Fotos</option>
+                        <option value="video">Nur Videos</option>
+                      </select>
+                    </div>
+                    <div class="life-area-filter-group life-area-location-filter">
+                      <strong>Ort</strong>
+                      <span id="lifeAreaLocationState">Alle Orte</span>
+                      <button id="lifeAreaUseMapBounds" class="secondary" type="button">Kartenausschnitt filtern</button>
+                      <button id="lifeAreaResetMapBounds" class="ghost" type="button" disabled>Ortsfilter löschen</button>
+                    </div>
+                  </div>
+
+                  <div class="life-area-browser-grid">
+                    <section class="life-area-map-column">
+                      <div id="lifeAreaMapEmpty" class="map-empty-state">Keine GPS-Daten im aktuellen Filter.</div>
+                      <div id="lifeAreaMap" class="life-area-map" aria-label="Aufnahmeorte dieses Lebensbereichs"></div>
+                    </section>
+                    <section class="life-area-gallery-column">
+                      <div class="life-area-gallery-heading">
+                        <strong id="lifeAreaGalleryCount">0 Medien</strong>
+                        <small>Manuell zugewiesene Medien sind mit „Manuell“ gekennzeichnet.</small>
+                      </div>
+                      <div id="lifeAreaGallery" class="life-area-gallery"></div>
+                    </section>
+                  </div>
                 </section>
               </div>
             </section>
