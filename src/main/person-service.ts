@@ -178,7 +178,8 @@ export class PersonService {
         if (!existing) {
           personMap.set(person.id, {
             ...person,
-            faces: [...person.faces]
+            faces: [...person.faces],
+            videoHits: [...person.videoHits]
           });
           continue;
         }
@@ -195,6 +196,19 @@ export class PersonService {
           if (!knownFaceIds.has(face.faceDetectionId)) {
             existing.faces.push(face);
             knownFaceIds.add(face.faceDetectionId);
+          }
+        }
+
+        const knownVideoHits = new Set(
+          existing.videoHits.map((hit) =>
+            [hit.mediaId, hit.startMs, hit.endMs].join(":")
+          )
+        );
+        for (const hit of person.videoHits) {
+          const key = [hit.mediaId, hit.startMs, hit.endMs].join(":");
+          if (!knownVideoHits.has(key)) {
+            existing.videoHits.push(hit);
+            knownVideoHits.add(key);
           }
         }
       }
