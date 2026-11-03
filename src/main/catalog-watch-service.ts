@@ -227,16 +227,28 @@ export class CatalogWatchService {
     const existing = this.pendingScans.get(sourceId);
     if (existing?.full) return;
 
+    // Ein Watcher-Ereignis ohne konkreten Pfad ist bewusst ein Vollscan-
+    // Signal. Das darf nicht durch bereits wartende Einzelpfade abgeschwächt
+    // werden.
+    if (paths.length === 0) {
+      this.pendingScans.set(sourceId, {
+        automatic,
+        trigger,
+        paths: null,
+        full: true
+      });
+      void this.processScanQueue();
+      return;
+    }
+
     const unique = [...new Set([...(existing?.paths ?? []), ...paths].filter(Boolean))];
 
     this.pendingScans.set(sourceId, {
       automatic,
       trigger,
-      paths: unique.length > 0 ? unique : null,
+      paths: unique,
       // Viele Einzeldateien sind kein Grund mehr für einen teuren Vollscan.
-      // Vollständig scannen wir nur, wenn der Watcher keinen konkreten Pfad
-      // liefern konnte.
-      full: unique.length === 0
+      full: false
     });
     void this.processScanQueue();
   }
@@ -464,13 +476,14 @@ export class CatalogWatchService {
       }
 
       if (ready.length > 0) {
+        const needsFullScan = ready.includes(".");
         const concretePaths = ready.filter((item) => item !== ".");
         this.requestChangedPaths(
           source.sourceId,
-          concretePaths,
-          concretePaths.length > 0
-            ? "Dateisystemänderung: " + concretePaths.slice(0, 3).join(", ")
-            : "Dateisystemänderung",
+          needsFullScan ? [] : concretePaths,
+          needsFullScan
+            ? "Dateisystemänderung ohne konkreten Pfad"
+            : "Dateisystemänderung: " + concretePaths.slice(0, 3).join(", "),
           true
         );
       }
