@@ -807,14 +807,16 @@ function registerIpc(): void {
       conditionType: string,
       conditionValue: string | null,
       dateFrom: string | null,
-      dateTo: string | null
+      dateTo: string | null,
+      groupId?: number | null
     ) =>
-      catalog!.request<{ id: number }>("addLifeAreaRule", {
+      catalog!.request<{ id: number; groupId: number }>("addLifeAreaRule", {
         lifeAreaId,
         conditionType,
         conditionValue,
         dateFrom,
-        dateTo
+        dateTo,
+        groupId
       })
   );
 
