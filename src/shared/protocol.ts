@@ -101,6 +101,12 @@ export type AnalysisQueueStats = {
   unavailable: number;
 };
 
+export type BackgroundPauseState = {
+  paused: boolean;
+  changing: boolean;
+  message: string;
+};
+
 export type ShutdownStatus = {
   phase:
     | "PREPARING"
@@ -994,6 +1000,7 @@ export type CatalogMethod =
   | "getMediaPath"
   | "scanSource"
   | "reconcileSourceChanges"
+  | "setProcessingPaused"
   | "restoreMedia"
   | "prepareForShutdown"
   | "resetCatalog";
