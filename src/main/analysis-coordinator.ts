@@ -135,11 +135,8 @@ const MODULES: ModuleSpec[] = [
 ];
 
 const HEAVY_MODULE_NAMES = new Set([
-  // Videoanalyse ist absichtlich eine schwere Stufe: Ein einziges Video kann
-  // hunderte Analyseframes und damit viele Minuten Workerzeit belegen. Würde
-  // sie in der Fast-Lane bleiben, blockiert ein Video die normalen Foto-Stufen
-  // (Gesichter/Haustiere) und damit auch deren laufende Gruppierung.
-  "video-analyze-v1",
+  // Nur die großen semantischen Modelle bleiben exklusiv hinten. Videos sind
+  // normale Jobs und belegen wie ein Bild genau eine konfigurierbare Lane.
   "semantic-embed-siglip2-v1",
   "catalog-semantic-qwen3vl4b-v3"
 ]);
@@ -183,7 +180,7 @@ function addStats(
   };
 }
 
-const FAST_CONCURRENCY = 2;
+const MAX_FAST_CONCURRENCY = 8;
 
 export class AnalysisCoordinator {
   private timer: NodeJS.Timeout | null = null;
@@ -193,10 +190,11 @@ export class AnalysisCoordinator {
   private maintenancePaused = false;
   private userPaused = false;
   private shutdownRequested = false;
+  private concurrency = 2;
   private readonly fastLaneMediaIds: Array<number | null> =
-    Array.from({ length: FAST_CONCURRENCY }, () => null);
+    Array.from({ length: MAX_FAST_CONCURRENCY }, () => null);
   private readonly fastLaneBusy: boolean[] =
-    Array.from({ length: FAST_CONCURRENCY }, () => false);
+    Array.from({ length: MAX_FAST_CONCURRENCY }, () => false);
   private readonly activeTasks = new Set<Promise<void>>();
   private heavyRunning = false;
   private backfillRunning = false;
@@ -214,6 +212,22 @@ export class AnalysisCoordinator {
       stats: AnalysisQueueStats
     ) => void
   ) {}
+
+  setConcurrency(value: number): number {
+    this.concurrency = Math.max(
+      1,
+      Math.min(MAX_FAST_CONCURRENCY, Math.trunc(value || 1))
+    );
+
+    if (!this.stopped && !this.userPaused && !this.maintenancePaused) {
+      void this.pump();
+    }
+    return this.concurrency;
+  }
+
+  getConcurrency(): number {
+    return this.concurrency;
+  }
 
   async start(): Promise<void> {
     if (!this.stopped) return;
@@ -782,7 +796,7 @@ export class AnalysisCoordinator {
       // Der Python-Worker besitzt dafür getrennte Fast-/Heavy-Lanes.
       let launchedFast = false;
 
-      for (let laneIndex = 0; laneIndex < FAST_CONCURRENCY; laneIndex += 1) {
+      for (let laneIndex = 0; laneIndex < this.concurrency; laneIndex += 1) {
         if (this.fastLaneBusy[laneIndex]) continue;
 
         const selection = await this.claimFastJob(laneIndex);
