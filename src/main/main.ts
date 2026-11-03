@@ -1735,9 +1735,13 @@ app.whenReady().then(() => {
 
   personService = new PersonService(catalog, analysis);
   petService = new PetService(catalog, analysis);
-  catalogWatchService = new CatalogWatchService(catalog, (event) => {
-    sendToRenderer("catalog:watchEvent", event);
-  });
+  catalogWatchService = new CatalogWatchService(
+    catalog,
+    (event) => {
+      sendToRenderer("catalog:watchEvent", event);
+    },
+    (event, fields = {}) => analysis?.logDiagnostic(event, fields)
+  );
 
   catalog.start();
   thumbnailService.start();
