@@ -1,6 +1,7 @@
 import type {
   AnalysisErrorRecord,
   AnalysisWorkerStatus,
+  AssignPersonSelectionResult,
   QwenBenchmarkModel,
   QwenBenchmarkProfile,
   QwenBenchmarkRunResult,
@@ -92,6 +93,11 @@ declare global {
           expectedFaceCount?: number,
           expectedMemberSignature?: string
         ): Promise<ConfirmPersonResult>;
+        assignCandidateSelection(
+          candidateId: number,
+          faceDetectionIds: number[],
+          name: string
+        ): Promise<AssignPersonSelectionResult>;
         ignoreCandidate(
           candidateId: number,
           fallbackFaceDetectionId?: number,
