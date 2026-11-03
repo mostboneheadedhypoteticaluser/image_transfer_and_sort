@@ -10667,6 +10667,8 @@ function resetCatalog(): { reset: true } {
 
   db.exec("BEGIN IMMEDIATE");
   try {
+    lifeAreaStore.reset();
+
     // Bewusst vollständig: Nach einem Reset sollen weder alte KI-Ergebnisse
     // noch Kandidaten, Suchvektoren oder alte IDs in der neuen Datenbank
     // weiterleben. Die eigentlichen Bild-/Videodateien und Modellgewichte
