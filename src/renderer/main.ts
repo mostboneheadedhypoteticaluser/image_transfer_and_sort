@@ -1672,6 +1672,26 @@ identityBrowserPetsTab.addEventListener("click", () => {
   void runSafely(loadIdentityBrowser);
 });
 
+function setIdentityBrowserMediaFilter(
+  filter: "all" | "image" | "video"
+): void {
+  if (identityBrowserMediaFilter === filter) return;
+  identityBrowserMediaFilter = filter;
+  void runSafely(loadIdentityBrowser);
+}
+
+identityBrowserAllMedia.addEventListener("click", () => {
+  setIdentityBrowserMediaFilter("all");
+});
+
+identityBrowserImagesOnly.addEventListener("click", () => {
+  setIdentityBrowserMediaFilter("image");
+});
+
+identityBrowserVideosOnly.addEventListener("click", () => {
+  setIdentityBrowserMediaFilter("video");
+});
+
 identityDateFrom.addEventListener("input", () => {
   if (Number(identityDateFrom.value) > Number(identityDateTo.value)) {
     identityDateFrom.value = identityDateTo.value;
