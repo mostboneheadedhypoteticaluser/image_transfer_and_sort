@@ -1148,6 +1148,13 @@ function registerIpc(): void {
     analysis!.refreshStatus()
   );
 
+  ipcMain.handle("analysis:setMaxConcurrentJobs", async (_event, value: number) => {
+    const requested = Math.max(1, Math.min(8, Math.trunc(Number(value) || 1)));
+    analysisCoordinator?.setConcurrency(requested);
+    const maxConcurrentJobs = await analysis!.setMaxConcurrentJobs(requested);
+    return { maxConcurrentJobs };
+  });
+
   ipcMain.handle("analysis:openDevLog", async () => {
     const logPath = analysis!.getDevLogPath();
     const result = await shell.openPath(logPath);
