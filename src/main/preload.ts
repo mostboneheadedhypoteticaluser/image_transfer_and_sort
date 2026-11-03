@@ -86,6 +86,8 @@ const api = {
       path: string;
       characters: number;
     }> => ipcRenderer.invoke("analysis:copyDevLog"),
+    clearDevLog: (): Promise<{ cleared: true; path: string }> =>
+      ipcRenderer.invoke("analysis:clearDevLog"),
     getAutomaticQwenState: (): Promise<{ enabled: boolean }> =>
       ipcRenderer.invoke("analysis:getAutomaticQwenState"),
     startAutomaticQwen: (): Promise<{ enabled: true }> =>
