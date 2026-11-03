@@ -162,6 +162,11 @@ db.exec(`
     UNIQUE(media_id, module)
   );
 
+  CREATE TABLE IF NOT EXISTS catalog_migrations (
+    migration_key TEXT PRIMARY KEY,
+    applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+
   CREATE TABLE IF NOT EXISTS media_thumbnails (
     media_id INTEGER PRIMARY KEY REFERENCES media_items(id) ON DELETE CASCADE,
     input_sha256 TEXT NOT NULL,
@@ -760,6 +765,54 @@ function normalizeHistoricalUnavailableJobs(): void {
 }
 
 normalizeHistoricalUnavailableJobs();
+
+function runOneTimeCatalogMigration(
+  migrationKey: string,
+  apply: () => void
+): void {
+  const alreadyApplied = db.prepare(`
+    SELECT 1
+    FROM catalog_migrations
+    WHERE migration_key=?
+  `).get(migrationKey);
+
+  if (alreadyApplied) return;
+
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    apply();
+    db.prepare(`
+      INSERT INTO catalog_migrations(migration_key)
+      VALUES(?)
+    `).run(migrationKey);
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+}
+
+// Nach der Parallelisierungs-/Timeoutkorrektur alle derzeit echten FAILED-Jobs
+// genau einmal neu versuchen. UNAVAILABLE bleibt unangetastet, weil fehlende
+// Dateien nicht durch blindes Retry repariert werden. Die Migration verhindert
+// ein erneutes Endlos-Retry bei jedem App-Start.
+runOneTimeCatalogMigration(
+  "2026-11-03-retry-failed-analysis-after-vision-parallel-fix-v1",
+  () => {
+    db.prepare(`
+      UPDATE analysis_jobs
+      SET
+        status='PENDING',
+        attempts=0,
+        result_json=NULL,
+        error_message=NULL,
+        started_at=NULL,
+        finished_at=NULL,
+        updated_at=CURRENT_TIMESTAMP
+      WHERE status='FAILED'
+    `).run();
+  }
+);
 
 // Frühere technische Prüfungen haben nur aus der Dateiendung einen MIME-Typ
 // abgeleitet. Sie müssen einmal neu laufen, damit falsch benannte Dateien
