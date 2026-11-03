@@ -20,12 +20,15 @@ type SourceWatch = {
   mode: WatchMode;
   scanning: boolean;
   debounceTimer: NodeJS.Timeout | null;
-  pendingPaths: Set<string>;
+  pendingPaths: Map<string, number>;
   lastEventAt: string | null;
   lastScanAt: string | null;
 };
 
-const WATCH_DEBOUNCE_MS = 3000;
+// Eine Datei muss nur selbst kurz ruhig sein. Andere Dateien im selben
+// Import dürfen währenddessen bereits in den Katalog weiterlaufen.
+const WATCH_SETTLE_MS = 650;
+const WATCH_FLUSH_MAX_PATHS = 128;
 const WATCH_RETRY_MS = 5000;
 const SAFETY_SCAN_MS = 15 * 60 * 1000;
 const HISTORY_LIMIT = 50;
@@ -229,8 +232,11 @@ export class CatalogWatchService {
     this.pendingScans.set(sourceId, {
       automatic,
       trigger,
-      paths: unique.length > 0 && unique.length <= 24 ? unique : null,
-      full: unique.length === 0 || unique.length > 24
+      paths: unique.length > 0 ? unique : null,
+      // Viele Einzeldateien sind kein Grund mehr für einen teuren Vollscan.
+      // Vollständig scannen wir nur, wenn der Watcher keinen konkreten Pfad
+      // liefern konnte.
+      full: unique.length === 0
     });
     void this.processScanQueue();
   }
@@ -244,7 +250,7 @@ export class CatalogWatchService {
       mode: "ERROR",
       scanning: false,
       debounceTimer: null,
-      pendingPaths: new Set(),
+      pendingPaths: new Map(),
       lastEventAt: null,
       lastScanAt: null
     };
@@ -403,31 +409,18 @@ export class CatalogWatchService {
   }
 
   private queueChange(source: SourceWatch, changedPath: string): void {
-    source.lastEventAt = new Date().toISOString();
-    if (changedPath && source.pendingPaths.size < 20) {
-      source.pendingPaths.add(changedPath);
-    }
+    const eventAt = Date.now();
+    source.lastEventAt = new Date(eventAt).toISOString();
+
+    // Der Zeitstempel wird nur für den konkret geänderten Pfad erneuert.
+    // Dadurch hält eine große Kopieraktion bereits fertige Dateien nicht mehr
+    // künstlich zurück, nur weil an anderer Stelle weiterhin geschrieben wird.
+    source.pendingPaths.set(changedPath || ".", eventAt);
 
     const wasIdle = source.debounceTimer === null;
-
-    if (source.debounceTimer) {
-      clearTimeout(source.debounceTimer);
+    if (!source.debounceTimer) {
+      this.scheduleSettledChanges(source, WATCH_SETTLE_MS);
     }
-
-    source.debounceTimer = setTimeout(() => {
-      source.debounceTimer = null;
-      const paths = [...source.pendingPaths];
-      source.pendingPaths.clear();
-      this.requestChangedPaths(
-        source.sourceId,
-        paths,
-        paths.length > 0
-          ? "Dateisystemänderung: " + paths.slice(0, 3).join(", ")
-          : "Dateisystemänderung",
-        true
-      );
-    }, WATCH_DEBOUNCE_MS);
-    source.debounceTimer.unref();
 
     if (wasIdle) {
       this.emit({
@@ -438,12 +431,55 @@ export class CatalogWatchService {
         message:
           "Änderung erkannt" +
           (changedPath ? ": " + changedPath : "") +
-          ". Warte kurz auf abgeschlossene Schreibvorgänge …",
+          ". Prüfe kurz, ob die Datei fertig geschrieben ist …",
         changedPath: changedPath || null,
         automatic: true,
         scanResult: null
       });
     }
+  }
+
+  private scheduleSettledChanges(source: SourceWatch, delayMs: number): void {
+    source.debounceTimer = setTimeout(() => {
+      source.debounceTimer = null;
+      const now = Date.now();
+      const ready: string[] = [];
+      let nextDelay = WATCH_SETTLE_MS;
+
+      for (const [changedPath, changedAt] of source.pendingPaths) {
+        const age = now - changedAt;
+
+        if (age >= WATCH_SETTLE_MS && ready.length < WATCH_FLUSH_MAX_PATHS) {
+          ready.push(changedPath);
+          source.pendingPaths.delete(changedPath);
+          continue;
+        }
+
+        // Bereits ruhige Pfade, die nur wegen der Batch-Grenze noch warten,
+        // sollen direkt im nächsten kurzen Durchlauf folgen.
+        nextDelay = Math.min(
+          nextDelay,
+          age >= WATCH_SETTLE_MS ? 25 : Math.max(25, WATCH_SETTLE_MS - age)
+        );
+      }
+
+      if (ready.length > 0) {
+        const concretePaths = ready.filter((item) => item !== ".");
+        this.requestChangedPaths(
+          source.sourceId,
+          concretePaths,
+          concretePaths.length > 0
+            ? "Dateisystemänderung: " + concretePaths.slice(0, 3).join(", ")
+            : "Dateisystemänderung",
+          true
+        );
+      }
+
+      if (source.pendingPaths.size > 0) {
+        this.scheduleSettledChanges(source, nextDelay);
+      }
+    }, Math.max(25, delayMs));
+    source.debounceTimer.unref();
   }
 
   private async processScanQueue(): Promise<void> {
