@@ -57,9 +57,15 @@ const petCandidates = document.querySelector<HTMLDivElement>("#petCandidates")!;
 const confirmedPets = document.querySelector<HTMLDivElement>("#confirmedPets")!;
 const petStatus = document.querySelector<HTMLParagraphElement>("#petStatus")!;
 const refreshPetsButton = document.querySelector<HTMLButtonElement>("#refreshPets")!;
+const petConfirmAllMedia = document.querySelector<HTMLButtonElement>("#petConfirmAllMedia")!;
+const petConfirmImagesOnly = document.querySelector<HTMLButtonElement>("#petConfirmImagesOnly")!;
+const petConfirmVideosOnly = document.querySelector<HTMLButtonElement>("#petConfirmVideosOnly")!;
 const confirmedPersons = document.querySelector<HTMLDivElement>("#confirmedPersons")!;
 const personStatus = document.querySelector<HTMLParagraphElement>("#personStatus")!;
 const refreshPeopleButton = document.querySelector<HTMLButtonElement>("#refreshPeople")!;
+const personConfirmAllMedia = document.querySelector<HTMLButtonElement>("#personConfirmAllMedia")!;
+const personConfirmImagesOnly = document.querySelector<HTMLButtonElement>("#personConfirmImagesOnly")!;
+const personConfirmVideosOnly = document.querySelector<HTMLButtonElement>("#personConfirmVideosOnly")!;
 const mediaTab = document.querySelector<HTMLButtonElement>("#mediaTab")!;
 const searchTab = document.querySelector<HTMLButtonElement>("#searchTab")!;
 const duplicateTab = document.querySelector<HTMLButtonElement>("#duplicateTab")!;
@@ -191,6 +197,11 @@ let sources: SourceRecord[] = [];
 let currentView: CatalogView = "media";
 let identityBrowserMode: "people" | "pets" = "people";
 let identityBrowserMediaFilter: "all" | "image" | "video" = "all";
+type ConfirmationMediaFilter = "all" | "image" | "video";
+let personConfirmationMediaFilter: ConfirmationMediaFilter = "all";
+let petConfirmationMediaFilter: ConfirmationMediaFilter = "all";
+let lastPersonOverview: PersonOverview | null = null;
+let lastPetOverview: PetOverview | null = null;
 let identityBrowserSelectionToken = 0;
 let scanning = false;
 let restoring = false;
@@ -3268,6 +3279,18 @@ function renderPersonOverview(overview: PersonOverview): void {
   personCandidates.replaceChildren();
   confirmedPersons.replaceChildren();
 
+  personConfirmAllMedia.classList.toggle("active", personConfirmationMediaFilter === "all");
+  personConfirmImagesOnly.classList.toggle("active", personConfirmationMediaFilter === "image");
+  personConfirmVideosOnly.classList.toggle("active", personConfirmationMediaFilter === "video");
+
+  const visibleCandidates =
+    personConfirmationMediaFilter === "video" ? [] : overview.candidates;
+  const visiblePersons = overview.persons.filter((person) => {
+    if (personConfirmationMediaFilter === "image") return person.faceCount > 0;
+    if (personConfirmationMediaFilter === "video") return person.videoHits.length > 0;
+    return true;
+  });
+
   const assignedFaces = overview.persons.reduce(
     (sum, person) => sum + person.faceCount,
     0
@@ -3284,7 +3307,20 @@ function renderPersonOverview(overview: PersonOverview): void {
     : overview.candidateTotal.toLocaleString("de-DE") +
       (overview.candidateTotal === 1 ? " Gruppe. " : " Gruppen. ");
 
-  if (overview.clusteringPending) {
+  if (personConfirmationMediaFilter === "video") {
+    const videoCount = visiblePersons.reduce(
+      (sum, person) => sum + new Set(person.videoHits.map((hit) => hit.mediaId)).size,
+      0
+    );
+    personStatus.textContent =
+      visiblePersons.length.toLocaleString("de-DE") +
+      (visiblePersons.length === 1
+        ? " bestätigte Person mit Videotreffern · "
+        : " bestätigte Personen mit Videotreffern · ") +
+      videoCount.toLocaleString("de-DE") +
+      (videoCount === 1 ? " Video." : " Videos.") +
+      " Neue, noch unbekannte Personen werden aus Videos derzeit nicht als Bestätigungsgruppe erzeugt.";
+  } else if (overview.clusteringPending) {
     personStatus.textContent =
       candidateWindowText +
       overview.candidateFaceTotal.toLocaleString("de-DE") +
@@ -3311,17 +3347,20 @@ function renderPersonOverview(overview: PersonOverview): void {
       assignedFaces.toLocaleString("de-DE") + " Gesichter sind bereits bestätigt.";
   }
 
-  if (overview.candidates.length === 0) {
+  if (visibleCandidates.length === 0) {
     const empty = document.createElement("div");
     empty.className = "person-empty";
-    empty.textContent = overview.clusteringPending
-      ? "Warte auf die laufende Gesichtsmerkmals-Analyse …"
-      : "Keine Personengruppen zu bestätigen.";
+    empty.textContent =
+      personConfirmationMediaFilter === "video"
+        ? "Keine unbestätigten Videogruppen. Die Videoanalyse ordnet derzeit nur bereits bestätigte Personen wieder zu."
+        : overview.clusteringPending
+          ? "Warte auf die laufende Gesichtsmerkmals-Analyse …"
+          : "Keine Personengruppen zu bestätigen.";
     personCandidates.appendChild(empty);
   } else {
     const fragment = document.createDocumentFragment();
 
-    for (const candidate of overview.candidates) {
+    for (const candidate of visibleCandidates) {
       const card = document.createElement("article");
       card.className = "person-candidate-card";
 
@@ -3623,15 +3662,20 @@ function renderPersonOverview(overview: PersonOverview): void {
     personCandidates.appendChild(fragment);
   }
 
-  if (overview.persons.length === 0) {
+  if (visiblePersons.length === 0) {
     const empty = document.createElement("div");
     empty.className = "person-empty compact";
-    empty.textContent = "Noch keine Personen bestätigt.";
+    empty.textContent =
+      personConfirmationMediaFilter === "video"
+        ? "Keine bestätigte Person mit Videotreffern vorhanden."
+        : personConfirmationMediaFilter === "image"
+          ? "Keine bestätigte Person mit Bildtreffern vorhanden."
+          : "Noch keine Personen bestätigt.";
     confirmedPersons.appendChild(empty);
   } else {
     const fragment = document.createDocumentFragment();
 
-    for (const person of overview.persons) {
+    for (const person of visiblePersons) {
       const card = document.createElement("article");
       card.className = "confirmed-person-card";
 
@@ -3656,9 +3700,15 @@ function renderPersonOverview(overview: PersonOverview): void {
       const name = document.createElement("strong");
       name.textContent = person.name;
       const count = document.createElement("small");
+      const personVideoCount = new Set(
+        person.videoHits.map((hit) => hit.mediaId)
+      ).size;
       count.textContent =
-        person.faceCount.toLocaleString("de-DE") + " " +
-        (person.faceCount === 1 ? "bestätigtes Gesicht" : "bestätigte Gesichter");
+        person.faceCount.toLocaleString("de-DE") +
+        (person.faceCount === 1 ? " Bildtreffer" : " Bildtreffer") +
+        " · " +
+        personVideoCount.toLocaleString("de-DE") +
+        (personVideoCount === 1 ? " Video" : " Videos");
       text.append(name, count);
       header.appendChild(text);
       card.appendChild(header);
@@ -3847,6 +3897,7 @@ async function loadPersonOverview(
       sourceId,
       forceRefresh
     );
+    lastPersonOverview = overview;
     renderPersonOverview(overview);
     await refreshIdentityTabStats();
   } finally {
@@ -3858,6 +3909,18 @@ async function loadPersonOverview(
 function renderPetOverview(overview: PetOverview): void {
   petCandidates.replaceChildren();
   confirmedPets.replaceChildren();
+
+  petConfirmAllMedia.classList.toggle("active", petConfirmationMediaFilter === "all");
+  petConfirmImagesOnly.classList.toggle("active", petConfirmationMediaFilter === "image");
+  petConfirmVideosOnly.classList.toggle("active", petConfirmationMediaFilter === "video");
+
+  const visibleCandidates =
+    petConfirmationMediaFilter === "video" ? [] : overview.candidates;
+  const visiblePets = overview.pets.filter((pet) => {
+    if (petConfirmationMediaFilter === "image") return pet.detectionCount > 0;
+    if (petConfirmationMediaFilter === "video") return pet.videoHits.length > 0;
+    return true;
+  });
 
   const assignedDogs = overview.pets.reduce(
     (sum, pet) => sum + pet.detectionCount,
@@ -3875,7 +3938,20 @@ function renderPetOverview(overview: PetOverview): void {
     : overview.candidateTotal.toLocaleString("de-DE") +
       (overview.candidateTotal === 1 ? " Hundegruppe. " : " Hundegruppen. ");
 
-  if (overview.clusteringPending) {
+  if (petConfirmationMediaFilter === "video") {
+    const videoCount = visiblePets.reduce(
+      (sum, pet) => sum + new Set(pet.videoHits.map((hit) => hit.mediaId)).size,
+      0
+    );
+    petStatus.textContent =
+      visiblePets.length.toLocaleString("de-DE") +
+      (visiblePets.length === 1
+        ? " bestätigtes Haustier mit Videotreffern · "
+        : " bestätigte Haustiere mit Videotreffern · ") +
+      videoCount.toLocaleString("de-DE") +
+      (videoCount === 1 ? " Video." : " Videos.") +
+      " Neue, noch unbekannte Hunde werden aus Videos derzeit nicht als Bestätigungsgruppe erzeugt.";
+  } else if (overview.clusteringPending) {
     petStatus.textContent =
       petWindowText +
       overview.candidateDetectionTotal.toLocaleString("de-DE") +
@@ -3903,17 +3979,20 @@ function renderPetOverview(overview: PetOverview): void {
       " Hundefundstellen sind bereits zugeordnet.";
   }
 
-  if (overview.candidates.length === 0) {
+  if (visibleCandidates.length === 0) {
     const empty = document.createElement("div");
     empty.className = "person-empty";
-    empty.textContent = overview.clusteringPending
-      ? "Warte auf die laufende Dog-ReID-Analyse …"
-      : "Keine Hundegruppen zu bestätigen.";
+    empty.textContent =
+      petConfirmationMediaFilter === "video"
+        ? "Keine unbestätigten Videogruppen. Die Videoanalyse ordnet derzeit nur bereits bestätigte Hunde wieder zu."
+        : overview.clusteringPending
+          ? "Warte auf die laufende Dog-ReID-Analyse …"
+          : "Keine Hundegruppen zu bestätigen.";
     petCandidates.appendChild(empty);
   } else {
     const fragment = document.createDocumentFragment();
 
-    for (const candidate of overview.candidates) {
+    for (const candidate of visibleCandidates) {
       const card = document.createElement("article");
       card.className = "person-candidate-card";
 
@@ -4416,15 +4495,20 @@ function renderPetOverview(overview: PetOverview): void {
     petCandidates.appendChild(fragment);
   }
 
-  if (overview.pets.length === 0) {
+  if (visiblePets.length === 0) {
     const empty = document.createElement("div");
     empty.className = "person-empty compact";
-    empty.textContent = "Noch keine Haustiere bestätigt.";
+    empty.textContent =
+      petConfirmationMediaFilter === "video"
+        ? "Kein bestätigtes Haustier mit Videotreffern vorhanden."
+        : petConfirmationMediaFilter === "image"
+          ? "Kein bestätigtes Haustier mit Bildtreffern vorhanden."
+          : "Noch keine Haustiere bestätigt.";
     confirmedPets.appendChild(empty);
   } else {
     const fragment = document.createDocumentFragment();
 
-    for (const pet of overview.pets) {
+    for (const pet of visiblePets) {
       const card = document.createElement("article");
       card.className = "confirmed-person-card";
 
@@ -4449,8 +4533,15 @@ function renderPetOverview(overview: PetOverview): void {
       const name = document.createElement("strong");
       name.textContent = pet.name;
       const count = document.createElement("small");
+      const petVideoCount = new Set(
+        pet.videoHits.map((hit) => hit.mediaId)
+      ).size;
       count.textContent =
-        pet.confirmedCount.toLocaleString("de-DE") + " bestätigt" +
+        pet.detectionCount.toLocaleString("de-DE") +
+        (pet.detectionCount === 1 ? " Bildtreffer" : " Bildtreffer") +
+        " · " +
+        petVideoCount.toLocaleString("de-DE") +
+        (petVideoCount === 1 ? " Video" : " Videos") +
         (pet.automaticCount > 0
           ? " · " + pet.automaticCount.toLocaleString("de-DE") + " automatisch"
           : "");
@@ -4682,12 +4773,44 @@ async function loadPetOverview(
       sourceId,
       forceRefresh
     );
+    lastPetOverview = overview;
     renderPetOverview(overview);
     await refreshIdentityTabStats();
   } finally {
     refreshPetsButton.disabled = false;
   }
 }
+
+function setPersonConfirmationMediaFilter(filter: ConfirmationMediaFilter): void {
+  if (personConfirmationMediaFilter === filter) return;
+  personConfirmationMediaFilter = filter;
+  if (lastPersonOverview) renderPersonOverview(lastPersonOverview);
+}
+
+function setPetConfirmationMediaFilter(filter: ConfirmationMediaFilter): void {
+  if (petConfirmationMediaFilter === filter) return;
+  petConfirmationMediaFilter = filter;
+  if (lastPetOverview) renderPetOverview(lastPetOverview);
+}
+
+personConfirmAllMedia.addEventListener("click", () => {
+  setPersonConfirmationMediaFilter("all");
+});
+personConfirmImagesOnly.addEventListener("click", () => {
+  setPersonConfirmationMediaFilter("image");
+});
+personConfirmVideosOnly.addEventListener("click", () => {
+  setPersonConfirmationMediaFilter("video");
+});
+petConfirmAllMedia.addEventListener("click", () => {
+  setPetConfirmationMediaFilter("all");
+});
+petConfirmImagesOnly.addEventListener("click", () => {
+  setPetConfirmationMediaFilter("image");
+});
+petConfirmVideosOnly.addEventListener("click", () => {
+  setPetConfirmationMediaFilter("video");
+});
 
 const analysisModuleLabels: Record<string, string> = {
   "file-probe-v1": "Technische Prüfung",
