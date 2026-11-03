@@ -399,6 +399,7 @@ export class AnalysisCoordinator {
 
         for (const spec of specs) {
           if (this.stopped || this.userPaused) return;
+          if (!this.analysis.isWorkerMethodAvailable(spec.workerMethod)) continue;
 
           await this.catalog.request("enqueueAnalysisJobs", {
             sourceId: source.id,
@@ -520,6 +521,8 @@ export class AnalysisCoordinator {
     const currentMediaId = this.fastLaneMediaIds[laneIndex];
     if (currentMediaId !== null) {
       for (const spec of FAST_MODULES) {
+        if (!this.analysis.isWorkerMethodAvailable(spec.workerMethod)) continue;
+
         const job = await this.catalog.request<AnalysisJob | null>(
           "claimAnalysisJob",
           {
@@ -537,6 +540,8 @@ export class AnalysisCoordinator {
     // Freie Lane mit dem nächsten frischen Bild belegen. Die Katalogsortierung
     // priorisiert weiterhin neu hinzugekommene Medien vor altem Backlog.
     for (const spec of FAST_MODULES) {
+      if (!this.analysis.isWorkerMethodAvailable(spec.workerMethod)) continue;
+
       const job = await this.catalog.request<AnalysisJob | null>(
         "claimAnalysisJob",
         { module: spec.module }
@@ -557,6 +562,8 @@ export class AnalysisCoordinator {
     // Foto-Stufen bis einschließlich Personen-/Haustiermerkmalen durch.
     // Anschließend folgen Videoanalyse, SigLIP2 und zuletzt Qwen4B.
     for (const spec of HEAVY_MODULES) {
+      if (!this.analysis.isWorkerMethodAvailable(spec.workerMethod)) continue;
+
       if (
         spec.module === "catalog-semantic-qwen3vl4b-v3" &&
         (
