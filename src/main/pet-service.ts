@@ -172,7 +172,8 @@ export class PetService {
         if (!existing) {
           petMap.set(pet.id, {
             ...pet,
-            pets: [...pet.pets]
+            pets: [...pet.pets],
+            videoHits: [...pet.videoHits]
           });
           continue;
         }
@@ -191,6 +192,19 @@ export class PetService {
           if (!knownDetectionIds.has(item.petDetectionId)) {
             existing.pets.push(item);
             knownDetectionIds.add(item.petDetectionId);
+          }
+        }
+
+        const knownVideoHits = new Set(
+          existing.videoHits.map((hit) =>
+            [hit.mediaId, hit.startMs, hit.endMs].join(":")
+          )
+        );
+        for (const hit of pet.videoHits) {
+          const key = [hit.mediaId, hit.startMs, hit.endMs].join(":");
+          if (!knownVideoHits.has(key)) {
+            existing.videoHits.push(hit);
+            knownVideoHits.add(key);
           }
         }
       }
