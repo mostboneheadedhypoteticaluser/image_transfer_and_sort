@@ -651,6 +651,7 @@ db.exec(`
   CREATE TABLE IF NOT EXISTS life_area_rules (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     life_area_id INTEGER NOT NULL REFERENCES life_areas(id) ON DELETE CASCADE,
+    group_id INTEGER NOT NULL DEFAULT 0,
     condition_type TEXT NOT NULL CHECK(condition_type IN ('person','pet','tag','path','date')),
     condition_value TEXT,
     date_from TEXT,
@@ -683,6 +684,13 @@ db.exec(`
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY(media_id, life_area_id)
   );
+`);
+
+ensureColumn("life_area_rules", "group_id", "INTEGER NOT NULL DEFAULT 0");
+db.prepare("UPDATE life_area_rules SET group_id=id WHERE group_id=0").run();
+db.exec(`
+  CREATE INDEX IF NOT EXISTS idx_life_area_rules_group
+    ON life_area_rules(life_area_id, group_id, enabled);
 `);
 
 db.exec(`
