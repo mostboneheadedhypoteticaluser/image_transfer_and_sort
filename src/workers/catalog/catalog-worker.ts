@@ -6081,7 +6081,20 @@ function completePetEmbeddingJob(jobId: number, result: unknown) {
   }
 
   const value = result as Record<string, unknown>;
-  const rawEmbeddings = Array.isArray(value.embeddings) ? value.embeddings : [];
+
+  if (value.module !== "face-embed-sface-v1") {
+    throw new Error(
+      "Gesichtsmerkmal-Ergebnis enthält ein falsches oder fehlendes Modul."
+    );
+  }
+
+  if (!Array.isArray(value.embeddings)) {
+    throw new Error(
+      "Gesichtsmerkmal-Ergebnis enthält keine gültige Embedding-Liste."
+    );
+  }
+
+  const rawEmbeddings = value.embeddings;
   const modelVersion =
     typeof value.model === "string" && value.model.trim()
       ? value.model.trim()
@@ -6136,7 +6149,12 @@ function completePetEmbeddingJob(jobId: number, result: unknown) {
           AND pet_class='dog'
       `).get(petDetectionId, mediaId, inputSha256);
 
-      if (!belongsToMedia) continue;
+      if (!belongsToMedia) {
+        throw new Error(
+          "Gesichtsmerkmal #" + (index + 1) +
+          " gehört nicht zum aktuellen Bildstand."
+        );
+      }
 
       const vector = Array.isArray(item.vector) ? item.vector : [];
       const blob = embeddingToBlob(vector);
@@ -6172,7 +6190,11 @@ function completePetEmbeddingJob(jobId: number, result: unknown) {
     throw error;
   }
 
-  return { completed: true, embeddingCount: written };
+  return {
+    completed: true,
+    embeddingCount: written,
+    expectedFaceCount
+  };
 }
 
 function completeSemanticEmbeddingJob(jobId: number, result: unknown) {
@@ -8841,6 +8863,37 @@ function completeFaceEmbeddingJob(jobId: number, result: unknown) {
   const mediaId = Number(job.media_id);
   const inputSha256 = String(job.input_sha256 ?? "");
 
+  const expectedFaceCount = Number(
+    db.prepare(`
+      SELECT COUNT(*) AS count
+      FROM face_detections
+      WHERE media_id=?
+        AND input_sha256=?
+    `).get(mediaId, inputSha256)?.count ?? 0
+  );
+
+  if (rawEmbeddings.length !== expectedFaceCount) {
+    const skipped = Number(value.skipped ?? 0);
+    const firstErrors = Array.isArray(value.firstErrors)
+      ? value.firstErrors.map(String).slice(0, 3)
+      : [];
+    const detail =
+      firstErrors.length > 0
+        ? " Ursache: " + firstErrors.join(" | ")
+        : "";
+
+    throw new Error(
+      "Gesichtsmerkmale unvollständig: " +
+      rawEmbeddings.length +
+      "/" +
+      expectedFaceCount +
+      " erzeugt (übersprungen: " +
+      (Number.isFinite(skipped) ? skipped : 0) +
+      ")." +
+      detail
+    );
+  }
+
   let written = 0;
 
   const insert = db.prepare(`
@@ -8870,12 +8923,23 @@ function completeFaceEmbeddingJob(jobId: number, result: unknown) {
         AND model_version=?
     `).run(mediaId, modelVersion);
 
-    for (const raw of rawEmbeddings) {
-      if (!raw || typeof raw !== "object") continue;
+    for (let index = 0; index < rawEmbeddings.length; index += 1) {
+      const raw = rawEmbeddings[index];
+
+      if (!raw || typeof raw !== "object") {
+        throw new Error(
+          "Gesichtsmerkmal #" + (index + 1) + " ist kein gültiges Objekt."
+        );
+      }
 
       const item = raw as Record<string, unknown>;
       const faceDetectionId = Number(item.faceDetectionId);
-      if (!Number.isInteger(faceDetectionId) || faceDetectionId <= 0) continue;
+      if (!Number.isInteger(faceDetectionId) || faceDetectionId <= 0) {
+        throw new Error(
+          "Gesichtsmerkmal #" + (index + 1) +
+          " enthält keine gültige Face-ID."
+        );
+      }
 
       const belongsToMedia = db.prepare(`
         SELECT 1
