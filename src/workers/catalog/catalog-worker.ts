@@ -3621,10 +3621,73 @@ function failAnalysisJob(jobId: number, errorMessage: string) {
   return { failed: true };
 }
 
+const enqueueSingleMediaJob = db.prepare(`
+  INSERT INTO analysis_jobs(
+    media_id,
+    module,
+    status,
+    priority,
+    attempts,
+    payload_json,
+    input_sha256,
+    result_json,
+    error_message,
+    started_at,
+    finished_at,
+    created_at,
+    updated_at
+  )
+  VALUES(?,?,'PENDING',100,0,NULL,?,NULL,NULL,NULL,NULL,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)
+  ON CONFLICT(media_id, module) DO UPDATE SET
+    status='PENDING',
+    attempts=CASE
+      WHEN analysis_jobs.input_sha256 IS NULL
+        OR analysis_jobs.input_sha256<>excluded.input_sha256
+      THEN 0
+      ELSE analysis_jobs.attempts
+    END,
+    payload_json=NULL,
+    input_sha256=excluded.input_sha256,
+    result_json=NULL,
+    error_message=NULL,
+    started_at=NULL,
+    finished_at=NULL,
+    updated_at=CURRENT_TIMESTAMP
+  WHERE analysis_jobs.input_sha256 IS NULL
+     OR analysis_jobs.input_sha256<>excluded.input_sha256
+     OR (analysis_jobs.status='FAILED' AND analysis_jobs.attempts<3)
+`);
+
+function enqueueFastAnalysisJobsForMedia(
+  mediaId: number,
+  extension: string,
+  sha256: string
+): void {
+  const modules = ["file-probe-v1"];
+
+  if (IMAGE_EXTENSIONS.has(extension)) {
+    modules.push(
+      "thumbnail-v1",
+      "image-metadata-v1",
+      "face-detect-yunet-v1",
+      "face-embed-sface-v1",
+      "pet-detect-nanodet-v1",
+      "pet-detect-yolox-v1",
+      "pet-fuse-ensemble-v1",
+      "pet-embed-dogreid-v1"
+    );
+  }
+
+  for (const module of modules) {
+    enqueueSingleMediaJob.run(mediaId, module, sha256);
+  }
+}
+
 function enqueueAllAnalysisJobs(sourceId: number): void {
   for (const module of [
     "file-probe-v1",
     "thumbnail-v1",
+    "video-analyze-v1",
     "image-metadata-v1",
     "face-detect-yunet-v1",
     "face-embed-sface-v1",
@@ -3691,8 +3754,10 @@ async function reconcileSourceChanges(
       )]
     : [];
 
-  // Leere/zu große Ereignisgruppen sind absichtlich Vollscan-Fälle.
-  if (requestedPaths.length === 0 || requestedPaths.length > 24) {
+  // Nur ein Ereignis ohne konkreten Pfad benötigt einen Vollscan. Große
+  // Import-Batches bleiben gezielt: So müssen nicht bei jeder Event-Welle
+  // sämtliche bereits katalogisierten Dateien erneut durchlaufen werden.
+  if (requestedPaths.length === 0) {
     return scanSource(sourceId);
   }
 
@@ -3922,6 +3987,7 @@ async function reconcileSourceChanges(
         previous.deviceId = file.deviceId;
         previous.inode = file.inode;
         previous.availability = "AVAILABLE";
+        enqueueFastAnalysisJobsForMedia(previous.id, file.extension, hash);
         changed += 1;
         changes.push({
           kind: "CHANGED",
@@ -4060,6 +4126,11 @@ async function reconcileSourceChanges(
       }
 
       seenIds.add(insertedMedia.id);
+      enqueueFastAnalysisJobsForMedia(
+        insertedMedia.id,
+        insertedMedia.extension,
+        insertedMedia.sha256
+      );
       added += 1;
       changes.push({
         kind: "ADDED",
@@ -4494,6 +4565,7 @@ async function scanSource(sourceId: number): Promise<ScanResult> {
               previous.sha256 = hash;
               previous.deviceId = file.deviceId;
               previous.inode = file.inode;
+              enqueueFastAnalysisJobsForMedia(previous.id, file.extension, hash);
               changed += 1;
               changes.push({
                 kind: "CHANGED",
@@ -4629,6 +4701,11 @@ async function scanSource(sourceId: number): Promise<ScanResult> {
               }
 
               seenIds.add(insertedMedia.id);
+              enqueueFastAnalysisJobsForMedia(
+                insertedMedia.id,
+                insertedMedia.extension,
+                insertedMedia.sha256
+              );
               added += 1;
               changes.push({
                 kind: "ADDED",
