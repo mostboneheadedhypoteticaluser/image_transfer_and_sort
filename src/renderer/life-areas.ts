@@ -736,6 +736,176 @@ async function withUiError(action: () => Promise<void>): Promise<void> {
   }
 }
 
+function closeLifeAreaFolderPicker(): void {
+  if (lifeAreaFolderDialog.open) lifeAreaFolderDialog.close();
+}
+
+function selectLifeAreaFolder(
+  source: SourceRecord,
+  folderPath: string
+): void {
+  const relativePath = relativeFolderPath(source.path, folderPath);
+  folderRuleSelection = {
+    sourceId: source.id,
+    sourcePath: source.path,
+    folderPath,
+    relativePath
+  };
+  lifeAreaRuleFolderSelected.textContent =
+    sourceDisplayName(source.path) +
+    (relativePath ? " / " + relativePath : " /");
+  closeLifeAreaFolderPicker();
+}
+
+function createLifeAreaFolderNode(
+  source: SourceRecord,
+  node: ExplorerFolderNode,
+  depth: number
+): HTMLElement {
+  const wrapper = document.createElement("div");
+  wrapper.className = "life-area-folder-node";
+
+  const row = document.createElement("div");
+  row.className = "life-area-folder-row";
+  row.style.setProperty("--folder-depth", String(depth));
+
+  const toggle = document.createElement("button");
+  toggle.type = "button";
+  toggle.className = "life-area-folder-toggle";
+  toggle.textContent = node.hasChildren ? "›" : "";
+  toggle.disabled = !node.hasChildren;
+  toggle.setAttribute("aria-label", node.hasChildren ? "Unterordner anzeigen" : "Keine Unterordner");
+
+  const icon = document.createElement("span");
+  icon.className = "life-area-folder-icon";
+  icon.textContent = "▰";
+
+  const info = document.createElement("div");
+  info.className = "life-area-folder-info";
+  const title = document.createElement("strong");
+  title.textContent = node.name;
+  const meta = document.createElement("small");
+  const counts: string[] = [];
+  if (node.directImages > 0) {
+    counts.push(node.directImages.toLocaleString("de-DE") + " Bilder");
+  }
+  if (node.directVideos > 0) {
+    counts.push(node.directVideos.toLocaleString("de-DE") + " Videos");
+  }
+  meta.textContent = counts.length > 0
+    ? counts.join(" · ") + " direkt"
+    : node.hasChildren
+      ? "Unterordner vorhanden"
+      : "keine Medien direkt";
+  info.append(title, meta);
+
+  const choose = document.createElement("button");
+  choose.type = "button";
+  choose.className = "secondary life-area-folder-choose";
+  choose.textContent = "Auswählen";
+  choose.title = "Diesen Ordner einschließlich aller Unterordner verwenden";
+  choose.addEventListener("click", () => selectLifeAreaFolder(source, node.path));
+
+  row.append(toggle, icon, info, choose);
+  wrapper.appendChild(row);
+
+  const children = document.createElement("div");
+  children.className = "life-area-folder-children";
+  children.hidden = true;
+  wrapper.appendChild(children);
+
+  let loaded = false;
+  let loading = false;
+
+  const setOpen = async (open: boolean): Promise<void> => {
+    if (!node.hasChildren) return;
+
+    if (open && !loaded && !loading) {
+      loading = true;
+      toggle.classList.add("loading");
+      try {
+        const nodes = await window.imageSorter.catalog.getExplorerChildren(node.path);
+        children.replaceChildren(
+          ...nodes.map((child) => createLifeAreaFolderNode(source, child, depth + 1))
+        );
+        if (nodes.length === 0) {
+          const empty = document.createElement("div");
+          empty.className = "life-area-folder-empty-child";
+          empty.textContent = "Keine Unterordner.";
+          children.appendChild(empty);
+        }
+        loaded = true;
+      } catch (error) {
+        children.replaceChildren();
+        const message = document.createElement("div");
+        message.className = "life-area-folder-load-error";
+        message.textContent = error instanceof Error ? error.message : String(error);
+        children.appendChild(message);
+        loaded = true;
+      } finally {
+        loading = false;
+        toggle.classList.remove("loading");
+      }
+    }
+
+    children.hidden = !open;
+    toggle.classList.toggle("expanded", open);
+  };
+
+  toggle.addEventListener("click", () => {
+    void setOpen(children.hidden);
+  });
+  title.addEventListener("dblclick", () => {
+    void setOpen(children.hidden);
+  });
+
+  return wrapper;
+}
+
+async function openLifeAreaFolderPicker(): Promise<void> {
+  lifeAreaFolderTree.replaceChildren();
+  lifeAreaFolderStatus.hidden = false;
+  lifeAreaFolderStatus.textContent = "Aktive Medienquellen werden geladen …";
+
+  if (!lifeAreaFolderDialog.open) {
+    lifeAreaFolderDialog.showModal();
+  }
+
+  try {
+    ruleSources = await window.imageSorter.catalog.listSources();
+    lifeAreaFolderTree.replaceChildren();
+
+    if (ruleSources.length === 0) {
+      lifeAreaFolderStatus.hidden = false;
+      lifeAreaFolderStatus.textContent =
+        "Es gibt noch keine aktive Medienquelle. Bitte zuerst unter „Medienquellen“ einen Ordner hinzufügen und scannen.";
+      return;
+    }
+
+    lifeAreaFolderStatus.hidden = true;
+
+    for (const source of ruleSources) {
+      const root: ExplorerFolderNode = {
+        name: sourceDisplayName(source.path),
+        path: source.path,
+        directImages: 0,
+        directVideos: 0,
+        hasChildren: true,
+        readError: null
+      };
+
+      const node = createLifeAreaFolderNode(source, root, 0);
+      const info = node.querySelector<HTMLElement>(".life-area-folder-info small");
+      if (info) info.textContent = "Medienquelle · Auswahl gilt rekursiv";
+      lifeAreaFolderTree.appendChild(node);
+    }
+  } catch (error) {
+    lifeAreaFolderStatus.hidden = false;
+    lifeAreaFolderStatus.textContent =
+      error instanceof Error ? error.message : String(error);
+  }
+}
+
 function openLifeAreaCreateDialog(): void {
   lifeAreaCreateName.value = "";
   lifeAreaCreateError.hidden = true;
@@ -826,19 +996,39 @@ lifeAreaDeleteButton.addEventListener("click", () => {
 });
 
 lifeAreaRuleType.addEventListener("change", updateRuleBuilder);
+lifeAreaRuleFolderPick.addEventListener("click", () => {
+  void openLifeAreaFolderPicker();
+});
+closeLifeAreaFolderDialog.addEventListener("click", closeLifeAreaFolderPicker);
+cancelLifeAreaFolderDialog.addEventListener("click", closeLifeAreaFolderPicker);
+lifeAreaFolderDialog.addEventListener("click", (event) => {
+  if (event.target === lifeAreaFolderDialog) closeLifeAreaFolderPicker();
+});
 
 lifeAreaAddRuleButton.addEventListener("click", () => {
   const area = selectedArea();
   if (!area) return;
-  const type = lifeAreaRuleType.value as LifeAreaRuleConditionType;
+
+  const builderType = lifeAreaRuleType.value as RuleBuilderType;
+  if (builderType === "folder" && !folderRuleSelection) {
+    window.alert("Bitte zuerst einen Ordner aus den aktiven Medienquellen auswählen.");
+    return;
+  }
+
+  const type: LifeAreaRuleConditionType =
+    builderType === "folder" ? "path" : builderType;
   const conditionValue =
-    type === "person" || type === "pet"
+    builderType === "person" || builderType === "pet"
       ? lifeAreaRuleIdentityValue.value || null
-      : type === "date"
+      : builderType === "date"
         ? null
-        : lifeAreaRuleTextValue.value.trim() || null;
-  const dateFrom = type === "date" ? lifeAreaRuleDateFrom.value || null : null;
-  const dateTo = type === "date" ? lifeAreaRuleDateTo.value || null : null;
+        : builderType === "folder"
+          ? encodeFolderRuleValue(folderRuleSelection!)
+          : lifeAreaRuleTextValue.value.trim() || null;
+  const dateFrom =
+    builderType === "date" ? lifeAreaRuleDateFrom.value || null : null;
+  const dateTo =
+    builderType === "date" ? lifeAreaRuleDateTo.value || null : null;
 
   void withUiError(async () => {
     const groupId =
@@ -857,7 +1047,9 @@ lifeAreaAddRuleButton.addEventListener("click", () => {
     lifeAreaRuleTextValue.value = "";
     lifeAreaRuleDateFrom.value = "";
     lifeAreaRuleDateTo.value = "";
+    folderRuleSelection = null;
     lifeAreaRuleGroupMode.value = "new";
+    updateRuleBuilder();
     await reloadSelectedArea(false);
   });
 });
