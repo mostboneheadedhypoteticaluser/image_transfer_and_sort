@@ -199,6 +199,7 @@ export class AnalysisCoordinator {
     Array.from({ length: FAST_CONCURRENCY }, () => false);
   private readonly activeTasks = new Set<Promise<void>>();
   private heavyRunning = false;
+  private backfillRunning = false;
 
   // Die 4B-Kataloganalyse läuft wieder automatisch. Sie bleibt bewusst die
   // letzte Pipeline-Stufe, damit neue Bilder zuerst alle schnellen technischen,
@@ -239,11 +240,19 @@ export class AnalysisCoordinator {
 
     // Fehlende Jobs parallel zum laufenden Scheduler ergänzen. Bereits vom
     // Live-Scan angelegte Fast-Jobs können dadurch sofort verarbeitet werden.
-    void this.enqueueExistingSources().catch((error) => {
-      this.analysis.logDiagnostic("ANALYSIS_BACKFILL_ERROR", {
-        error: error instanceof Error ? error.message : String(error)
+    // Während dieses Backfills startet noch keine schwere Stufe, damit zuerst
+    // sicher alle Fast-Jobs sichtbar werden.
+    this.backfillRunning = true;
+    void this.enqueueExistingSources()
+      .catch((error) => {
+        this.analysis.logDiagnostic("ANALYSIS_BACKFILL_ERROR", {
+          error: error instanceof Error ? error.message : String(error)
+        });
+      })
+      .finally(() => {
+        this.backfillRunning = false;
+        void this.pump();
       });
-    });
   }
 
   stop(): void {
@@ -334,11 +343,17 @@ export class AnalysisCoordinator {
       void this.pump();
       // Ein während der Benutzerpause abgebrochener Job-Backfill wird hier
       // erneut aufgenommen. ON CONFLICT macht das idempotent.
-      void this.enqueueExistingSources().catch((error) => {
-        this.analysis.logDiagnostic("ANALYSIS_BACKFILL_RESUME_ERROR", {
-          error: error instanceof Error ? error.message : String(error)
+      this.backfillRunning = true;
+      void this.enqueueExistingSources()
+        .catch((error) => {
+          this.analysis.logDiagnostic("ANALYSIS_BACKFILL_RESUME_ERROR", {
+            error: error instanceof Error ? error.message : String(error)
+          });
+        })
+        .finally(() => {
+          this.backfillRunning = false;
+          void this.pump();
         });
-      });
     }
   }
 
@@ -763,13 +778,8 @@ export class AnalysisCoordinator {
     this.pumping = true;
 
     try {
-      // Eine schwere Stufe bleibt exklusiv. Fast-Lanes werden erst wieder
-      // befüllt, nachdem Video/SigLIP/Qwen vollständig beendet ist.
-      if (this.heavyRunning) {
-        await this.refreshAllStats();
-        return;
-      }
-
+      // Eine laufende schwere Stufe blockiert neue Fast-Jobs nicht mehr.
+      // Der Python-Worker besitzt dafür getrennte Fast-/Heavy-Lanes.
       let launchedFast = false;
 
       for (let laneIndex = 0; laneIndex < FAST_CONCURRENCY; laneIndex += 1) {
@@ -784,7 +794,12 @@ export class AnalysisCoordinator {
 
       // Schwere Stufen starten nur, wenn wirklich keine schnelle Lane arbeitet
       // und auch keine weitere schnelle Aufgabe claimbar war.
-      if (!launchedFast && this.activeTasks.size === 0) {
+      if (
+        !launchedFast &&
+        !this.heavyRunning &&
+        !this.backfillRunning &&
+        this.activeTasks.size === 0
+      ) {
         const heavySpec = await this.nextHeavySpec();
         if (heavySpec) {
           const heavyJob = await this.catalog.request<AnalysisJob | null>(
