@@ -24,6 +24,8 @@ import type {
   MergePetsResult,
   PersonCorrectionResult,
   PetCorrectionResult,
+  SplitPetCandidateResult,
+  AssignPetSelectionResult,
   PersonOverview,
   PetOverview,
   RestoreResult,
@@ -131,6 +133,15 @@ declare global {
           candidateId: number,
           petDetectionId: number
         ): Promise<PetCorrectionResult>;
+        splitCandidate(
+          candidateId: number,
+          petDetectionIds: number[]
+        ): Promise<SplitPetCandidateResult>;
+        assignCandidateSelection(
+          candidateId: number,
+          petDetectionIds: number[],
+          name: string
+        ): Promise<AssignPetSelectionResult>;
         removePetDetection(
           petId: number,
           petDetectionId: number
