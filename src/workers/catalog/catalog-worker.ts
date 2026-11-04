@@ -11471,8 +11471,16 @@ function reanalyzeMedia(mediaId: number) {
       cleared += Number(result.changes);
     };
 
-    // Benutzerdefinierte Lebensbereiche bleiben erhalten. Alle automatisch
-    // aus der Datei gewonnenen Ergebnisse werden dagegen vollständig entfernt.
+    // Manuelle Lebensbereiche bleiben erhalten. Regelbasierte Zuordnungen
+    // hängen dagegen von den alten Erkennungen ab und werden später aus den
+    // neuen Analyseergebnissen automatisch wieder aufgebaut.
+    cleared += Number(db.prepare(`
+      DELETE FROM media_life_areas
+      WHERE media_id=?
+        AND assignment_source='RULE'
+    `).run(mediaId).changes);
+
+    // Alle automatisch aus der Datei gewonnenen Ergebnisse vollständig entfernen.
     for (const table of [
       "media_thumbnails",
       "media_image_metadata",
@@ -11536,7 +11544,7 @@ function reanalyzeMedia(mediaId: number) {
     }
 
     db.exec("COMMIT");
-    return { mediaId, requeued: modules.length, cleared };
+    return { mediaId, sourceId, requeued: modules.length, cleared };
   } catch (error) {
     db.exec("ROLLBACK");
     throw error;
