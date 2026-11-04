@@ -819,6 +819,51 @@ runOneTimeCatalogMigration(
   }
 );
 
+runOneTimeCatalogMigration(
+  "2026-11-04-clean-stale-identity-candidate-links-v1",
+  () => {
+    db.prepare(`
+      DELETE FROM pet_candidate_items
+      WHERE pet_detection_id IN (
+        SELECT pd.id
+        FROM pet_fused_detections pd
+        JOIN media_items m ON m.id=pd.media_id
+        WHERE m.availability<>'AVAILABLE'
+           OR pd.input_sha256<>m.sha256
+      )
+    `).run();
+
+    db.prepare(`
+      DELETE FROM pet_candidates
+      WHERE NOT EXISTS (
+        SELECT 1
+        FROM pet_candidate_items pci
+        WHERE pci.candidate_id=pet_candidates.id
+      )
+    `).run();
+
+    db.prepare(`
+      DELETE FROM person_candidate_faces
+      WHERE face_detection_id IN (
+        SELECT fd.id
+        FROM face_detections fd
+        JOIN media_items m ON m.id=fd.media_id
+        WHERE m.availability<>'AVAILABLE'
+           OR fd.input_sha256<>m.sha256
+      )
+    `).run();
+
+    db.prepare(`
+      DELETE FROM person_candidates
+      WHERE NOT EXISTS (
+        SELECT 1
+        FROM person_candidate_faces pcf
+        WHERE pcf.candidate_id=person_candidates.id
+      )
+    `).run();
+  }
+);
+
 // Frühere technische Prüfungen haben nur aus der Dateiendung einen MIME-Typ
 // abgeleitet. Sie müssen einmal neu laufen, damit falsch benannte Dateien
 // (z. B. MP4 mit .jpg-Endung) anhand ihrer Signatur korrekt klassifiziert werden.
@@ -7388,8 +7433,13 @@ function autoAssignKnownPetCandidates(sourceId: number) {
       pe.vector_blob
     FROM pet_candidate_items pci
     JOIN pet_embeddings pe ON pe.pet_detection_id=pci.pet_detection_id
+    JOIN pet_fused_detections pd ON pd.id=pci.pet_detection_id
+    JOIN media_items m ON m.id=pd.media_id
     WHERE pci.candidate_id=?
       AND pe.model_version='DogReID DINOv2-B14 0.2.0'
+      AND m.availability='AVAILABLE'
+      AND pd.input_sha256=m.sha256
+      AND pe.input_sha256=m.sha256
     ORDER BY pci.pet_detection_id
   `);
 
@@ -7525,6 +7575,8 @@ function listPetCandidates(
     JOIN pet_fused_detections pd ON pd.id=pci.pet_detection_id
     JOIN media_items m ON m.id=pd.media_id
     WHERE pc.source_id=?
+      AND m.availability='AVAILABLE'
+      AND pd.input_sha256=m.sha256
     GROUP BY pc.id
     ORDER BY detection_count DESC, pc.average_similarity DESC, newest_pet_id DESC
     LIMIT ?
@@ -7544,6 +7596,8 @@ function listPetCandidates(
     JOIN pet_fused_detections pd ON pd.id=pci.pet_detection_id
     JOIN media_items m ON m.id=pd.media_id
     WHERE pci.candidate_id=?
+      AND m.availability='AVAILABLE'
+      AND pd.input_sha256=m.sha256
     ORDER BY
       CASE WHEN pci.pet_detection_id=? THEN 0 ELSE 1 END,
       pci.similarity DESC,
@@ -7552,10 +7606,14 @@ function listPetCandidates(
   `);
 
   const memberSignatureQuery = db.prepare(`
-    SELECT pet_detection_id
-    FROM pet_candidate_items
-    WHERE candidate_id=?
-    ORDER BY pet_detection_id
+    SELECT pci.pet_detection_id
+    FROM pet_candidate_items pci
+    JOIN pet_fused_detections pd ON pd.id=pci.pet_detection_id
+    JOIN media_items m ON m.id=pd.media_id
+    WHERE pci.candidate_id=?
+      AND m.availability='AVAILABLE'
+      AND pd.input_sha256=m.sha256
+    ORDER BY pci.pet_detection_id
   `);
 
   const embeddingQuery = db.prepare(`
@@ -7719,6 +7777,8 @@ function listPets(sourceId: number) {
         JOIN media_items m ON m.id=pd.media_id
         WHERE pa.pet_id=p.id
           AND m.source_id=?
+          AND m.availability='AVAILABLE'
+          AND pd.input_sha256=m.sha256
       ) AS detection_count,
       (
         SELECT COUNT(*)
@@ -7727,6 +7787,8 @@ function listPets(sourceId: number) {
         JOIN media_items m ON m.id=pd.media_id
         WHERE pa.pet_id=p.id
           AND m.source_id=?
+          AND m.availability='AVAILABLE'
+          AND pd.input_sha256=m.sha256
           AND pa.assignment_source='CONFIRMED'
       ) AS confirmed_count,
       (
@@ -7736,6 +7798,8 @@ function listPets(sourceId: number) {
         JOIN media_items m ON m.id=pd.media_id
         WHERE pa.pet_id=p.id
           AND m.source_id=?
+          AND m.availability='AVAILABLE'
+          AND pd.input_sha256=m.sha256
           AND pa.assignment_source='AUTO_HIGH_CONFIDENCE'
       ) AS automatic_count,
       (
@@ -7745,6 +7809,8 @@ function listPets(sourceId: number) {
         JOIN media_items m ON m.id=pd.media_id
         WHERE pa.pet_id=p.id
           AND m.source_id=?
+          AND m.availability='AVAILABLE'
+          AND pd.input_sha256=m.sha256
       ) AS representative_pet_id
     FROM pets p
     WHERE EXISTS (
@@ -7779,6 +7845,8 @@ function listPets(sourceId: number) {
     JOIN media_items m ON m.id=pd.media_id
     WHERE pa.pet_id=?
       AND m.source_id=?
+      AND m.availability='AVAILABLE'
+      AND pd.input_sha256=m.sha256
     ORDER BY
       CASE WHEN pa.assignment_source='AUTO_HIGH_CONFIDENCE' THEN 0 ELSE 1 END,
       pa.pet_detection_id ASC
