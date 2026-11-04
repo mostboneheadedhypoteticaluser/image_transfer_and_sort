@@ -11243,6 +11243,8 @@ function getMediaDetails(mediaId: number) {
       fd.width,
       fd.height,
       fe.model_version AS embedding_model,
+      fe.dimension AS embedding_dimension,
+      fe.vector_blob AS embedding_vector,
       p.id AS person_id,
       p.name AS person_name,
       pfa.assignment_source,
@@ -11287,6 +11289,8 @@ function getMediaDetails(mediaId: number) {
       pd.agreement_count,
       pd.sources_json,
       pe.model_version AS embedding_model,
+      pe.dimension AS embedding_dimension,
+      pe.vector_blob AS embedding_vector,
       p.id AS pet_id,
       p.name AS pet_name,
       pa.assignment_source,
@@ -11442,6 +11446,82 @@ function getMediaDetails(mediaId: number) {
   const stringArray = (value: unknown): string[] =>
     jsonArray(value).filter((entry): entry is string => typeof entry === "string");
 
+  const sourceId = Number(media.source_id);
+  const knownPersons = faceRows.some(
+    (row) => row.embedding_vector && !row.person_id
+  )
+    ? knownPersonCentroids(sourceId)
+    : [];
+  const knownPets = petRows.some(
+    (row) => row.embedding_vector && !row.pet_id
+  )
+    ? knownPetCentroids(sourceId)
+    : [];
+
+  const personExclusion = db.prepare(
+    "SELECT 1 FROM person_face_exclusions " +
+    "WHERE face_detection_id=? AND person_id=? LIMIT 1"
+  );
+  const petExclusion = db.prepare(
+    "SELECT 1 FROM pet_assignment_exclusions " +
+    "WHERE pet_detection_id=? AND pet_id=? LIMIT 1"
+  );
+
+  const suggestedPersonsFor = (row: any) => {
+    if (
+      row.person_id !== null &&
+      row.person_id !== undefined
+    ) return [];
+    if (!row.embedding_vector || !Number(row.embedding_dimension)) return [];
+
+    const vector = vectorFromBlob(
+      row.embedding_vector,
+      Number(row.embedding_dimension)
+    );
+    const faceId = Number(row.id);
+
+    return knownPersons
+      .filter((known) => !personExclusion.get(faceId, known.id))
+      .map((known) => ({
+        personId: known.id,
+        personName: known.name,
+        similarity: cosineSimilarity(vector, known.vector)
+      }))
+      .filter((match) => Number.isFinite(match.similarity) && match.similarity >= 0.48)
+      .sort((left, right) => right.similarity - left.similarity)
+      .slice(0, 5);
+  };
+
+  const suggestedPetsFor = (row: any) => {
+    if (
+      row.pet_id !== null &&
+      row.pet_id !== undefined
+    ) return [];
+    if (!row.embedding_vector || !Number(row.embedding_dimension)) return [];
+
+    const vector = vectorFromBlob(
+      row.embedding_vector,
+      Number(row.embedding_dimension)
+    );
+    const petId = Number(row.id);
+    const petClass = String(row.pet_class);
+
+    return knownPets
+      .filter(
+        (known) =>
+          known.petClass === petClass &&
+          !petExclusion.get(petId, known.id)
+      )
+      .map((known) => ({
+        petId: known.id,
+        petName: known.name,
+        similarity: cosineSimilarity(vector, known.vector)
+      }))
+      .filter((match) => Number.isFinite(match.similarity) && match.similarity >= 0.52)
+      .sort((left, right) => right.similarity - left.similarity)
+      .slice(0, 5);
+  };
+
   return {
     mediaId: Number(media.id),
     sourceId: Number(media.source_id),
@@ -11509,7 +11589,8 @@ function getMediaDetails(mediaId: number) {
       candidateSimilarity:
         row.candidate_similarity === null || row.candidate_similarity === undefined
           ? null
-          : Number(row.candidate_similarity)
+          : Number(row.candidate_similarity),
+      suggestedPersons: suggestedPersonsFor(row)
     })),
     pets: petRows.map((row) => ({
       id: Number(row.id),
@@ -11537,7 +11618,8 @@ function getMediaDetails(mediaId: number) {
       candidateSimilarity:
         row.candidate_similarity === null || row.candidate_similarity === undefined
           ? null
-          : Number(row.candidate_similarity)
+          : Number(row.candidate_similarity),
+      suggestedPets: suggestedPetsFor(row)
     })),
     objects: [
       ...fusedObjects.map((row) => ({
