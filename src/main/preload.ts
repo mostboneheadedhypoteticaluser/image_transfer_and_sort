@@ -198,6 +198,11 @@ const api = {
       sourcePersonId: number
     ): Promise<MergePersonsResult> =>
       ipcRenderer.invoke("people:mergePersons", targetPersonId, sourcePersonId),
+    assignDetectionName: (
+      faceDetectionId: number,
+      name: string
+    ): Promise<{ identityId: number; name: string; affected: number }> =>
+      ipcRenderer.invoke("people:assignDetectionName", faceDetectionId, name),
     renamePerson: (
       personId: number,
       name: string
@@ -280,6 +285,11 @@ const api = {
       sourcePetId: number
     ): Promise<MergePetsResult> =>
       ipcRenderer.invoke("pets:mergePets", targetPetId, sourcePetId),
+    assignDetectionName: (
+      petDetectionId: number,
+      name: string
+    ): Promise<{ identityId: number; name: string; affected: number }> =>
+      ipcRenderer.invoke("pets:assignDetectionName", petDetectionId, name),
     renamePet: (
       petId: number,
       name: string
