@@ -2044,9 +2044,11 @@ app.whenReady().then(() => {
       // Content-Length und das Streaming selbst; das ist für <video> deutlich
       // robuster als ein manuell gebauter ReadableStream.
       const fileUrl = pathToFileURL(info.absolutePath).toString();
+      const range = request.headers.get("range");
+      const headers = range ? { Range: range } : undefined;
       return net.fetch(fileUrl, {
         method: request.method,
-        headers: request.headers
+        headers
       });
     } catch (error) {
       analysis?.logDiagnostic("MEDIA_STREAM_ERROR", {
