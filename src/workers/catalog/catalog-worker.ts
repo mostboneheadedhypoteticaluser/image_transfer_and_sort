@@ -11433,11 +11433,11 @@ function getMediaDetails(mediaId: number) {
 
 
 function reanalyzeMedia(mediaId: number) {
-  const media = db.prepare(\`
+  const media = db.prepare(`
     SELECT id, source_id, sha256, availability
     FROM media_items
     WHERE id=?
-  \`).get(mediaId);
+  `).get(mediaId);
 
   if (!media) {
     throw new Error("Medium wurde nicht gefunden.");
@@ -11467,7 +11467,7 @@ function reanalyzeMedia(mediaId: number) {
   db.exec("BEGIN IMMEDIATE");
   try {
     const deleteFrom = (table: string) => {
-      const result = db.prepare(\`DELETE FROM \${table} WHERE media_id=?\`).run(mediaId);
+      const result = db.prepare(`DELETE FROM ${table} WHERE media_id=?`).run(mediaId);
       cleared += Number(result.changes);
     };
 
@@ -11501,26 +11501,26 @@ function reanalyzeMedia(mediaId: number) {
     // Durch CASCADE sind Embeddings, Kandidaten-Zuordnungen und bestätigte
     // Detektionszuordnungen des Mediums ebenfalls verschwunden. Leere
     // Kandidatengruppen anschließend entfernen und Clusterstände invalidieren.
-    db.prepare(\`
+    db.prepare(`
       DELETE FROM person_candidates
       WHERE NOT EXISTS (
         SELECT 1 FROM person_candidate_faces pcf
         WHERE pcf.candidate_id=person_candidates.id
       )
-    \`).run();
-    db.prepare(\`
+    `).run();
+    db.prepare(`
       DELETE FROM pet_candidates
       WHERE NOT EXISTS (
         SELECT 1 FROM pet_candidate_items pci
         WHERE pci.candidate_id=pet_candidates.id
       )
-    \`).run();
+    `).run();
     db.prepare("DELETE FROM person_cluster_runs WHERE source_id=?").run(sourceId);
     db.prepare("DELETE FROM pet_cluster_runs WHERE source_id=?").run(sourceId);
 
     db.prepare("DELETE FROM analysis_jobs WHERE media_id=?").run(mediaId);
 
-    const insert = db.prepare(\`
+    const insert = db.prepare(`
       INSERT INTO analysis_jobs(
         media_id,
         module,
@@ -11537,7 +11537,7 @@ function reanalyzeMedia(mediaId: number) {
         updated_at
       )
       VALUES(?,?,'PENDING',0,0,NULL,?,NULL,NULL,NULL,NULL,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)
-    \`);
+    `);
 
     for (const module of modules) {
       insert.run(mediaId, module, sha256);
