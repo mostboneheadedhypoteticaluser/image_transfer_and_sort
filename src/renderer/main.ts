@@ -329,6 +329,7 @@ let analysisRefreshTimer: number | null = null;
 let sourcePipelineRefreshTimer: number | null = null;
 let identityStatsRefreshTimer: number | null = null;
 let watchCatalogRefreshTimer: number | null = null;
+let rendererShuttingDown = false;
 let searchFacetsScopeKey: string | null = null;
 let latestAnalysisStatus: AnalysisWorkerStatus | null = null;
 let backgroundPauseState: BackgroundPauseState = {
@@ -888,6 +889,7 @@ async function refreshSelectedPipelineStatus(): Promise<void> {
 }
 
 function scheduleSelectedPipelineRefresh(): void {
+  if (rendererShuttingDown) return;
   if (sourcePipelineRefreshTimer !== null) {
     window.clearTimeout(sourcePipelineRefreshTimer);
   }
@@ -6124,6 +6126,7 @@ async function loadAnalysisErrors(): Promise<void> {
 }
 
 function scheduleWatchCatalogRefresh(): void {
+  if (rendererShuttingDown) return;
   if (watchCatalogRefreshTimer !== null) {
     window.clearTimeout(watchCatalogRefreshTimer);
   }
@@ -6149,6 +6152,7 @@ function scheduleWatchCatalogRefresh(): void {
 }
 
 async function refreshCatalog(): Promise<void> {
+  if (rendererShuttingDown) return;
   const sourceId = selectedSourceId();
   scanButton.disabled = sourceId === null || scanning || restoring || resetting;
   resetButton.disabled = scanning || restoring || resetting;
@@ -6259,6 +6263,7 @@ async function loadSources(preselectId?: number): Promise<void> {
 }
 
 async function runSafely(action: () => Promise<void>): Promise<void> {
+  if (rendererShuttingDown) return;
   try {
     workerState.textContent = "Katalog-Worker aktiv";
     workerState.classList.add("ready");
@@ -6865,6 +6870,7 @@ window.imageSorter.catalog.onProgress((progress) => {
 });
 
 window.imageSorter.catalog.onWatchEvent((event) => {
+  if (rendererShuttingDown) return;
   updateCatalogWatchSnapshot(event);
   renderCatalogWatchState();
 
@@ -6911,6 +6917,21 @@ window.imageSorter.lifecycle.onBackgroundPauseState((state) => {
 });
 
 window.imageSorter.lifecycle.onShutdownStatus((status) => {
+  rendererShuttingDown = true;
+
+  for (const timer of [
+    analysisRefreshTimer,
+    sourcePipelineRefreshTimer,
+    identityStatsRefreshTimer,
+    watchCatalogRefreshTimer
+  ]) {
+    if (timer !== null) window.clearTimeout(timer);
+  }
+  analysisRefreshTimer = null;
+  sourcePipelineRefreshTimer = null;
+  identityStatsRefreshTimer = null;
+  watchCatalogRefreshTimer = null;
+
   shutdownMessage.textContent = status.message;
   shutdownOverlay.hidden = false;
 
@@ -6934,6 +6955,7 @@ window.imageSorter.analysis.onQwenBenchmarkStage((stage) => {
   }
 });
 window.imageSorter.analysis.onPipelineStatus((status) => {
+  if (rendererShuttingDown) return;
   // Den vom Main-Prozess bereits gelieferten Live-Zustand sofort anzeigen.
   // Eine erneute DB-Abfrage hat kurze Jobs bisher oft erst nach deren Ende
   // sichtbar gemacht.
@@ -6942,6 +6964,7 @@ window.imageSorter.analysis.onPipelineStatus((status) => {
 });
 
 window.imageSorter.people.onUpdated(() => {
+  if (rendererShuttingDown) return;
   const sourceId = selectedSourceId();
   if (sourceId === null) return;
 
@@ -6957,6 +6980,7 @@ window.imageSorter.people.onUpdated(() => {
 });
 
 window.imageSorter.pets.onUpdated(() => {
+  if (rendererShuttingDown) return;
   const sourceId = selectedSourceId();
   if (sourceId === null) return;
 
