@@ -280,6 +280,36 @@ type CandidateReviewState = {
 
 let candidateReviewState: CandidateReviewState | null = null;
 let currentImagePreviewDetails: MediaDetails | null = null;
+
+function createLoadingIndicator(text = "Daten werden geladen …"): HTMLDivElement {
+  const wrap = document.createElement("div");
+  wrap.className = "data-loading";
+  wrap.setAttribute("role", "status");
+  wrap.setAttribute("aria-live", "polite");
+  const spinner = document.createElement("span");
+  spinner.className = "data-spinner";
+  spinner.setAttribute("aria-hidden", "true");
+  const label = document.createElement("span");
+  label.textContent = text;
+  wrap.append(spinner, label);
+  return wrap;
+}
+
+function showBlockLoading(container: HTMLElement, text = "Daten werden geladen …"): void {
+  container.replaceChildren(createLoadingIndicator(text));
+}
+
+function showTableLoading(text = "Medien werden geladen …"): void {
+  mediaRows.replaceChildren();
+  const tr = document.createElement("tr");
+  const td = document.createElement("td");
+  td.colSpan = 7;
+  td.className = "table-loading-cell";
+  td.appendChild(createLoadingIndicator(text));
+  tr.appendChild(td);
+  mediaRows.appendChild(tr);
+}
+
 let identityBrowserSelectionToken = 0;
 let scanning = false;
 let restoring = false;
@@ -1960,7 +1990,7 @@ async function loadIdentityBrowser(): Promise<void> {
 
   identityBrowserListTitle.textContent =
     identityBrowserMode === "people" ? "Bestätigte Personen" : "Bestätigte Tiere";
-  identityBrowserList.replaceChildren();
+  showBlockLoading(identityBrowserList, "Identitäten werden geladen …");
   identityBrowserPlaceholder.hidden = true;
   identityBrowserDetail.hidden = true;
   identityBrowserSelectionToken++;
@@ -3502,6 +3532,8 @@ async function loadSearchFacets(sourceId?: number): Promise<void> {
 }
 
 async function runCombinedSearch(sourceId?: number): Promise<void> {
+  showTableLoading("Suchergebnisse werden geladen …");
+  searchSummary.textContent = "Suche läuft …";
   const filter = currentSearchFilter();
   const rows = await window.imageSorter.catalog.searchMedia(
     sourceId,
@@ -4384,7 +4416,18 @@ function renderPersonOverview(overview: PersonOverview): void {
               const sourceId = selectedSourceId();
               if (sourceId !== null) {
                 await loadPersonOverview(sourceId, true);
-                const stats = await window.imageSorter.catalog.getStats(sourceId);
+                if (currentView === "media") {
+    showTableLoading("Medienbibliothek wird geladen …");
+    librarySummary.textContent = "Medien werden geladen …";
+  } else if (currentView === "duplicates") {
+    showBlockLoading(duplicateGroups, "Dubletten werden geladen …");
+  } else if (currentView === "recycle") {
+    showTableLoading("Papierkorb-Daten werden geladen …");
+  } else if (currentView === "search") {
+    showTableLoading("Suchdaten werden geladen …");
+  }
+
+  const stats = await window.imageSorter.catalog.getStats(sourceId);
                 await refreshIdentityTabStats();
               }
 
@@ -4868,6 +4911,9 @@ async function loadPersonOverview(
   forceRefresh = false
 ): Promise<void> {
   refreshPeopleButton.disabled = true;
+  showBlockLoading(personCandidates, "Personenvorschläge werden geladen …");
+  showBlockLoading(confirmedPersons, "Bestätigte Personen werden geladen …");
+  personStatus.textContent = "Personendaten werden geladen …";
   try {
     const overview = await window.imageSorter.people.getOverview(
       sourceId,
@@ -5753,6 +5799,9 @@ async function loadPetOverview(
   forceRefresh = false
 ): Promise<void> {
   refreshPetsButton.disabled = true;
+  showBlockLoading(petCandidates, "Haustiergruppen werden geladen …");
+  showBlockLoading(confirmedPets, "Bestätigte Haustiere werden geladen …");
+  petStatus.textContent = "Haustierdaten werden geladen …";
   try {
     const overview = await window.imageSorter.pets.getOverview(
       sourceId,
