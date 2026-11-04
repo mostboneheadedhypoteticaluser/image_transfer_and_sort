@@ -3577,6 +3577,9 @@ function openImagePreview(
   extension = ""
 ): void {
   currentImagePreviewDetails = null;
+  currentVideoFrameTimestamp = null;
+  videoFrameThumbnailLoadToken += 1;
+  imagePreviewBackToVideo.hidden = true;
   imagePreviewOverlay.replaceChildren();
   imagePreviewCaption.textContent = caption;
 
@@ -3608,6 +3611,10 @@ function openImagePreview(
   void loadImagePreviewDetails(mediaId);
 }
 
+imagePreviewBackToVideo.addEventListener("click", () => {
+  restoreVideoPreview();
+});
+
 imagePreviewVideo.addEventListener("loadedmetadata", () => {
   imagePreviewVideoError.hidden = true;
   imagePreviewVideoError.textContent = "";
@@ -3634,6 +3641,9 @@ imagePreviewImage.addEventListener("load", () => {
 
 imagePreviewDialog.addEventListener("close", () => {
   imagePreviewDetailLoadToken += 1;
+  videoFrameThumbnailLoadToken += 1;
+  currentVideoFrameTimestamp = null;
+  imagePreviewBackToVideo.hidden = true;
   currentImagePreviewDetails = null;
   imagePreviewVideo.pause();
   imagePreviewVideoError.hidden = true;
