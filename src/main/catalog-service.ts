@@ -71,14 +71,24 @@ export class CatalogService {
     return result;
   }
 
-  stop(): void {
+  async waitUntilIdle(timeoutMs = 2000): Promise<boolean> {
+    const deadline = Date.now() + Math.max(0, timeoutMs);
+    while (this.pending.size > 0 && Date.now() < deadline) {
+      await new Promise<void>((resolve) => setTimeout(resolve, 25));
+    }
+    return this.pending.size === 0;
+  }
+
+  stop(rejectPending = true): void {
     const child = this.child;
     if (!child) return;
 
     this.child = null;
 
-    const error = new Error("Katalog-Worker wurde wegen App-Beendigung gestoppt.");
-    for (const pending of this.pending.values()) pending.reject(error);
+    if (rejectPending) {
+      const error = new Error("Katalog-Worker wurde wegen App-Beendigung gestoppt.");
+      for (const pending of this.pending.values()) pending.reject(error);
+    }
     this.pending.clear();
 
     child.kill();
