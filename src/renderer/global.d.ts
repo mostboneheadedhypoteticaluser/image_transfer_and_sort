@@ -125,6 +125,10 @@ declare global {
           targetPersonId: number,
           sourcePersonId: number
         ): Promise<MergePersonsResult>;
+        assignDetectionName(
+          faceDetectionId: number,
+          name: string
+        ): Promise<{ identityId: number; name: string; affected: number }>;
         renamePerson(
           personId: number,
           name: string
@@ -173,6 +177,10 @@ declare global {
           targetPetId: number,
           sourcePetId: number
         ): Promise<MergePetsResult>;
+        assignDetectionName(
+          petDetectionId: number,
+          name: string
+        ): Promise<{ identityId: number; name: string; affected: number }>;
         renamePet(
           petId: number,
           name: string
