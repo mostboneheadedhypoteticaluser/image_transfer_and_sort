@@ -3022,6 +3022,103 @@ function renderImagePreviewDetails(details: MediaDetails): void {
         emptyHits.textContent = "Keine bekannten Personen- oder Haustiertreffer gespeichert.";
         videoBody.appendChild(emptyHits);
       }
+
+      const frameHeading = document.createElement("strong");
+      frameHeading.className = "image-detail-subheading";
+      frameHeading.textContent = "Szenenbilder mit Personen / Haustieren";
+      videoBody.appendChild(frameHeading);
+
+      if (video.frames.length > 0) {
+        const openFrames = document.createElement("button");
+        openFrames.type = "button";
+        openFrames.className = "secondary video-frame-gallery-toggle";
+        openFrames.textContent =
+          video.frames.length.toLocaleString("de-DE") +
+          (video.frames.length === 1
+            ? " Szenenbild anzeigen"
+            : " Szenenbilder anzeigen");
+
+        const gallery = document.createElement("div");
+        gallery.className = "video-frame-gallery";
+        gallery.hidden = true;
+
+        for (const frame of video.frames) {
+          const card = document.createElement("button");
+          card.type = "button";
+          card.className = "video-frame-card";
+
+          const image = document.createElement("img");
+          image.className = "video-frame-thumb";
+          image.alt = "";
+          image.dataset.frameMs = String(frame.timestampMs);
+
+          const placeholder = document.createElement("span");
+          placeholder.className = "video-frame-thumb-placeholder";
+          placeholder.textContent = "▶";
+
+          const info = document.createElement("span");
+          info.className = "video-frame-card-info";
+
+          const time = document.createElement("strong");
+          time.textContent = videoTimestamp(frame.timestampMs);
+
+          const confirmed = frame.detections.filter(
+            (detection) => detection.confirmed
+          ).length;
+          const names = [
+            ...new Set(
+              frame.detections
+                .map((detection) => detection.name)
+                .filter((name): name is string => Boolean(name))
+            )
+          ];
+
+          const meta = document.createElement("small");
+          meta.textContent =
+            frame.detections.length.toLocaleString("de-DE") +
+            (frame.detections.length === 1 ? " Erkennung" : " Erkennungen") +
+            " · " + confirmed.toLocaleString("de-DE") + " bestätigt" +
+            (names.length > 0 ? " · " + names.join(", ") : "");
+
+          info.append(time, meta);
+          card.append(image, placeholder, info);
+
+          card.addEventListener("click", () => {
+            void runSafely(() => openVideoFrameEditor(details, frame));
+          });
+
+          gallery.appendChild(card);
+        }
+
+        let thumbnailsStarted = false;
+        openFrames.addEventListener("click", () => {
+          gallery.hidden = !gallery.hidden;
+          openFrames.textContent = gallery.hidden
+            ? video.frames.length.toLocaleString("de-DE") +
+              (video.frames.length === 1
+                ? " Szenenbild anzeigen"
+                : " Szenenbilder anzeigen")
+            : "Szenenbilder ausblenden";
+
+          if (!gallery.hidden && !thumbnailsStarted) {
+            thumbnailsStarted = true;
+            void populateVideoFrameThumbnails(details, gallery);
+          }
+        });
+
+        videoBody.append(openFrames, gallery);
+      } else {
+        const emptyFrames = document.createElement("div");
+        emptyFrames.className = "image-preview-detail-empty";
+        const videoJob = details.analysisJobs.find(
+          (job) => job.module === "video-analyze-v1"
+        );
+        emptyFrames.textContent =
+          videoJob?.status === "PENDING" || videoJob?.status === "RUNNING"
+            ? "Die Szenenbild-Erkennungen werden mit der aktualisierten Videoanalyse aufgebaut."
+            : "Noch keine bearbeitbaren Personen-/Haustier-Szenenbilder gespeichert.";
+        videoBody.appendChild(emptyFrames);
+      }
     } else {
       videoBody.className = "image-preview-detail-empty";
       videoBody.textContent = "Die Videoanalyse ist noch nicht abgeschlossen.";
