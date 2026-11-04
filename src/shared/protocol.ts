@@ -918,6 +918,7 @@ export type ResetCatalogResult = {
 
 export type ReanalyzeMediaResult = {
   mediaId: number;
+  sourceId: number;
   requeued: number;
   cleared: number;
 };
