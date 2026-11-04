@@ -278,6 +278,7 @@ type CandidateReviewState = {
 };
 
 let candidateReviewState: CandidateReviewState | null = null;
+let currentImagePreviewDetails: MediaDetails | null = null;
 let identityBrowserSelectionToken = 0;
 let scanning = false;
 let restoring = false;
@@ -2816,6 +2817,7 @@ async function loadImagePreviewDetails(mediaId: number): Promise<void> {
       imagePreviewDetails.appendChild(empty);
       return;
     }
+    currentImagePreviewDetails = details;
     const facets = await window.imageSorter.catalog.getSearchFacets(details.sourceId);
     fillPreviewIdentityNames(facets.persons, facets.pets);
     renderImagePreviewDetails(details);
@@ -2931,6 +2933,7 @@ async function openLifeAreaAssignment(
 }
 
 function openImagePreview(mediaId: number, caption: string): void {
+  currentImagePreviewDetails = null;
   imagePreviewOverlay.replaceChildren();
   imagePreviewImage.src = fullPreviewUrl(mediaId);
   imagePreviewImage.alt = caption;
@@ -2944,11 +2947,8 @@ function openImagePreview(mediaId: number, caption: string): void {
 }
 
 imagePreviewImage.addEventListener("load", () => {
-  if (!imagePreviewDialog.open) return;
-  const mediaId = Number(
-    imagePreviewImage.src.match(/\/([0-9]+)(?:\?|$)/)?.[1] ?? 0
-  );
-  if (mediaId > 0) void loadImagePreviewDetails(mediaId);
+  if (!imagePreviewDialog.open || !currentImagePreviewDetails) return;
+  renderImagePreviewOverlay(currentImagePreviewDetails);
 });
 
 function makePreviewable(
