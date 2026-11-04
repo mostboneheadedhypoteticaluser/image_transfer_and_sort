@@ -384,6 +384,23 @@ const api = {
       ipcRenderer.invoke("catalog:listRecycleMedia", sourceId, limit),
     getMediaDetails: (mediaId: number): Promise<MediaDetails | null> =>
       ipcRenderer.invoke("catalog:getMediaDetails", mediaId),
+    assignVideoFrameIdentityName: (
+      mediaId: number,
+      timestampMs: number,
+      kind: "person" | "pet",
+      detectionIndex: number,
+      petClass: "dog" | "cat" | null,
+      name: string
+    ): Promise<{ identityId: number; name: string; affected: number }> =>
+      ipcRenderer.invoke(
+        "catalog:assignVideoFrameIdentityName",
+        mediaId,
+        timestampMs,
+        kind,
+        detectionIndex,
+        petClass,
+        name
+      ),
     reanalyzeMedia: (
       mediaId: number
     ): Promise<{ mediaId: number; sourceId: number; requeued: number; cleared: number }> =>
