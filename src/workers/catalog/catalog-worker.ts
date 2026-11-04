@@ -7173,7 +7173,7 @@ function completeVideoAnalysisJob(jobId: number, result: unknown) {
     "SELECT input_sha256 FROM media_video_analysis WHERE media_id=?"
   ).get(mediaId);
   const videoContentChanged =
-    Boolean(previousVideoAnalysis) &&
+    previousVideoAnalysis !== undefined &&
     String(previousVideoAnalysis.input_sha256) !== inputSha256;
 
   const durationMs = Math.max(0, Math.trunc(Number(value.durationMs) || 0));
