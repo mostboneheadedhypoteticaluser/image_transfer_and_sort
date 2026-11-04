@@ -2602,6 +2602,31 @@ async function captureVideoFrameThumbnail(
   timestampMs: number
 ): Promise<string> {
   await seekPreviewVideo(video, timestampMs);
+
+  // Nach "seeked" kann der Decoder noch das alte oder ein schwarzes Frame
+  // bereitstellen. Auf das tatsächlich präsentierte Frame warten.
+  if (typeof video.requestVideoFrameCallback === "function") {
+    await new Promise<void>((resolve) => {
+      let finished = false;
+      const callbackId = video.requestVideoFrameCallback(() => {
+        if (!finished) {
+          finished = true;
+          window.clearTimeout(timeout);
+          resolve();
+        }
+      });
+      const timeout = window.setTimeout(() => {
+        if (finished) return;
+        finished = true;
+        video.cancelVideoFrameCallback?.(callbackId);
+        resolve();
+      }, 1200);
+    });
+  }
+
+  if (video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
+    throw new Error("Videoframe ist noch nicht decodiert.");
+  }
   return videoFrameDataUrl(video, 320, 0.78);
 }
 
