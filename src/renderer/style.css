@@ -1692,8 +1692,10 @@ td .badge + .badge {
   min-width: 0;
   min-height: 0;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
+  gap: 10px;
   padding: 20px;
 }
 
@@ -4775,4 +4777,11 @@ body {
   color: #8d302d;
   font-size: 12px;
   line-height: 1.45;
+}
+
+
+.image-preview-video[hidden],
+.image-preview-video-error[hidden],
+.image-preview-image-wrap[hidden] {
+  display: none !important;
 }
