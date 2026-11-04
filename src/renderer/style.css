@@ -3,6 +3,12 @@
   color: #17202a;
   background: #f4f6f8;
   font-synthesis: none;
+  --text: #17202a;
+  --muted: #68717d;
+  --surface: #ffffff;
+  --surface-2: #f4f6f8;
+  --border: #e3e7eb;
+  --accent: #17202a;
 }
 
 * { box-sizing: border-box; }
