@@ -3920,30 +3920,82 @@ function renderRows(rows: MediaRecord[], emptyText = "Noch keine Medien katalogi
     previewCell.className = "preview-cell";
 
     const thumbnail = thumbnailUrl(row);
-    if (thumbnail) {
-      const img = document.createElement("img");
-      img.className = "media-thumbnail";
-      img.src = thumbnail;
-      img.alt = "";
-      img.loading = "lazy";
-      makePreviewable(img, row.id, row.relativePath);
-      img.addEventListener("error", () => {
-        previewCell.replaceChildren();
-        const fallback = document.createElement("span");
-        fallback.className = "preview-placeholder";
-        fallback.textContent = row.extension.replace(".", "").toUpperCase();
-        previewCell.appendChild(fallback);
+    const previewable =
+      row.availability === "AVAILABLE" &&
+      (
+        LIBRARY_IMAGE_EXTENSIONS.has(row.extension.toLowerCase()) ||
+        LIBRARY_VIDEO_EXTENSIONS.has(row.extension.toLowerCase())
+      );
+
+    const previewButton = document.createElement("button");
+    previewButton.type = "button";
+    previewButton.className = "media-preview-button";
+    previewButton.disabled = !previewable;
+    previewButton.title = previewable
+      ? isVideoExtension(row.extension)
+        ? "Video mit Details öffnen"
+        : "Bild mit Details öffnen"
+      : "Für dieses Medium ist keine Vorschau verfügbar.";
+    previewButton.setAttribute(
+      "aria-label",
+      previewable
+        ? isVideoExtension(row.extension)
+          ? "Video-Detailansicht öffnen"
+          : "Bild-Detailansicht öffnen"
+        : "Keine Vorschau verfügbar"
+    );
+
+    if (previewable) {
+      previewButton.addEventListener("click", () => {
+        openImagePreview(
+          row.id,
+          row.relativePath,
+          row.extension.toLowerCase()
+        );
       });
-      previewCell.appendChild(img);
-    } else {
+    }
+
+    const appendPlaceholder = () => {
+      previewButton.replaceChildren();
       const placeholder = document.createElement("span");
       placeholder.className = "preview-placeholder";
       placeholder.textContent =
         row.availability === "AVAILABLE"
           ? row.extension.replace(".", "").toUpperCase()
           : "—";
-      previewCell.appendChild(placeholder);
+      previewButton.appendChild(placeholder);
+
+      if (previewable && isVideoExtension(row.extension)) {
+        const play = document.createElement("span");
+        play.className = "media-video-play";
+        play.textContent = "▶";
+        play.setAttribute("aria-hidden", "true");
+        previewButton.appendChild(play);
+      }
+    };
+
+    if (thumbnail) {
+      const img = document.createElement("img");
+      img.className = "media-thumbnail";
+      img.src = thumbnail;
+      img.alt = "";
+      img.loading = "lazy";
+      img.draggable = false;
+      img.addEventListener("error", appendPlaceholder);
+      previewButton.appendChild(img);
+
+      if (previewable && isVideoExtension(row.extension)) {
+        const play = document.createElement("span");
+        play.className = "media-video-play";
+        play.textContent = "▶";
+        play.setAttribute("aria-hidden", "true");
+        previewButton.appendChild(play);
+      }
+    } else {
+      appendPlaceholder();
     }
+
+    previewCell.appendChild(previewButton);
 
     const pathCell = document.createElement("td");
     pathCell.className = "path-cell";
