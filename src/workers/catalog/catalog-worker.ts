@@ -8922,14 +8922,14 @@ function assignPetDetectionName(petDetectionId: number, rawName: unknown) {
   if (!name) throw new Error("Bitte einen Namen für das Haustier eingeben.");
   if (name.length > 120) throw new Error("Der Haustiername ist zu lang.");
 
-  const pet = db.prepare(\`
+  const pet = db.prepare(`
     SELECT pd.id, pd.pet_class, m.source_id
     FROM pet_fused_detections pd
     JOIN media_items m ON m.id=pd.media_id
     WHERE pd.id=?
       AND m.availability='AVAILABLE'
       AND pd.input_sha256=m.sha256
-  \`).get(petDetectionId);
+  `).get(petDetectionId);
 
   if (!pet) throw new Error("Die Haustierfundstelle wurde nicht gefunden.");
 
@@ -8950,7 +8950,7 @@ function assignPetDetectionName(petDetectionId: number, rawName: unknown) {
             .run(name, petClass).lastInsertRowid
         );
 
-    const assign = db.prepare(\`
+    const assign = db.prepare(`
       INSERT INTO pet_assignments(
         pet_detection_id, pet_id, assignment_source, confidence, updated_at
       )
@@ -8960,7 +8960,7 @@ function assignPetDetectionName(petDetectionId: number, rawName: unknown) {
         assignment_source='CONFIRMED',
         confidence=NULL,
         updated_at=CURRENT_TIMESTAMP
-    \`);
+    `);
     const clearExclusion = db.prepare(
       "DELETE FROM pet_assignment_exclusions WHERE pet_id=? AND pet_detection_id=?"
     );
@@ -8968,19 +8968,33 @@ function assignPetDetectionName(petDetectionId: number, rawName: unknown) {
       "DELETE FROM pet_candidate_items WHERE pet_detection_id=?"
     );
 
+    const remainingCandidateIds = db.prepare(`
+      SELECT DISTINCT pci.pet_detection_id
+      FROM pet_candidate_items pci
+      WHERE pci.candidate_id IN (
+        SELECT candidate_id
+        FROM pet_candidate_items
+        WHERE pet_detection_id=?
+      )
+    `).all(petDetectionId)
+      .map((row) => Number(row.pet_detection_id))
+      .filter((id) => !ids.includes(id));
+
+    insertPetCannotLinks(ids, remainingCandidateIds, "USER_DIRECT_ASSIGN");
+
     for (const id of ids) {
       clearExclusion.run(petId, id);
       assign.run(id, petId);
       removeCandidate.run(id);
     }
 
-    db.prepare(\`
+    db.prepare(`
       DELETE FROM pet_candidates
       WHERE NOT EXISTS (
         SELECT 1 FROM pet_candidate_items pci
         WHERE pci.candidate_id=pet_candidates.id
       )
-    \`).run();
+    `).run();
     db.prepare("DELETE FROM pet_cluster_runs WHERE source_id=?").run(sourceId);
     db.prepare("UPDATE pets SET updated_at=CURRENT_TIMESTAMP WHERE id=?").run(petId);
 
@@ -10231,14 +10245,14 @@ function assignFaceDetectionName(faceDetectionId: number, rawName: unknown) {
   if (!name) throw new Error("Bitte einen Namen für das Gesicht eingeben.");
   if (name.length > 120) throw new Error("Der Personenname ist zu lang.");
 
-  const face = db.prepare(\`
+  const face = db.prepare(`
     SELECT fd.id, m.source_id
     FROM face_detections fd
     JOIN media_items m ON m.id=fd.media_id
     WHERE fd.id=?
       AND m.availability='AVAILABLE'
       AND fd.input_sha256=m.sha256
-  \`).get(faceDetectionId);
+  `).get(faceDetectionId);
 
   if (!face) throw new Error("Das Gesicht wurde nicht gefunden.");
 
@@ -10255,7 +10269,7 @@ function assignFaceDetectionName(faceDetectionId: number, rawName: unknown) {
       ? Number(existing.id)
       : Number(db.prepare("INSERT INTO persons(name) VALUES(?)").run(name).lastInsertRowid);
 
-    const assign = db.prepare(\`
+    const assign = db.prepare(`
       INSERT INTO person_face_assignments(
         face_detection_id, person_id, assignment_source, confidence, updated_at
       )
@@ -10265,7 +10279,7 @@ function assignFaceDetectionName(faceDetectionId: number, rawName: unknown) {
         assignment_source='CONFIRMED',
         confidence=NULL,
         updated_at=CURRENT_TIMESTAMP
-    \`);
+    `);
     const clearExclusion = db.prepare(
       "DELETE FROM person_face_exclusions WHERE person_id=? AND face_detection_id=?"
     );
@@ -10273,19 +10287,33 @@ function assignFaceDetectionName(faceDetectionId: number, rawName: unknown) {
       "DELETE FROM person_candidate_faces WHERE face_detection_id=?"
     );
 
+    const remainingCandidateIds = db.prepare(`
+      SELECT DISTINCT pcf.face_detection_id
+      FROM person_candidate_faces pcf
+      WHERE pcf.candidate_id IN (
+        SELECT candidate_id
+        FROM person_candidate_faces
+        WHERE face_detection_id IN (?)
+      )
+    `).all(faceDetectionId)
+      .map((row) => Number(row.face_detection_id))
+      .filter((id) => !ids.includes(id));
+
+    insertCannotLinks(ids, remainingCandidateIds, "USER_DIRECT_ASSIGN");
+
     for (const id of ids) {
       clearExclusion.run(personId, id);
       assign.run(id, personId);
       removeCandidate.run(id);
     }
 
-    db.prepare(\`
+    db.prepare(`
       DELETE FROM person_candidates
       WHERE NOT EXISTS (
         SELECT 1 FROM person_candidate_faces pcf
         WHERE pcf.candidate_id=person_candidates.id
       )
-    \`).run();
+    `).run();
     db.prepare("DELETE FROM person_cluster_runs WHERE source_id=?").run(sourceId);
     db.prepare("UPDATE persons SET updated_at=CURRENT_TIMESTAMP WHERE id=?").run(personId);
 
