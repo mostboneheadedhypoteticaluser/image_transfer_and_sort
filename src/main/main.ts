@@ -1918,6 +1918,7 @@ app.whenReady().then(() => {
       );
 
       if (!info) {
+        analysis?.logDiagnostic("PREVIEW_INFO_MISSING", { mediaId });
         return new Response("Medium nicht gefunden.", { status: 404 });
       }
 
@@ -1935,10 +1936,13 @@ app.whenReady().then(() => {
         status: 200,
         headers: {
           "Content-Type": "image/jpeg",
-          "Cache-Control": "public, max-age=31536000, immutable"
+          "Cache-Control": "no-store"
         }
       });
-    } catch {
+    } catch (error) {
+      analysis?.logDiagnostic("PREVIEW_GENERATION_ERROR", {
+        error: error instanceof Error ? error.message : String(error)
+      });
       return new Response("Große Vorschau konnte nicht geladen werden.", {
         status: 404
       });
