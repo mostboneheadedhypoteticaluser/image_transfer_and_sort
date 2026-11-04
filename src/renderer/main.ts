@@ -2972,12 +2972,7 @@ async function openLifeAreaAssignment(
 ): Promise<void> {
   lifeAreaAssignPath.textContent = relativePath;
   lifeAreaAssignPath.title = relativePath;
-  lifeAreaAssignList.replaceChildren();
-
-  const loading = document.createElement("div");
-  loading.className = "image-preview-detail-loading";
-  loading.textContent = "Lebensbereiche werden geladen …";
-  lifeAreaAssignList.appendChild(loading);
+  showBlockLoading(lifeAreaAssignList, "Lebensbereiche werden geladen …");
 
   if (!lifeAreaAssignDialog.open) {
     lifeAreaAssignDialog.showModal();
@@ -6108,6 +6103,8 @@ async function refreshAnalysisErrorCount(): Promise<number> {
 }
 
 async function loadAnalysisErrors(): Promise<void> {
+  showBlockLoading(analysisErrorList, "Analysefehler werden geladen …");
+  analysisErrorSummary.textContent = "Wird geladen …";
   const sourceId = selectedSourceId() ?? undefined;
   const [errors, total] = await Promise.all([
     window.imageSorter.analysis.listErrors(sourceId, 300),
@@ -6698,8 +6695,8 @@ copyQwenBenchmarkButton.addEventListener("click", () => {
 
 analysisErrorsButton.addEventListener("click", () => {
   void runSafely(async () => {
-    await loadAnalysisErrors();
     if (!analysisErrorDialog.open) analysisErrorDialog.showModal();
+    await loadAnalysisErrors();
   });
 });
 
