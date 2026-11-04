@@ -2079,7 +2079,30 @@ function listMedia(
             AND d.size_bytes=m.size_bytes
         )
         ELSE 0
-      END AS duplicate_count
+      END AS duplicate_count,
+      (
+        SELECT aj.module
+        FROM analysis_jobs aj
+        WHERE aj.media_id=m.id
+          AND aj.status='DONE'
+          AND aj.input_sha256=m.sha256
+        ORDER BY CASE aj.module
+          WHEN 'file-probe-v1' THEN 10
+          WHEN 'thumbnail-v1' THEN 20
+          WHEN 'image-metadata-v1' THEN 30
+          WHEN 'face-detect-yunet-v1' THEN 40
+          WHEN 'face-embed-sface-v1' THEN 50
+          WHEN 'pet-detect-nanodet-v1' THEN 60
+          WHEN 'pet-detect-yolox-v1' THEN 61
+          WHEN 'pet-fuse-ensemble-v1' THEN 70
+          WHEN 'pet-embed-dogreid-v1' THEN 80
+          WHEN 'semantic-embed-siglip2-v1' THEN 90
+          WHEN 'video-analyze-v1' THEN 95
+          WHEN 'catalog-semantic-qwen3vl4b-v3' THEN 100
+          ELSE 1
+        END DESC, aj.id DESC
+        LIMIT 1
+      ) AS analysis_stage
     FROM media_items m
     JOIN media_sources ms ON ms.id=m.source_id
     LEFT JOIN media_thumbnails t ON t.media_id=m.id
@@ -2203,6 +2226,8 @@ function listMedia(
     objectLabels: row.object_labels
       ? String(row.object_labels).split(",").filter(Boolean)
       : [],
+    analysisStage: row.analysis_stage ? String(row.analysis_stage) : "",
+    analysisStageStatus: row.analysis_stage ? "DONE" : "NONE",
     markerLabels: [
       ...(row.person_names
         ? String(row.person_names).split("\u001f").filter(Boolean)
