@@ -4699,3 +4699,47 @@ body {
     max-height: calc(52vh - 50px);
   }
 }
+
+
+.media-preview-button {
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+  width: 56px;
+  height: 42px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  overflow: hidden;
+  cursor: zoom-in;
+}
+
+.media-preview-button:disabled {
+  cursor: default;
+}
+
+.media-preview-button:not(:disabled):focus-visible {
+  outline: 3px solid rgba(23, 32, 42, .28);
+  outline-offset: 2px;
+}
+
+.media-preview-button .media-thumbnail,
+.media-preview-button .preview-placeholder {
+  grid-area: 1 / 1;
+}
+
+.media-video-play {
+  grid-area: 1 / 1;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  padding-left: 2px;
+  border-radius: 50%;
+  background: rgba(10, 16, 22, .72);
+  color: #fff;
+  font-size: 10px;
+  line-height: 1;
+  pointer-events: none;
+}
