@@ -11371,6 +11371,117 @@ function getMediaDetails(mediaId: number) {
 }
 
 
+function reanalyzeMedia(mediaId: number) {
+  const media = db.prepare(\`
+    SELECT id, source_id, sha256, availability
+    FROM media_items
+    WHERE id=?
+  \`).get(mediaId);
+
+  if (!media) {
+    throw new Error("Medium wurde nicht gefunden.");
+  }
+  if (String(media.availability) !== "AVAILABLE") {
+    throw new Error("Nur verfügbare Medien können neu analysiert werden.");
+  }
+
+  const sourceId = Number(media.source_id);
+  const sha256 = String(media.sha256);
+  const modules = [
+    "file-probe-v1",
+    "thumbnail-v1",
+    "video-analyze-v1",
+    "image-metadata-v1",
+    "face-detect-yunet-v1",
+    "face-embed-sface-v1",
+    "pet-detect-nanodet-v1",
+    "pet-detect-yolox-v1",
+    "pet-fuse-ensemble-v1",
+    "pet-embed-dogreid-v1",
+    "semantic-embed-siglip2-v1",
+    "catalog-semantic-qwen3vl4b-v3"
+  ];
+
+  let cleared = 0;
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const deleteFrom = (table: string) => {
+      const result = db.prepare(\`DELETE FROM \${table} WHERE media_id=?\`).run(mediaId);
+      cleared += Number(result.changes);
+    };
+
+    // Benutzerdefinierte Lebensbereiche bleiben erhalten. Alle automatisch
+    // aus der Datei gewonnenen Ergebnisse werden dagegen vollständig entfernt.
+    for (const table of [
+      "media_thumbnails",
+      "media_image_metadata",
+      "semantic_embeddings",
+      "media_semantic_annotations",
+      "media_video_analysis",
+      "video_identity_tracks",
+      "video_tags",
+      "object_detections",
+      "object_fused_detections",
+      "pet_detections",
+      "pet_fused_detections",
+      "face_detections"
+    ]) {
+      deleteFrom(table);
+    }
+
+    // Durch CASCADE sind Embeddings, Kandidaten-Zuordnungen und bestätigte
+    // Detektionszuordnungen des Mediums ebenfalls verschwunden. Leere
+    // Kandidatengruppen anschließend entfernen und Clusterstände invalidieren.
+    db.prepare(\`
+      DELETE FROM person_candidates
+      WHERE NOT EXISTS (
+        SELECT 1 FROM person_candidate_faces pcf
+        WHERE pcf.candidate_id=person_candidates.id
+      )
+    \`).run();
+    db.prepare(\`
+      DELETE FROM pet_candidates
+      WHERE NOT EXISTS (
+        SELECT 1 FROM pet_candidate_items pci
+        WHERE pci.candidate_id=pet_candidates.id
+      )
+    \`).run();
+    db.prepare("DELETE FROM person_cluster_runs WHERE source_id=?").run(sourceId);
+    db.prepare("DELETE FROM pet_cluster_runs WHERE source_id=?").run(sourceId);
+
+    db.prepare("DELETE FROM analysis_jobs WHERE media_id=?").run(mediaId);
+
+    const insert = db.prepare(\`
+      INSERT INTO analysis_jobs(
+        media_id,
+        module,
+        status,
+        priority,
+        attempts,
+        payload_json,
+        input_sha256,
+        result_json,
+        error_message,
+        started_at,
+        finished_at,
+        created_at,
+        updated_at
+      )
+      VALUES(?,?,'PENDING',0,0,NULL,?,NULL,NULL,NULL,NULL,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)
+    \`);
+
+    for (const module of modules) {
+      insert.run(mediaId, module, sha256);
+    }
+
+    db.exec("COMMIT");
+    return { mediaId, requeued: modules.length, cleared };
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+}
+
 function getMediaPreviewInfo(mediaId: number) {
   const row = db.prepare(`
     SELECT id, absolute_path, sha256
@@ -12011,6 +12122,8 @@ async function dispatch(method: CatalogMethod, payload: Record<string, unknown> 
       return getMediaPreviewInfo(asNumber(payload.mediaId, "mediaId"));
     case "getMediaDetails":
       return getMediaDetails(asNumber(payload.mediaId, "mediaId"));
+    case "reanalyzeMedia":
+      return reanalyzeMedia(asNumber(payload.mediaId, "mediaId"));
     case "getMediaPath":
       return getMediaPath(asNumber(payload.mediaId, "mediaId"));
     case "scanSource":
