@@ -2714,11 +2714,15 @@ function renderImagePreviewDetails(details: MediaDetails): void {
 
       const text = document.createElement("div");
       const title = document.createElement("strong");
+      const bestPersonSuggestion = face.suggestedPersons[0] ?? null;
       title.textContent = face.personName
         ? "Person: " + face.personName
-        : face.candidateId !== null
-          ? "Personenkandidat #" + face.candidateId
-          : "Person noch nicht zugeordnet";
+        : bestPersonSuggestion
+          ? "Vorschlag: " + bestPersonSuggestion.personName +
+            " · " + detailPercent(bestPersonSuggestion.similarity)
+          : face.candidateId !== null
+            ? "Personenkandidat #" + face.candidateId
+            : "Person noch nicht zugeordnet";
 
       const meta = document.createElement("small");
       const parts = [
@@ -2737,6 +2741,21 @@ function renderImagePreviewDetails(details: MediaDetails): void {
       ].filter(Boolean);
       meta.textContent = parts.join(" · ");
       text.append(title, meta);
+
+      if (!face.personName && face.suggestedPersons.length > 0) {
+        const suggestions = document.createElement("small");
+        suggestions.className = "image-detail-identity-suggestions";
+        suggestions.textContent =
+          "Mögliche Personen: " +
+          face.suggestedPersons
+            .map(
+              (suggestion) =>
+                suggestion.personName + " " + detailPercent(suggestion.similarity)
+            )
+            .join(" · ");
+        text.appendChild(suggestions);
+      }
+
       item.append(crop, text);
       faceList.appendChild(item);
     }
@@ -2763,11 +2782,15 @@ function renderImagePreviewDetails(details: MediaDetails): void {
       const text = document.createElement("div");
       const title = document.createElement("strong");
       const species = pet.petClass === "cat" ? "Katze" : "Hund";
+      const bestPetSuggestion = pet.suggestedPets[0] ?? null;
       title.textContent = pet.petName
         ? species + ": " + pet.petName
-        : pet.candidateId !== null
-          ? species + " · Kandidat #" + pet.candidateId
-          : species + " noch nicht zugeordnet";
+        : bestPetSuggestion
+          ? species + " · Vorschlag: " + bestPetSuggestion.petName +
+            " · " + detailPercent(bestPetSuggestion.similarity)
+          : pet.candidateId !== null
+            ? species + " · Kandidat #" + pet.candidateId
+            : species + " noch nicht zugeordnet";
 
       const meta = document.createElement("small");
       meta.textContent = [
@@ -2786,6 +2809,21 @@ function renderImagePreviewDetails(details: MediaDetails): void {
           : null
       ].filter(Boolean).join(" · ");
       text.append(title, meta);
+
+      if (!pet.petName && pet.suggestedPets.length > 0) {
+        const suggestions = document.createElement("small");
+        suggestions.className = "image-detail-identity-suggestions";
+        suggestions.textContent =
+          "Mögliche Haustiere: " +
+          pet.suggestedPets
+            .map(
+              (suggestion) =>
+                suggestion.petName + " " + detailPercent(suggestion.similarity)
+            )
+            .join(" · ");
+        text.appendChild(suggestions);
+      }
+
       item.append(crop, text);
       petList.appendChild(item);
     }
@@ -4262,6 +4300,55 @@ function renderRows(rows: MediaRecord[], emptyText = "Noch keine Medien katalogi
       ? "Höchste vollständig abgeschlossene Analyse-Stufe"
       : "Für diese Datei ist noch keine Analyse-Stufe vollständig abgeschlossen.";
     analysisCell.appendChild(analysisStage);
+
+    const analysisFacts: string[] = [];
+    if (row.faceCount > 0) {
+      analysisFacts.push(
+        row.faceCount.toLocaleString("de-DE") +
+        (row.faceCount === 1 ? " Gesicht" : " Gesichter")
+      );
+    }
+    if (row.dogCount > 0) {
+      analysisFacts.push(
+        row.dogCount.toLocaleString("de-DE") +
+        (row.dogCount === 1 ? " Hund" : " Hunde")
+      );
+    }
+    if (row.catCount > 0) {
+      analysisFacts.push(
+        row.catCount.toLocaleString("de-DE") +
+        (row.catCount === 1 ? " Katze" : " Katzen")
+      );
+    }
+    if (row.objectCount > 0) {
+      analysisFacts.push(
+        row.objectCount.toLocaleString("de-DE") +
+        (row.objectCount === 1 ? " Motiv" : " Motive")
+      );
+    }
+    if (row.semanticReady) analysisFacts.push("SigLIP2");
+    if (row.catalogSemanticReady) analysisFacts.push("Qwen 4B");
+
+    const identityMarkers = row.markerLabels
+      .filter(
+        (label) =>
+          label.startsWith("Person: ") ||
+          label.startsWith("Haustier: ")
+      )
+      .slice(0, 4)
+      .map((label) => label.replace(/^Person: /, "").replace(/^Haustier: /, ""));
+
+    if (identityMarkers.length > 0) {
+      analysisFacts.push(identityMarkers.join(", "));
+    }
+
+    if (analysisFacts.length > 0) {
+      const summary = document.createElement("small");
+      summary.className = "analysis-stage-summary";
+      summary.textContent = analysisFacts.join(" · ");
+      summary.title = "Bereits gespeicherte Analyseergebnisse";
+      analysisCell.appendChild(summary);
+    }
 
     const actionCell = document.createElement("td");
     if (row.availability === "MISSING" && row.recycleState === "RESTORABLE") {
