@@ -280,6 +280,7 @@ type CandidateReviewState = {
 
 let candidateReviewState: CandidateReviewState | null = null;
 let currentImagePreviewDetails: MediaDetails | null = null;
+let imagePreviewDetailLoadToken = 0;
 
 function createLoadingIndicator(text = "Daten werden geladen …"): HTMLDivElement {
   const wrap = document.createElement("div");
@@ -2432,12 +2433,8 @@ function renderImagePreviewOverlay(details: MediaDetails): void {
             (identity.kind === "person" ? "Gesicht" : "Haustierfundstelle") +
             " wurde „" + name + "“ zugeordnet und bestätigt.";
 
-          const refreshed = await window.imageSorter.catalog.getMediaDetails(details.mediaId);
-          if (refreshed && imagePreviewDialog.open) {
-            const facets = await window.imageSorter.catalog.getSearchFacets(details.sourceId);
-            fillPreviewIdentityNames(facets.persons, facets.pets);
-            renderImagePreviewDetails(refreshed);
-            renderImagePreviewOverlay(refreshed);
+          if (imagePreviewDialog.open) {
+            await loadImagePreviewDetails(details.mediaId);
           }
 
           await Promise.all([
@@ -2928,36 +2925,82 @@ function renderImagePreviewDetails(details: MediaDetails): void {
   appendDetailSection("Analyse-Pipeline", jobs);
 }
 
-async function loadImagePreviewDetails(mediaId: number): Promise<void> {
-  imagePreviewDetails.replaceChildren();
+async function loadImagePreviewDetails(
+  mediaId: number
+): Promise<MediaDetails | null> {
+  const loadToken = ++imagePreviewDetailLoadToken;
+  imagePreviewDetails.replaceChildren(
+    createLoadingIndicator("Daten werden geladen …")
+  );
   imagePreviewOverlay.replaceChildren();
-  const loading = document.createElement("div");
-  loading.className = "image-preview-detail-loading";
-  loading.textContent = "Daten werden geladen …";
-  imagePreviewDetails.appendChild(loading);
 
   try {
     const details = await window.imageSorter.catalog.getMediaDetails(mediaId);
-    if (!imagePreviewDialog.open) return;
+    if (
+      !imagePreviewDialog.open ||
+      loadToken !== imagePreviewDetailLoadToken
+    ) {
+      return null;
+    }
+
     if (!details) {
       imagePreviewDetails.replaceChildren();
       const empty = document.createElement("div");
       empty.className = "image-preview-detail-empty";
       empty.textContent = "Für dieses Medium wurden keine Detaildaten gefunden.";
       imagePreviewDetails.appendChild(empty);
-      return;
+      return null;
     }
+
+    // Die eigentlichen Mediendaten sofort anzeigen. Die Namens-Facetten sind
+    // nur Zusatzdaten für die Eingabefelder und dürfen die Detailansicht nicht
+    // blockieren.
     currentImagePreviewDetails = details;
-    const facets = await window.imageSorter.catalog.getSearchFacets(details.sourceId);
-    fillPreviewIdentityNames(facets.persons, facets.pets);
     renderImagePreviewDetails(details);
     if (!isVideoExtension(details.extension)) {
       renderImagePreviewOverlay(details);
     } else {
       imagePreviewOverlay.replaceChildren();
     }
+
+    window.setTimeout(() => {
+      if (
+        !imagePreviewDialog.open ||
+        loadToken !== imagePreviewDetailLoadToken
+      ) {
+        return;
+      }
+
+      void window.imageSorter.catalog
+        .getSearchFacets(details.sourceId)
+        .then((facets) => {
+          if (
+            !imagePreviewDialog.open ||
+            loadToken !== imagePreviewDetailLoadToken ||
+            currentImagePreviewDetails?.mediaId !== mediaId
+          ) {
+            return;
+          }
+          fillPreviewIdentityNames(facets.persons, facets.pets);
+          if (!isVideoExtension(details.extension)) {
+            renderImagePreviewOverlay(details);
+          }
+        })
+        .catch(() => {
+          // Die Detailansicht ist bereits vollständig nutzbar; eine langsame
+          // oder fehlgeschlagene Namensliste darf sie nicht wieder verdecken.
+        });
+    }, isVideoExtension(details.extension) ? 500 : 0);
+
+    return details;
   } catch (error) {
-    if (!imagePreviewDialog.open) return;
+    if (
+      !imagePreviewDialog.open ||
+      loadToken !== imagePreviewDetailLoadToken
+    ) {
+      return null;
+    }
+
     imagePreviewDetails.replaceChildren();
     const message = document.createElement("div");
     message.className = "image-preview-detail-error";
@@ -2965,6 +3008,7 @@ async function loadImagePreviewDetails(mediaId: number): Promise<void> {
       "Detaildaten konnten nicht geladen werden: " +
       (error instanceof Error ? error.message : String(error));
     imagePreviewDetails.appendChild(message);
+    return null;
   }
 }
 
@@ -3076,7 +3120,8 @@ function openImagePreview(
 
   if (video) {
     imagePreviewImage.removeAttribute("src");
-    imagePreviewVideo.src = fullMediaUrl(mediaId);
+    imagePreviewVideo.pause();
+    imagePreviewVideo.removeAttribute("src");
     imagePreviewVideo.load();
   } else {
     imagePreviewVideo.pause();
@@ -3090,7 +3135,21 @@ function openImagePreview(
     imagePreviewDialog.showModal();
   }
 
-  void loadImagePreviewDetails(mediaId);
+  void loadImagePreviewDetails(mediaId).then((details) => {
+    if (
+      !video ||
+      !details ||
+      !imagePreviewDialog.open ||
+      currentImagePreviewDetails?.mediaId !== mediaId
+    ) {
+      return;
+    }
+
+    // Erst nach dem Detail-IPC den Videostream starten. Damit konkurriert
+    // getMediaPreviewInfo nicht mit der Detailabfrage im Katalog-Worker.
+    imagePreviewVideo.src = fullMediaUrl(mediaId);
+    imagePreviewVideo.load();
+  });
 }
 
 imagePreviewImage.addEventListener("load", () => {
@@ -3103,6 +3162,8 @@ imagePreviewImage.addEventListener("load", () => {
 });
 
 imagePreviewDialog.addEventListener("close", () => {
+  imagePreviewDetailLoadToken += 1;
+  currentImagePreviewDetails = null;
   imagePreviewVideo.pause();
   imagePreviewVideo.removeAttribute("src");
   imagePreviewVideo.load();
