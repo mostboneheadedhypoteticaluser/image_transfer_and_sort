@@ -1060,6 +1060,15 @@ function registerIpc(): void {
           "reanalyzeMedia",
           { mediaId }
         );
+
+        // Die gespeicherten Vergleichszähler dürfen den Neuaufbau nicht
+        // überspringen, falls nach der Neuanalyse wieder gleich viele Treffer
+        // entstehen wie zuvor.
+        groupedFaceEmbeddingCounts.delete(result.sourceId);
+        groupedPetEmbeddingCounts.delete(result.sourceId);
+        schedulePersonRefresh();
+        scheduleLifeAreaRuleRefresh();
+
         return result;
       } finally {
         analysisCoordinator?.resumeAfterMaintenance();
