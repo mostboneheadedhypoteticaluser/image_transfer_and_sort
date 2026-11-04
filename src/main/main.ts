@@ -1073,6 +1073,27 @@ function registerIpc(): void {
   );
 
   ipcMain.handle(
+    "catalog:assignVideoFrameIdentityName",
+    (
+      _event,
+      mediaId: number,
+      timestampMs: number,
+      kind: "person" | "pet",
+      detectionIndex: number,
+      petClass: "dog" | "cat" | null,
+      name: string
+    ) =>
+      catalog!.request("assignVideoFrameIdentityName", {
+        mediaId,
+        timestampMs,
+        kind,
+        detectionIndex,
+        petClass,
+        name
+      })
+  );
+
+  ipcMain.handle(
     "catalog:reanalyzeMedia",
     async (_event, mediaId: number): Promise<ReanalyzeMediaResult> => {
       // Keine laufende Analyse darf nach dem Reset alte Ergebnisse wieder
