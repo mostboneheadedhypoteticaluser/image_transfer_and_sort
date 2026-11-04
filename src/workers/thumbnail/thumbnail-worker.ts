@@ -1,4 +1,4 @@
-import { mkdir, access } from "node:fs/promises";
+import { mkdir, access, rename, rm } from "node:fs/promises";
 import path from "node:path";
 import sharp from "sharp";
 
@@ -106,15 +106,37 @@ async function createThumbnail(request: Request) {
   await mkdir(path.dirname(request.outputPath), { recursive: true });
 
   if (await exists(request.outputPath)) {
-    const metadata = await sharp(request.outputPath).metadata();
-    return {
-      path: request.outputPath,
-      width: metadata.width ?? 0,
-      height: metadata.height ?? 0,
-      format: metadata.format ?? "jpeg",
-      reused: true
-    };
+    try {
+      const metadata = await sharp(request.outputPath).metadata();
+      const width = metadata.width ?? 0;
+      const height = metadata.height ?? 0;
+
+      if (width > 0 && height > 0) {
+        return {
+          path: request.outputPath,
+          width,
+          height,
+          format: metadata.format ?? "jpeg",
+          reused: true
+        };
+      }
+    } catch {
+      // Ein früher abgebrochener/konkurrierender Schreibvorgang kann eine
+      // unvollständige Cache-Datei hinterlassen. Solche Dateien dürfen nicht
+      // dauerhaft jeden weiteren Versuch blockieren.
+    }
+
+    await rm(request.outputPath, { force: true });
   }
+
+  const tempPath =
+    request.outputPath +
+    ".tmp-" +
+    process.pid +
+    "-" +
+    Date.now().toString(36) +
+    "-" +
+    Math.random().toString(36).slice(2);
 
   if (request.mode === "face-crop" || request.mode === "pet-crop") {
     if (!request.crop) {
@@ -135,23 +157,61 @@ async function createThumbnail(request: Request) {
       request.mode === "pet-crop" ? 0.16 : 0.42
     );
 
+    try {
+      const info = await sharp(request.inputPath, {
+        failOn: "warning",
+        sequentialRead: true
+      })
+        .rotate()
+        .extract(region)
+        .resize({
+          width: request.maxWidth,
+          height: request.maxHeight,
+          fit: "cover",
+          position: "centre"
+        })
+        .jpeg({
+          quality: 82,
+          mozjpeg: true
+        })
+        .toFile(tempPath);
+
+      await rm(request.outputPath, { force: true });
+      await rename(tempPath, request.outputPath);
+
+      return {
+        path: request.outputPath,
+        width: info.width,
+        height: info.height,
+        format: info.format,
+        reused: false
+      };
+    } catch (error) {
+      await rm(tempPath, { force: true }).catch(() => {});
+      throw error;
+    }
+  }
+
+  try {
     const info = await sharp(request.inputPath, {
       failOn: "warning",
       sequentialRead: true
     })
       .rotate()
-      .extract(region)
       .resize({
         width: request.maxWidth,
         height: request.maxHeight,
-        fit: "cover",
-        position: "centre"
+        fit: "inside",
+        withoutEnlargement: true
       })
       .jpeg({
-        quality: 82,
+        quality: 78,
         mozjpeg: true
       })
-      .toFile(request.outputPath);
+      .toFile(tempPath);
+
+    await rm(request.outputPath, { force: true });
+    await rename(tempPath, request.outputPath);
 
     return {
       path: request.outputPath,
@@ -160,32 +220,10 @@ async function createThumbnail(request: Request) {
       format: info.format,
       reused: false
     };
+  } catch (error) {
+    await rm(tempPath, { force: true }).catch(() => {});
+    throw error;
   }
-
-  const info = await sharp(request.inputPath, {
-    failOn: "warning",
-    sequentialRead: true
-  })
-    .rotate()
-    .resize({
-      width: request.maxWidth,
-      height: request.maxHeight,
-      fit: "inside",
-      withoutEnlargement: true
-    })
-    .jpeg({
-      quality: 78,
-      mozjpeg: true
-    })
-    .toFile(request.outputPath);
-
-  return {
-    path: request.outputPath,
-    width: info.width,
-    height: info.height,
-    format: info.format,
-    reused: false
-  };
 }
 
 parentPort.on("message", async (event) => {
