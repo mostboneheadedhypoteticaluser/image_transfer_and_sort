@@ -2304,48 +2304,27 @@ function previewDetectionPercent(
   return Math.max(0, Math.min(100, (value / total) * 100));
 }
 
-function renderImagePreviewOverlay(details: MediaDetails): void {
+type PreviewOverlayIdentity = {
+  kind: "person" | "pet";
+  id: number;
+  name: string | null;
+  suggestionName: string | null;
+  confirmed: boolean;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  petClass?: "dog" | "cat" | null;
+  onAssign: (name: string) => Promise<void>;
+};
+
+function renderPreviewIdentityOverlay(
+  identities: PreviewOverlayIdentity[],
+  naturalWidth: number,
+  naturalHeight: number
+): void {
   imagePreviewOverlay.replaceChildren();
-
-  const naturalWidth = imagePreviewImage.naturalWidth || details.imageMetadata?.width || 0;
-  const naturalHeight = imagePreviewImage.naturalHeight || details.imageMetadata?.height || 0;
   if (!naturalWidth || !naturalHeight) return;
-
-  type OverlayIdentity = {
-    kind: "person" | "pet";
-    id: number;
-    name: string | null;
-    confirmed: boolean;
-    x: number;
-    y: number;
-    width: number;
-    height: number;
-    petClass?: "dog" | "cat";
-  };
-
-  const identities: OverlayIdentity[] = [
-    ...details.faces.map((face) => ({
-      kind: "person" as const,
-      id: face.id,
-      name: face.personName,
-      confirmed: Boolean(face.personId && face.assignmentSource === "CONFIRMED"),
-      x: face.x,
-      y: face.y,
-      width: face.width,
-      height: face.height
-    })),
-    ...details.pets.map((pet) => ({
-      kind: "pet" as const,
-      id: pet.id,
-      name: pet.petName,
-      confirmed: Boolean(pet.petId && pet.assignmentSource === "CONFIRMED"),
-      x: pet.x,
-      y: pet.y,
-      width: pet.width,
-      height: pet.height,
-      petClass: pet.petClass
-    }))
-  ];
 
   for (const identity of identities) {
     const box = document.createElement("div");
@@ -2353,6 +2332,9 @@ function renderImagePreviewOverlay(details: MediaDetails): void {
       "image-preview-detection " +
       identity.kind +
       (identity.confirmed ? " confirmed" : " unconfirmed");
+    box.tabIndex = 0;
+    box.setAttribute("role", "button");
+    box.setAttribute("aria-label", "Erkennung bearbeiten");
 
     const left = previewDetectionPercent(identity.x, naturalWidth);
     const top = previewDetectionPercent(identity.y, naturalHeight);
@@ -2370,25 +2352,40 @@ function renderImagePreviewOverlay(details: MediaDetails): void {
     box.style.width = width + "%";
     box.style.height = height + "%";
 
-    const editor = document.createElement("form");
-    editor.className = "image-preview-detection-editor";
-    editor.addEventListener("click", (event) => event.stopPropagation());
-
-    const kind = document.createElement("span");
-    kind.className = "image-preview-detection-kind";
-    kind.textContent =
+    const kindLabel =
       identity.kind === "person"
         ? "Person"
         : identity.petClass === "cat"
           ? "Katze"
           : "Hund";
+    const displayName =
+      identity.name ??
+      identity.suggestionName ??
+      kindLabel;
+
+    const badge = document.createElement("span");
+    badge.className = "image-preview-detection-badge";
+    badge.textContent =
+      (identity.confirmed ? displayName : "Vorschlag: " + displayName) +
+      " · " +
+      (identity.confirmed ? "bestätigt" : "unbestätigt");
+
+    const editor = document.createElement("form");
+    editor.className = "image-preview-detection-editor";
+    editor.hidden = true;
+    editor.addEventListener("click", (event) => event.stopPropagation());
+
+    const kind = document.createElement("span");
+    kind.className = "image-preview-detection-kind";
+    kind.textContent = kindLabel;
 
     const input = document.createElement("input");
     input.type = "text";
     input.maxLength = 120;
     input.autocomplete = "off";
-    input.value = identity.name ?? "";
-    input.placeholder = identity.name ? identity.name : "Name …";
+    const initialName = identity.name ?? identity.suggestionName ?? "";
+    input.value = initialName;
+    input.placeholder = initialName || "Name …";
     input.setAttribute(
       "list",
       identity.kind === "person"
@@ -2400,24 +2397,58 @@ function renderImagePreviewOverlay(details: MediaDetails): void {
       identity.kind === "person" ? "Personenname" : "Haustiername"
     );
 
+    // Der Vorschlag bleibt zunächst im Feld, sodass ein Klick auf ✓ ihn direkt
+    // bestätigt. Wer in das Feld klickt, bekommt dagegen sofort ein leeres
+    // Eingabefeld und kann einen anderen Namen eingeben/auswählen.
+    let inputEdited = false;
+    input.addEventListener("focus", () => {
+      if (!inputEdited && initialName && input.value === initialName) {
+        input.value = "";
+        inputEdited = true;
+      }
+    });
+    input.addEventListener("input", () => {
+      inputEdited = true;
+    });
+
     const save = document.createElement("button");
     save.type = "submit";
     save.className = "image-preview-detection-save";
     save.textContent = "✓";
     save.title = identity.confirmed
       ? "Zuordnung ändern oder erneut bestätigen"
-      : "Name zuweisen und bestätigen";
+      : "Vorschlag bestätigen";
 
     const state = document.createElement("span");
     state.className = "image-preview-detection-state";
     state.textContent = identity.confirmed ? "bestätigt" : "unbestätigt";
 
     editor.append(kind, input, save, state);
-    box.appendChild(editor);
+    box.append(badge, editor);
+
+    const toggleEditor = () => {
+      for (const other of imagePreviewOverlay.querySelectorAll<HTMLElement>(
+        ".image-preview-detection-editor"
+      )) {
+        if (other !== editor) other.hidden = true;
+      }
+      editor.hidden = !editor.hidden;
+    };
+
+    box.addEventListener("click", (event) => {
+      if (event.target === editor || editor.contains(event.target as Node)) return;
+      toggleEditor();
+    });
+    box.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        toggleEditor();
+      }
+    });
 
     editor.addEventListener("submit", (event) => {
       event.preventDefault();
-      const name = input.value.trim();
+      const name = input.value.trim() || initialName;
       if (!name) {
         input.focus();
         return;
@@ -2427,26 +2458,8 @@ function renderImagePreviewOverlay(details: MediaDetails): void {
         save.disabled = true;
         input.disabled = true;
         state.textContent = "speichert …";
-
         try {
-          if (identity.kind === "person") {
-            await window.imageSorter.people.assignDetectionName(identity.id, name);
-          } else {
-            await window.imageSorter.pets.assignDetectionName(identity.id, name);
-          }
-
-          progressText.textContent =
-            (identity.kind === "person" ? "Gesicht" : "Haustierfundstelle") +
-            " wurde „" + name + "“ zugeordnet und bestätigt.";
-
-          if (imagePreviewDialog.open) {
-            await loadImagePreviewDetails(details.mediaId);
-          }
-
-          await Promise.all([
-            refreshIdentityTabStats(),
-            refreshCatalog()
-          ]);
+          await identity.onAssign(name);
         } finally {
           save.disabled = false;
           input.disabled = false;
@@ -2455,6 +2468,318 @@ function renderImagePreviewOverlay(details: MediaDetails): void {
     });
 
     imagePreviewOverlay.appendChild(box);
+  }
+}
+
+function renderImagePreviewOverlay(details: MediaDetails): void {
+  const naturalWidth =
+    imagePreviewImage.naturalWidth || details.imageMetadata?.width || 0;
+  const naturalHeight =
+    imagePreviewImage.naturalHeight || details.imageMetadata?.height || 0;
+
+  const identities: PreviewOverlayIdentity[] = [
+    ...details.faces.map((face) => ({
+      kind: "person" as const,
+      id: face.id,
+      name: face.personName,
+      suggestionName: face.suggestedPersons[0]?.personName ?? null,
+      confirmed: Boolean(
+        face.personId && face.assignmentSource === "CONFIRMED"
+      ),
+      x: face.x,
+      y: face.y,
+      width: face.width,
+      height: face.height,
+      onAssign: async (name: string) => {
+        await window.imageSorter.people.assignDetectionName(face.id, name);
+        progressText.textContent =
+          "Gesicht wurde „" + name + "“ zugeordnet und bestätigt.";
+        if (imagePreviewDialog.open) {
+          await loadImagePreviewDetails(details.mediaId);
+        }
+        await Promise.all([
+          refreshIdentityTabStats(),
+          refreshCatalog()
+        ]);
+      }
+    })),
+    ...details.pets.map((pet) => ({
+      kind: "pet" as const,
+      id: pet.id,
+      name: pet.petName,
+      suggestionName: pet.suggestedPets[0]?.petName ?? null,
+      confirmed: Boolean(
+        pet.petId && pet.assignmentSource === "CONFIRMED"
+      ),
+      x: pet.x,
+      y: pet.y,
+      width: pet.width,
+      height: pet.height,
+      petClass: pet.petClass,
+      onAssign: async (name: string) => {
+        await window.imageSorter.pets.assignDetectionName(pet.id, name);
+        progressText.textContent =
+          "Haustierfundstelle wurde „" + name +
+          "“ zugeordnet und bestätigt.";
+        if (imagePreviewDialog.open) {
+          await loadImagePreviewDetails(details.mediaId);
+        }
+        await Promise.all([
+          refreshIdentityTabStats(),
+          refreshCatalog()
+        ]);
+      }
+    }))
+  ];
+
+  renderPreviewIdentityOverlay(identities, naturalWidth, naturalHeight);
+}
+
+function seekPreviewVideo(
+  video: HTMLVideoElement,
+  timestampMs: number
+): Promise<void> {
+  const target = Math.max(
+    0,
+    Math.min(
+      Number.isFinite(video.duration) ? video.duration : timestampMs / 1000,
+      timestampMs / 1000
+    )
+  );
+
+  if (
+    video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA &&
+    Math.abs(video.currentTime - target) < 0.03
+  ) {
+    return Promise.resolve();
+  }
+
+  return new Promise<void>((resolve, reject) => {
+    const cleanup = () => {
+      video.removeEventListener("seeked", onSeeked);
+      video.removeEventListener("error", onError);
+    };
+    const onSeeked = () => {
+      cleanup();
+      resolve();
+    };
+    const onError = () => {
+      cleanup();
+      reject(new Error("Videoframe konnte nicht geladen werden."));
+    };
+    video.addEventListener("seeked", onSeeked, { once: true });
+    video.addEventListener("error", onError, { once: true });
+
+    try {
+      video.currentTime = target;
+    } catch (error) {
+      cleanup();
+      reject(error);
+    }
+  });
+}
+
+function videoFrameDataUrl(
+  video: HTMLVideoElement,
+  maxWidth = 1600,
+  quality = 0.9
+): string {
+  const sourceWidth = Math.max(1, video.videoWidth);
+  const sourceHeight = Math.max(1, video.videoHeight);
+  const scale = Math.min(1, maxWidth / sourceWidth);
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(sourceWidth * scale));
+  canvas.height = Math.max(1, Math.round(sourceHeight * scale));
+  const context = canvas.getContext("2d");
+  if (!context) throw new Error("Szenenbild konnte nicht erzeugt werden.");
+  context.drawImage(video, 0, 0, canvas.width, canvas.height);
+  return canvas.toDataURL("image/jpeg", quality);
+}
+
+async function captureVideoFrameThumbnail(
+  video: HTMLVideoElement,
+  timestampMs: number
+): Promise<string> {
+  await seekPreviewVideo(video, timestampMs);
+  return videoFrameDataUrl(video, 320, 0.78);
+}
+
+async function refreshCurrentVideoFrameAfterAssignment(
+  details: MediaDetails,
+  timestampMs: number
+): Promise<void> {
+  const refreshed = await window.imageSorter.catalog.getMediaDetails(details.mediaId);
+  if (!refreshed || !imagePreviewDialog.open) return;
+  currentImagePreviewDetails = refreshed;
+  renderImagePreviewDetails(refreshed);
+
+  const frame = refreshed.videoAnalysis?.frames.find(
+    (item) => item.timestampMs === timestampMs
+  );
+  if (frame) {
+    renderVideoFrameOverlay(refreshed, frame);
+  }
+
+  void window.imageSorter.catalog
+    .getSearchFacets(refreshed.sourceId)
+    .then((facets) => fillPreviewIdentityNames(facets.persons, facets.pets))
+    .catch(() => undefined);
+}
+
+function renderVideoFrameOverlay(
+  details: MediaDetails,
+  frame: NonNullable<MediaDetails["videoAnalysis"]>["frames"][number]
+): void {
+  const identities: PreviewOverlayIdentity[] = frame.detections.map(
+    (detection) => ({
+      kind: detection.kind,
+      id: detection.detectionIndex,
+      name: detection.name,
+      suggestionName: detection.name,
+      confirmed: detection.confirmed,
+      x: detection.x,
+      y: detection.y,
+      width: detection.width,
+      height: detection.height,
+      petClass: detection.petClass,
+      onAssign: async (name: string) => {
+        await window.imageSorter.catalog.assignVideoFrameIdentityName(
+          details.mediaId,
+          frame.timestampMs,
+          detection.kind,
+          detection.detectionIndex,
+          detection.petClass,
+          name
+        );
+        progressText.textContent =
+          (detection.kind === "person" ? "Person" : "Haustier") +
+          " im Video bei " + videoTimestamp(frame.timestampMs) +
+          " wurde „" + name + "“ zugeordnet und bestätigt.";
+        await refreshCurrentVideoFrameAfterAssignment(
+          details,
+          frame.timestampMs
+        );
+        await refreshIdentityTabStats();
+      }
+    })
+  );
+
+  renderPreviewIdentityOverlay(
+    identities,
+    frame.width,
+    frame.height
+  );
+}
+
+async function openVideoFrameEditor(
+  details: MediaDetails,
+  frame: NonNullable<MediaDetails["videoAnalysis"]>["frames"][number]
+): Promise<void> {
+  imagePreviewVideo.pause();
+  await seekPreviewVideo(imagePreviewVideo, frame.timestampMs);
+  const dataUrl = videoFrameDataUrl(imagePreviewVideo);
+
+  currentVideoFrameTimestamp = frame.timestampMs;
+  imagePreviewImageWrap.hidden = false;
+  imagePreviewVideo.hidden = true;
+  imagePreviewBackToVideo.hidden = false;
+  imagePreviewImage.src = dataUrl;
+  imagePreviewImage.alt =
+    details.relativePath + " bei " + videoTimestamp(frame.timestampMs);
+  imagePreviewCaption.textContent =
+    details.relativePath + " · Szenenbild " + videoTimestamp(frame.timestampMs);
+
+  try {
+    await imagePreviewImage.decode();
+  } catch {
+    // onload/Browser-Decodierung genügt als Fallback.
+  }
+  if (!imagePreviewDialog.open || currentVideoFrameTimestamp !== frame.timestampMs) {
+    return;
+  }
+
+  renderVideoFrameOverlay(details, frame);
+
+  void window.imageSorter.catalog
+    .getSearchFacets(details.sourceId)
+    .then((facets) => fillPreviewIdentityNames(facets.persons, facets.pets))
+    .catch(() => undefined);
+}
+
+function restoreVideoPreview(): void {
+  if (!currentImagePreviewDetails) return;
+  currentVideoFrameTimestamp = null;
+  imagePreviewOverlay.replaceChildren();
+  imagePreviewImage.removeAttribute("src");
+  imagePreviewImageWrap.hidden = true;
+  imagePreviewVideo.hidden = false;
+  imagePreviewBackToVideo.hidden = true;
+  imagePreviewCaption.textContent = currentImagePreviewDetails.relativePath;
+}
+
+async function populateVideoFrameThumbnails(
+  details: MediaDetails,
+  gallery: HTMLElement
+): Promise<void> {
+  const frames = details.videoAnalysis?.frames ?? [];
+  if (frames.length === 0) return;
+
+  const token = ++videoFrameThumbnailLoadToken;
+  const capture = document.createElement("video");
+  capture.muted = true;
+  capture.preload = "auto";
+  capture.src = fullMediaUrl(details.mediaId);
+
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const onLoaded = () => {
+        cleanup();
+        resolve();
+      };
+      const onError = () => {
+        cleanup();
+        reject(new Error("Video konnte für Szenenbilder nicht geladen werden."));
+      };
+      const cleanup = () => {
+        capture.removeEventListener("loadedmetadata", onLoaded);
+        capture.removeEventListener("error", onError);
+      };
+      capture.addEventListener("loadedmetadata", onLoaded, { once: true });
+      capture.addEventListener("error", onError, { once: true });
+      capture.load();
+    });
+
+    for (const frame of frames) {
+      if (
+        token !== videoFrameThumbnailLoadToken ||
+        !imagePreviewDialog.open
+      ) {
+        break;
+      }
+
+      const image = gallery.querySelector<HTMLImageElement>(
+        'img[data-frame-ms="' + frame.timestampMs + '"]'
+      );
+      if (!image || image.dataset.loaded === "1") continue;
+
+      try {
+        image.src = await captureVideoFrameThumbnail(
+          capture,
+          frame.timestampMs
+        );
+        image.dataset.loaded = "1";
+      } catch {
+        image.alt = "Szenenbild konnte nicht geladen werden";
+      }
+
+      await new Promise<void>((resolve) =>
+        window.setTimeout(resolve, 0)
+      );
+    }
+  } finally {
+    capture.pause();
+    capture.removeAttribute("src");
+    capture.load();
   }
 }
 
