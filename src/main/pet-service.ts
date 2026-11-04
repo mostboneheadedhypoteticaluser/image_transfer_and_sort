@@ -6,6 +6,7 @@ import type {
   PetCandidate,
   PetClusterInput,
   PetCorrectionResult,
+  DirectIdentityAssignmentResult,
   SplitPetCandidateResult,
   AssignPetSelectionResult,
   PetEmbeddingSet,
