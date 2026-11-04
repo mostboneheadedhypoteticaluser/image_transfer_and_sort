@@ -1,4 +1,5 @@
 name: Build check
+# temporary current-head validation
 
 on:
   push:
