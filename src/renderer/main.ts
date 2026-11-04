@@ -2689,7 +2689,7 @@ function renderImagePreviewDetails(details: MediaDetails): void {
       } else {
         const emptyHits = document.createElement("div");
         emptyHits.className = "image-preview-detail-empty";
-        emptyHits.textContent = "Keine bestätigten Personen- oder Haustiertreffer gespeichert.";
+        emptyHits.textContent = "Keine bekannten Personen- oder Haustiertreffer gespeichert.";
         videoBody.appendChild(emptyHits);
       }
     } else {
@@ -4310,10 +4310,10 @@ function renderRows(rows: MediaRecord[], emptyText = "Noch keine Medien katalogi
     const analysisCell = document.createElement("td");
     analysisCell.className = "analysis-stage-cell";
     const analysisStage = document.createElement("span");
+    const displayedStage = displayedMediaAnalysisStage(row);
     analysisStage.className =
       "analysis-stage-badge " +
-      (row.analysisStageStatus === "DONE" ? "done" : "waiting");
-    const displayedStage = displayedMediaAnalysisStage(row);
+      (displayedStage ? "done" : "waiting");
     analysisStage.textContent = displayedStage
       ? analysisModuleLabel(displayedStage)
       : "Noch nicht analysiert";
