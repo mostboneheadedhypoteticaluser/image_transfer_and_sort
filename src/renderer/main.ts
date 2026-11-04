@@ -3331,8 +3331,16 @@ function libraryMarkerEntries(row: MediaRecord): string[] {
     const translated = MOTIF_LABELS_DE[label] ?? germanIdentityTerm(label);
     if (translated) marks.add(translated);
   }
-  for (const concept of row.semanticConcepts ?? []) {
-    const translated = germanIdentityTerm(concept);
+  for (const marker of row.markerLabels ?? []) {
+    if (
+      marker.startsWith("Person: ") ||
+      marker.startsWith("Haustier: ") ||
+      marker.startsWith("Lebensbereich: ")
+    ) {
+      marks.add(marker);
+      continue;
+    }
+    const translated = MOTIF_LABELS_DE[marker] ?? germanIdentityTerm(marker);
     if (translated) marks.add(translated);
   }
   return [...marks].sort((a, b) => a.localeCompare(b, "de"));
@@ -3365,6 +3373,29 @@ function libraryGroupLabel(row: MediaRecord): string {
       return row.availability === "AVAILABLE" ? "Verfügbar" : "Fehlend";
     case "marker":
       return libraryMarkerEntries(row)[0] ?? "Ohne Kennzeichen";
+    case "person":
+      return libraryMarkerEntries(row)
+        .find((mark) => mark.startsWith("Person: "))
+        ?.slice("Person: ".length) ?? "Ohne bestätigte Person";
+    case "pet":
+      return libraryMarkerEntries(row)
+        .find((mark) => mark.startsWith("Haustier: "))
+        ?.slice("Haustier: ".length) ?? "Ohne benanntes Haustier";
+    case "life-area":
+      return libraryMarkerEntries(row)
+        .find((mark) => mark.startsWith("Lebensbereich: "))
+        ?.slice("Lebensbereich: ".length) ?? "Ohne Lebensbereich";
+    case "motif":
+      return libraryMarkerEntries(row)
+        .find((mark) =>
+          !mark.startsWith("Person: ") &&
+          !mark.startsWith("Haustier: ") &&
+          !mark.startsWith("Lebensbereich: ") &&
+          mark !== "Gesicht" &&
+          mark !== "Dublette" &&
+          mark !== "Qwen 4B" &&
+          mark !== "SigLIP2"
+        ) ?? "Ohne Motivkennzeichen";
     default:
       return "";
   }
