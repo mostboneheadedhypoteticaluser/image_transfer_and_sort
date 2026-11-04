@@ -2607,9 +2607,97 @@ function renderImagePreviewDetails(details: MediaDetails): void {
       ? detailGrid(technicalRows)
       : Object.assign(document.createElement("div"), {
           className: "image-preview-detail-empty",
-          textContent: "Noch keine technischen Bildmetadaten vorhanden."
+          textContent: isVideoExtension(details.extension)
+            ? "Noch keine zusätzlichen technischen Metadaten vorhanden."
+            : "Noch keine technischen Bildmetadaten vorhanden."
         })
   );
+
+  if (isVideoExtension(details.extension)) {
+    const videoBody = document.createElement("div");
+    if (details.videoAnalysis) {
+      const video = details.videoAnalysis;
+      videoBody.appendChild(detailGrid([
+        ["Dauer", videoTimestamp(video.durationMs)],
+        ["Auflösung", video.width + " × " + video.height + " px"],
+        ["Bildrate", video.fps.toLocaleString("de-DE", { maximumFractionDigits: 3 }) + " fps"],
+        ["Analyseintervall", videoTimestamp(video.sampleIntervalMs)],
+        ["Analysierte Frames", video.sampledFrames],
+        ["Szenen", video.sceneCount]
+      ]));
+
+      const tagHeading = document.createElement("strong");
+      tagHeading.className = "image-detail-subheading";
+      tagHeading.textContent = "Erkannte Motive / Tags";
+      videoBody.appendChild(tagHeading);
+
+      if (video.tags.length > 0) {
+        const tags = document.createElement("div");
+        tags.className = "image-detail-list";
+        for (const tag of video.tags) {
+          const item = document.createElement("div");
+          item.className = "image-detail-item";
+          const title = document.createElement("strong");
+          title.textContent = MOTIF_LABELS_DE[tag.label] ?? tag.label;
+          const meta = document.createElement("small");
+          meta.textContent =
+            "Score " + detailPercent(tag.score) +
+            " · " + tag.hitCount.toLocaleString("de-DE") +
+            (tag.hitCount === 1 ? " Treffer" : " Treffer");
+          item.append(title, meta);
+          tags.appendChild(item);
+        }
+        videoBody.appendChild(tags);
+      } else {
+        const emptyTags = document.createElement("div");
+        emptyTags.className = "image-preview-detail-empty";
+        emptyTags.textContent = "Keine Video-Tags gespeichert.";
+        videoBody.appendChild(emptyTags);
+      }
+
+      const identityHeading = document.createElement("strong");
+      identityHeading.className = "image-detail-subheading";
+      identityHeading.textContent = "Personen- / Haustiertreffer";
+      videoBody.appendChild(identityHeading);
+
+      if (video.identityHits.length > 0) {
+        const hits = document.createElement("div");
+        hits.className = "image-detail-list";
+        for (const hit of video.identityHits) {
+          const item = document.createElement("div");
+          item.className = "image-detail-item";
+          const title = document.createElement("strong");
+          const kind =
+            hit.kind === "person"
+              ? "Person"
+              : hit.petClass === "cat"
+                ? "Katze"
+                : "Hund";
+          title.textContent = kind + ": " + (hit.name ?? "noch nicht benannt");
+          const meta = document.createElement("small");
+          meta.textContent =
+            videoTimestamp(hit.startMs) + " – " + videoTimestamp(hit.endMs) +
+            " · " + hit.hitCount.toLocaleString("de-DE") +
+            (hit.hitCount === 1 ? " Treffer" : " Treffer") +
+            (hit.maxSimilarity !== null
+              ? " · Ähnlichkeit " + detailPercent(hit.maxSimilarity)
+              : "");
+          item.append(title, meta);
+          hits.appendChild(item);
+        }
+        videoBody.appendChild(hits);
+      } else {
+        const emptyHits = document.createElement("div");
+        emptyHits.className = "image-preview-detail-empty";
+        emptyHits.textContent = "Keine bestätigten Personen- oder Haustiertreffer gespeichert.";
+        videoBody.appendChild(emptyHits);
+      }
+    } else {
+      videoBody.className = "image-preview-detail-empty";
+      videoBody.textContent = "Die Videoanalyse ist noch nicht abgeschlossen.";
+    }
+    appendDetailSection("Videoanalyse", videoBody);
+  }
 
   const faceList = document.createElement("div");
   faceList.className = "image-detail-list";
