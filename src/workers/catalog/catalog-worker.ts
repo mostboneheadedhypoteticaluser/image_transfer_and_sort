@@ -11564,9 +11564,20 @@ function getMediaDetails(mediaId: number) {
   `).get(mediaId, currentSha);
 
   const videoAnalysis = db.prepare(
-    "SELECT duration_ms,width,height,fps,sample_interval_ms,sampled_frames,scene_count " +
+    "SELECT duration_ms,width,height,fps,sample_interval_ms,sampled_frames,scene_count,frames_json " +
     "FROM media_video_analysis WHERE media_id=? AND input_sha256=?"
   ).get(mediaId, currentSha);
+
+  const videoFrameOverrides = db.prepare(
+    "SELECT vfo.timestamp_ms,vfo.identity_kind,vfo.detection_index,vfo.pet_class," +
+    "vfo.identity_id," +
+    "CASE WHEN vfo.identity_kind='person' THEN p.name " +
+    "WHEN vfo.identity_kind='pet' THEN pe.name ELSE NULL END AS identity_name " +
+    "FROM video_frame_identity_overrides vfo " +
+    "LEFT JOIN persons p ON vfo.identity_kind='person' AND p.id=vfo.identity_id " +
+    "LEFT JOIN pets pe ON vfo.identity_kind='pet' AND pe.id=vfo.identity_id " +
+    "WHERE vfo.media_id=?"
+  ).all(mediaId);
   const videoTags = db.prepare(
     "SELECT label,score,hit_count FROM video_tags WHERE media_id=? " +
     "ORDER BY hit_count DESC,score DESC,label"
@@ -11697,6 +11708,90 @@ function getMediaDetails(mediaId: number) {
       .sort((left, right) => right.similarity - left.similarity)
       .slice(0, 5);
   };
+
+  const overrideByFrameDetection = new Map<string, any>();
+  for (const row of videoFrameOverrides) {
+    overrideByFrameDetection.set(
+      [
+        Number(row.timestamp_ms),
+        String(row.identity_kind),
+        Number(row.detection_index)
+      ].join(":"),
+      row
+    );
+  }
+
+  const videoFrames = videoAnalysis
+    ? jsonArray(videoAnalysis.frames_json)
+        .map((rawFrame) => {
+          if (!rawFrame || typeof rawFrame !== "object") return null;
+          const frame = rawFrame as Record<string, unknown>;
+          const timestampMs = Math.max(0, Math.trunc(Number(frame.timestampMs) || 0));
+          const frameWidth = Math.max(1, Math.trunc(Number(frame.width) || Number(videoAnalysis.width) || 1));
+          const frameHeight = Math.max(1, Math.trunc(Number(frame.height) || Number(videoAnalysis.height) || 1));
+          const detections: Array<Record<string, unknown>> = [];
+
+          const appendDetection = (
+            kind: "person" | "pet",
+            rawDetection: unknown,
+            fallbackIndex: number
+          ) => {
+            if (!rawDetection || typeof rawDetection !== "object") return;
+            const detection = rawDetection as Record<string, unknown>;
+            const detectionIndex = Math.max(
+              0,
+              Math.trunc(Number(detection.detectionIndex) || fallbackIndex)
+            );
+            const override = overrideByFrameDetection.get(
+              [timestampMs, kind, detectionIndex].join(":")
+            );
+            const suggestedId =
+              detection.id === null || detection.id === undefined
+                ? null
+                : Number(detection.id);
+            const suggestedName = detection.name ? String(detection.name) : null;
+            const suggestedSimilarity =
+              detection.similarity === null || detection.similarity === undefined
+                ? null
+                : Number(detection.similarity);
+
+            detections.push({
+              detectionIndex,
+              kind,
+              petClass:
+                kind === "pet"
+                  ? String(detection.petClass) === "cat" ? "cat" : "dog"
+                  : null,
+              score: Number(detection.score ?? 0),
+              x: Number(detection.x ?? 0),
+              y: Number(detection.y ?? 0),
+              width: Number(detection.width ?? 0),
+              height: Number(detection.height ?? 0),
+              identityId: override ? Number(override.identity_id) : suggestedId,
+              name: override
+                ? override.identity_name === null ? null : String(override.identity_name)
+                : suggestedName,
+              similarity: override ? null : suggestedSimilarity,
+              confirmed: Boolean(override)
+            });
+          };
+
+          const persons = Array.isArray(frame.persons) ? frame.persons : [];
+          persons.forEach((entry, index) => appendDetection("person", entry, index));
+          const pets = Array.isArray(frame.pets) ? frame.pets : [];
+          pets.forEach((entry, index) => appendDetection("pet", entry, index));
+
+          return {
+            timestampMs,
+            sceneChange: Boolean(frame.sceneChange),
+            width: frameWidth,
+            height: frameHeight,
+            detections
+          };
+        })
+        .filter((frame): frame is NonNullable<typeof frame> => frame !== null)
+        .filter((frame) => frame.detections.length > 0)
+    : [];
 
   return {
     mediaId: Number(media.id),
@@ -11884,7 +11979,8 @@ function getMediaDetails(mediaId: number) {
             endMs: Number(row.end_ms),
             hitCount: Number(row.hit_count),
             maxSimilarity: row.max_similarity === null ? null : Number(row.max_similarity)
-          }))
+          })),
+          frames: videoFrames
         }
       : null,
     lifeAreas: lifeAreaStore.assignmentsForMedia(mediaId)
