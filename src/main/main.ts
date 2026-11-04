@@ -35,6 +35,7 @@ import type {
   IgnorePersonResult,
   IgnorePetResult,
   DuplicateGroup,
+  DirectIdentityAssignmentResult,
   FaceCropInfo,
   MediaPreviewInfo,
   MediaDetails,
