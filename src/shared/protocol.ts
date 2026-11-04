@@ -733,6 +733,8 @@ export type MediaRecord = {
   objectCount: number;
   objectLabels: string[];
   markerLabels: string[];
+  analysisStage: string;
+  analysisStageStatus: "DONE" | "RUNNING" | "PENDING" | "FAILED" | "UNAVAILABLE" | "NONE";
   semanticReady: boolean;
   semanticModel: string | null;
   semanticScore: number | null;
