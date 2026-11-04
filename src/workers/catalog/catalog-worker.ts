@@ -8917,6 +8917,81 @@ function removePetFromPet(petId: number, petDetectionId: number) {
   }
 }
 
+function assignPetDetectionName(petDetectionId: number, rawName: unknown) {
+  const name = typeof rawName === "string" ? rawName.trim() : "";
+  if (!name) throw new Error("Bitte einen Namen für das Haustier eingeben.");
+  if (name.length > 120) throw new Error("Der Haustiername ist zu lang.");
+
+  const pet = db.prepare(\`
+    SELECT pd.id, pd.pet_class, m.source_id
+    FROM pet_fused_detections pd
+    JOIN media_items m ON m.id=pd.media_id
+    WHERE pd.id=?
+      AND m.availability='AVAILABLE'
+      AND pd.input_sha256=m.sha256
+  \`).get(petDetectionId);
+
+  if (!pet) throw new Error("Die Haustierfundstelle wurde nicht gefunden.");
+
+  const sourceId = Number(pet.source_id);
+  const petClass = String(pet.pet_class);
+  const equivalentIds = equivalentPetDetectionIds(petDetectionId, sourceId);
+  const ids = equivalentIds.length > 0 ? equivalentIds : [petDetectionId];
+
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const existing = db.prepare(
+      "SELECT id FROM pets WHERE name=? COLLATE NOCASE AND pet_class=? ORDER BY id LIMIT 1"
+    ).get(name, petClass);
+    const petId = existing
+      ? Number(existing.id)
+      : Number(
+          db.prepare("INSERT INTO pets(name,pet_class) VALUES(?,?)")
+            .run(name, petClass).lastInsertRowid
+        );
+
+    const assign = db.prepare(\`
+      INSERT INTO pet_assignments(
+        pet_detection_id, pet_id, assignment_source, confidence, updated_at
+      )
+      VALUES(?,?,'CONFIRMED',NULL,CURRENT_TIMESTAMP)
+      ON CONFLICT(pet_detection_id) DO UPDATE SET
+        pet_id=excluded.pet_id,
+        assignment_source='CONFIRMED',
+        confidence=NULL,
+        updated_at=CURRENT_TIMESTAMP
+    \`);
+    const clearExclusion = db.prepare(
+      "DELETE FROM pet_assignment_exclusions WHERE pet_id=? AND pet_detection_id=?"
+    );
+    const removeCandidate = db.prepare(
+      "DELETE FROM pet_candidate_items WHERE pet_detection_id=?"
+    );
+
+    for (const id of ids) {
+      clearExclusion.run(petId, id);
+      assign.run(id, petId);
+      removeCandidate.run(id);
+    }
+
+    db.prepare(\`
+      DELETE FROM pet_candidates
+      WHERE NOT EXISTS (
+        SELECT 1 FROM pet_candidate_items pci
+        WHERE pci.candidate_id=pet_candidates.id
+      )
+    \`).run();
+    db.prepare("DELETE FROM pet_cluster_runs WHERE source_id=?").run(sourceId);
+    db.prepare("UPDATE pets SET updated_at=CURRENT_TIMESTAMP WHERE id=?").run(petId);
+
+    db.exec("COMMIT");
+    return { identityId: petId, name, affected: ids.length };
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+}
+
 function renamePet(petId: number, rawName: unknown) {
   const name = typeof rawName === "string" ? rawName.trim() : "";
   if (!name) throw new Error("Bitte einen Namen für das Haustier eingeben.");
@@ -10145,6 +10220,77 @@ function removeFaceFromPerson(personId: number, faceDetectionId: number) {
 
     db.exec("COMMIT");
     return { changed: true, affectedFaces: assignedEquivalentIds.length };
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+}
+
+function assignFaceDetectionName(faceDetectionId: number, rawName: unknown) {
+  const name = typeof rawName === "string" ? rawName.trim() : "";
+  if (!name) throw new Error("Bitte einen Namen für das Gesicht eingeben.");
+  if (name.length > 120) throw new Error("Der Personenname ist zu lang.");
+
+  const face = db.prepare(\`
+    SELECT fd.id, m.source_id
+    FROM face_detections fd
+    JOIN media_items m ON m.id=fd.media_id
+    WHERE fd.id=?
+      AND m.availability='AVAILABLE'
+      AND fd.input_sha256=m.sha256
+  \`).get(faceDetectionId);
+
+  if (!face) throw new Error("Das Gesicht wurde nicht gefunden.");
+
+  const sourceId = Number(face.source_id);
+  const equivalentIds = equivalentFaceIds(faceDetectionId, sourceId);
+  const ids = equivalentIds.length > 0 ? equivalentIds : [faceDetectionId];
+
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const existing = db.prepare(
+      "SELECT id FROM persons WHERE name=? COLLATE NOCASE ORDER BY id LIMIT 1"
+    ).get(name);
+    const personId = existing
+      ? Number(existing.id)
+      : Number(db.prepare("INSERT INTO persons(name) VALUES(?)").run(name).lastInsertRowid);
+
+    const assign = db.prepare(\`
+      INSERT INTO person_face_assignments(
+        face_detection_id, person_id, assignment_source, confidence, updated_at
+      )
+      VALUES(?,?,'CONFIRMED',NULL,CURRENT_TIMESTAMP)
+      ON CONFLICT(face_detection_id) DO UPDATE SET
+        person_id=excluded.person_id,
+        assignment_source='CONFIRMED',
+        confidence=NULL,
+        updated_at=CURRENT_TIMESTAMP
+    \`);
+    const clearExclusion = db.prepare(
+      "DELETE FROM person_face_exclusions WHERE person_id=? AND face_detection_id=?"
+    );
+    const removeCandidate = db.prepare(
+      "DELETE FROM person_candidate_faces WHERE face_detection_id=?"
+    );
+
+    for (const id of ids) {
+      clearExclusion.run(personId, id);
+      assign.run(id, personId);
+      removeCandidate.run(id);
+    }
+
+    db.prepare(\`
+      DELETE FROM person_candidates
+      WHERE NOT EXISTS (
+        SELECT 1 FROM person_candidate_faces pcf
+        WHERE pcf.candidate_id=person_candidates.id
+      )
+    \`).run();
+    db.prepare("DELETE FROM person_cluster_runs WHERE source_id=?").run(sourceId);
+    db.prepare("UPDATE persons SET updated_at=CURRENT_TIMESTAMP WHERE id=?").run(personId);
+
+    db.exec("COMMIT");
+    return { identityId: personId, name, affected: ids.length };
   } catch (error) {
     db.exec("ROLLBACK");
     throw error;
@@ -12080,6 +12226,11 @@ async function dispatch(method: CatalogMethod, payload: Record<string, unknown> 
         asNumber(payload.petId, "petId"),
         payload.name
       );
+    case "assignPetDetectionName":
+      return assignPetDetectionName(
+        asNumber(payload.petDetectionId, "petDetectionId"),
+        payload.name
+      );
     case "getPetCropInfo":
       return getPetCropInfo(asNumber(payload.petDetectionId, "petDetectionId"));
     case "getFaceDetectionsForEmbedding":
@@ -12181,6 +12332,11 @@ async function dispatch(method: CatalogMethod, payload: Record<string, unknown> 
     case "renamePerson":
       return renamePerson(
         asNumber(payload.personId, "personId"),
+        payload.name
+      );
+    case "assignFaceDetectionName":
+      return assignFaceDetectionName(
+        asNumber(payload.faceDetectionId, "faceDetectionId"),
         payload.name
       );
     case "getFaceCropInfo":
