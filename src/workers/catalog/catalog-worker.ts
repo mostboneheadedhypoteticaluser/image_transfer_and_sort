@@ -7179,15 +7179,49 @@ function completeVideoAnalysisJob(jobId: number, result: unknown) {
   );
   const rawFrames = Array.isArray(value.frames) ? value.frames : [];
   const rawTags = Array.isArray(value.tags) ? value.tags : [];
-  const knownPersons = knownPersonCentroids();
-  const knownPets = knownPetCentroids();
+  const knownPersons = knownPersonCentroids(sourceId);
+  const knownPets = knownPetCentroids(sourceId);
+
+  type FramePerson = {
+    detectionIndex: number;
+    score: number;
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    id: number | null;
+    name: string | null;
+    similarity: number | null;
+    trackEligible: boolean;
+  };
+
+  type FramePet = {
+    detectionIndex: number;
+    petClass: "dog" | "cat";
+    score: number;
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    id: number | null;
+    name: string | null;
+    similarity: number | null;
+    trackEligible: boolean;
+  };
 
   type FrameMatch = {
     timestampMs: number;
     sceneChange: boolean;
-    persons: Array<{ id: number; name: string; similarity: number }>;
-    pets: Array<{ id: number; name: string; petClass: string; similarity: number }>;
+    width: number;
+    height: number;
+    persons: FramePerson[];
+    pets: FramePet[];
     objects: string[];
+  };
+
+  const finiteNumber = (raw: unknown) => {
+    const numeric = Number(raw);
+    return Number.isFinite(numeric) ? numeric : 0;
   };
 
   const compactFrames: FrameMatch[] = [];
@@ -7199,63 +7233,109 @@ function completeVideoAnalysisJob(jobId: number, result: unknown) {
       0,
       Math.min(durationMs, Math.trunc(Number(frame.timestampMs) || 0))
     );
+    const frameWidth = Math.max(1, Math.trunc(Number(frame.width) || width || 1));
+    const frameHeight = Math.max(1, Math.trunc(Number(frame.height) || height || 1));
 
-    const persons: FrameMatch["persons"] = [];
-    for (const rawFace of Array.isArray(frame.faces) ? frame.faces : []) {
+    const persons: FramePerson[] = [];
+    const rawFaces = Array.isArray(frame.faces) ? frame.faces : [];
+    for (let detectionIndex = 0; detectionIndex < rawFaces.length; detectionIndex += 1) {
+      const rawFace = rawFaces[detectionIndex];
       if (!rawFace || typeof rawFace !== "object") continue;
-      const vectorRaw = (rawFace as Record<string, unknown>).vector;
-      if (!Array.isArray(vectorRaw) || vectorRaw.length === 0) continue;
-      const vector = vectorRaw.map(Number);
-      if (vector.some((entry) => !Number.isFinite(entry))) continue;
+      const face = rawFace as Record<string, unknown>;
+      const vectorRaw = face.vector;
+      let bestId: number | null = null;
+      let bestName: string | null = null;
+      let bestSimilarity: number | null = null;
+      let trackEligible = false;
 
-      const matches = knownPersons
-        .map((known) => ({
-          known,
-          similarity: cosineSimilarity(vector, known.vector)
-        }))
-        .sort((left, right) => right.similarity - left.similarity);
+      if (Array.isArray(vectorRaw) && vectorRaw.length > 0) {
+        const vector = vectorRaw.map(Number);
+        if (vector.every((entry) => Number.isFinite(entry))) {
+          const matches = knownPersons
+            .map((known) => ({
+              known,
+              similarity: cosineSimilarity(vector, known.vector)
+            }))
+            .sort((left, right) => right.similarity - left.similarity);
 
-      const best = matches[0];
-      const second = matches[1]?.similarity ?? -1;
-      if (best && best.similarity >= 0.60 && best.similarity - second >= 0.025) {
-        persons.push({
-          id: best.known.id,
-          name: best.known.name,
-          similarity: best.similarity
-        });
+          const best = matches[0];
+          const second = matches[1]?.similarity ?? -1;
+          if (best && best.similarity >= 0.48) {
+            bestId = best.known.id;
+            bestName = best.known.name;
+            bestSimilarity = best.similarity;
+            trackEligible =
+              best.similarity >= 0.60 &&
+              best.similarity - second >= 0.025;
+          }
+        }
       }
+
+      persons.push({
+        detectionIndex,
+        score: finiteNumber(face.score),
+        x: finiteNumber(face.x),
+        y: finiteNumber(face.y),
+        width: Math.max(0, finiteNumber(face.width)),
+        height: Math.max(0, finiteNumber(face.height)),
+        id: bestId,
+        name: bestName,
+        similarity: bestSimilarity,
+        trackEligible
+      });
     }
 
-    const pets: FrameMatch["pets"] = [];
-    for (const rawPet of Array.isArray(frame.pets) ? frame.pets : []) {
+    const pets: FramePet[] = [];
+    const rawPets = Array.isArray(frame.pets) ? frame.pets : [];
+    for (let detectionIndex = 0; detectionIndex < rawPets.length; detectionIndex += 1) {
+      const rawPet = rawPets[detectionIndex];
       if (!rawPet || typeof rawPet !== "object") continue;
       const pet = rawPet as Record<string, unknown>;
-      const petClass = String(pet.petClass ?? "");
+      const petClass: "dog" | "cat" =
+        String(pet.petClass ?? "") === "cat" ? "cat" : "dog";
       const vectorRaw = pet.vector;
-      if (petClass !== "dog" || !Array.isArray(vectorRaw) || vectorRaw.length === 0) {
-        continue;
-      }
-      const vector = vectorRaw.map(Number);
-      if (vector.some((entry) => !Number.isFinite(entry))) continue;
+      let bestId: number | null = null;
+      let bestName: string | null = null;
+      let bestSimilarity: number | null = null;
+      let trackEligible = false;
 
-      const matches = knownPets
-        .filter((known) => known.petClass === petClass)
-        .map((known) => ({
-          known,
-          similarity: cosineSimilarity(vector, known.vector)
-        }))
-        .sort((left, right) => right.similarity - left.similarity);
+      if (petClass === "dog" && Array.isArray(vectorRaw) && vectorRaw.length > 0) {
+        const vector = vectorRaw.map(Number);
+        if (vector.every((entry) => Number.isFinite(entry))) {
+          const matches = knownPets
+            .filter((known) => known.petClass === petClass)
+            .map((known) => ({
+              known,
+              similarity: cosineSimilarity(vector, known.vector)
+            }))
+            .sort((left, right) => right.similarity - left.similarity);
 
-      const best = matches[0];
-      const second = matches[1]?.similarity ?? -1;
-      if (best && best.similarity >= 0.72 && best.similarity - second >= 0.04) {
-        pets.push({
-          id: best.known.id,
-          name: best.known.name,
-          petClass,
-          similarity: best.similarity
-        });
+          const best = matches[0];
+          const second = matches[1]?.similarity ?? -1;
+          if (best && best.similarity >= 0.52) {
+            bestId = best.known.id;
+            bestName = best.known.name;
+            bestSimilarity = best.similarity;
+            trackEligible =
+              best.similarity >= 0.72 &&
+              best.similarity - second >= 0.04;
+          }
+        }
       }
+
+      pets.push({
+        detectionIndex,
+        petClass,
+        score: finiteNumber(pet.score),
+        x: finiteNumber(pet.x),
+        y: finiteNumber(pet.y),
+        width: Math.max(0, finiteNumber(pet.width)),
+        height: Math.max(0, finiteNumber(pet.height)),
+        id: bestId,
+        name: bestName,
+        similarity: bestSimilarity,
+        trackEligible
+      });
     }
 
     const objects = [
@@ -7273,8 +7353,10 @@ function completeVideoAnalysisJob(jobId: number, result: unknown) {
     compactFrames.push({
       timestampMs,
       sceneChange: Boolean(frame.sceneChange),
-      persons: [...new Map(persons.map((entry) => [entry.id, entry])).values()],
-      pets: [...new Map(pets.map((entry) => [entry.id, entry])).values()],
+      width: frameWidth,
+      height: frameHeight,
+      persons,
+      pets,
       objects
     });
   }
@@ -7329,10 +7411,34 @@ function completeVideoAnalysisJob(jobId: number, result: unknown) {
 
   for (const frame of compactFrames) {
     for (const person of frame.persons) {
-      touchTrack("person", person.id, null, frame.timestampMs, person.similarity);
+      if (
+        person.trackEligible &&
+        person.id !== null &&
+        person.similarity !== null
+      ) {
+        touchTrack(
+          "person",
+          person.id,
+          null,
+          frame.timestampMs,
+          person.similarity
+        );
+      }
     }
     for (const pet of frame.pets) {
-      touchTrack("pet", pet.id, pet.petClass, frame.timestampMs, pet.similarity);
+      if (
+        pet.trackEligible &&
+        pet.id !== null &&
+        pet.similarity !== null
+      ) {
+        touchTrack(
+          "pet",
+          pet.id,
+          pet.petClass,
+          frame.timestampMs,
+          pet.similarity
+        );
+      }
     }
   }
   finishedTracks.push(...activeTracks.values());
@@ -7405,6 +7511,10 @@ function completeVideoAnalysisJob(jobId: number, result: unknown) {
         sampledFrames: compactFrames.length,
         sceneCount: Math.max(0, Math.trunc(Number(value.sceneCount) || 0)),
         identityTracks: finishedTracks.length,
+        frameIdentityDetections: compactFrames.reduce(
+          (sum, frame) => sum + frame.persons.length + frame.pets.length,
+          0
+        ),
         tags: rawTags.length
       }),
       jobId
