@@ -50,6 +50,7 @@ import type {
   PetOverview,
   RestoreResult,
   ResetCatalogResult,
+  ReanalyzeMediaResult,
   RetryAnalysisResult,
   SearchFacets,
   SearchFilter,
@@ -1035,6 +1036,27 @@ function registerIpc(): void {
 
   ipcMain.handle("catalog:getMediaDetails", (_event, mediaId: number) =>
     catalog!.request<MediaDetails | null>("getMediaDetails", { mediaId })
+  );
+
+  ipcMain.handle(
+    "catalog:reanalyzeMedia",
+    async (_event, mediaId: number): Promise<ReanalyzeMediaResult> => {
+      // Keine laufende Analyse darf nach dem Reset alte Ergebnisse wieder
+      // eintragen. Deshalb beide Pipelines kurz sauber anhalten.
+      await analysisCoordinator?.pauseForMaintenance();
+      thumbnailCoordinator?.stop();
+      try {
+        await thumbnailCoordinator?.waitUntilIdle();
+        const result = await catalog!.request<ReanalyzeMediaResult>(
+          "reanalyzeMedia",
+          { mediaId }
+        );
+        return result;
+      } finally {
+        analysisCoordinator?.resumeAfterMaintenance();
+        await thumbnailCoordinator?.start();
+      }
+    }
   );
 
   ipcMain.handle("catalog:scanSource", async (_event, sourceId: number) => {
