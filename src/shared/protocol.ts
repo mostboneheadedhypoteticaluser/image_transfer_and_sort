@@ -268,6 +268,29 @@ export type VideoIdentityHit = {
   maxSimilarity: number | null;
 };
 
+export type VideoFrameIdentityDetection = {
+  detectionIndex: number;
+  kind: "person" | "pet";
+  petClass: "dog" | "cat" | null;
+  score: number;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  identityId: number | null;
+  name: string | null;
+  similarity: number | null;
+  confirmed: boolean;
+};
+
+export type VideoAnalysisFrame = {
+  timestampMs: number;
+  sceneChange: boolean;
+  width: number;
+  height: number;
+  detections: VideoFrameIdentityDetection[];
+};
+
 export type VideoAnalysisDetails = {
   durationMs: number;
   width: number;
@@ -278,6 +301,7 @@ export type VideoAnalysisDetails = {
   sceneCount: number;
   tags: Array<{ label: string; score: number; hitCount: number }>;
   identityHits: VideoIdentityHit[];
+  frames: VideoAnalysisFrame[];
 };
 
 export type MediaDetails = {
@@ -1027,6 +1051,7 @@ export type CatalogMethod =
   | "getThumbnailInfo"
   | "getMediaPreviewInfo"
   | "getMediaDetails"
+  | "assignVideoFrameIdentityName"
   | "reanalyzeMedia"
   | "getMediaPath"
   | "scanSource"
