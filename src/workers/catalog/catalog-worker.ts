@@ -1964,6 +1964,48 @@ function listMedia(
           WHERE vt.media_id=m.id
         ) labels
       ) AS object_labels,
+      (
+        SELECT GROUP_CONCAT(names.name, CHAR(31))
+        FROM (
+          SELECT DISTINCT p.name AS name
+          FROM person_face_assignments pfa_marker
+          JOIN face_detections fd_marker
+            ON fd_marker.id=pfa_marker.face_detection_id
+          JOIN persons p ON p.id=pfa_marker.person_id
+          WHERE fd_marker.media_id=m.id
+            AND fd_marker.input_sha256=m.sha256
+          UNION
+          SELECT DISTINCT p.name AS name
+          FROM video_identity_tracks vit_marker
+          JOIN persons p ON p.id=vit_marker.identity_id
+          WHERE vit_marker.media_id=m.id
+            AND vit_marker.identity_kind='person'
+        ) names
+      ) AS person_names,
+      (
+        SELECT GROUP_CONCAT(names.name, CHAR(31))
+        FROM (
+          SELECT DISTINCT p.name AS name
+          FROM pet_assignments pa_marker
+          JOIN pet_fused_detections pd_marker
+            ON pd_marker.id=pa_marker.pet_detection_id
+          JOIN pets p ON p.id=pa_marker.pet_id
+          WHERE pd_marker.media_id=m.id
+            AND pd_marker.input_sha256=m.sha256
+          UNION
+          SELECT DISTINCT p.name AS name
+          FROM video_identity_tracks vit_marker
+          JOIN pets p ON p.id=vit_marker.identity_id
+          WHERE vit_marker.media_id=m.id
+            AND vit_marker.identity_kind='pet'
+        ) names
+      ) AS pet_names,
+      (
+        SELECT GROUP_CONCAT(la.name, CHAR(31))
+        FROM media_life_areas mla_marker
+        JOIN life_areas la ON la.id=mla_marker.life_area_id
+        WHERE mla_marker.media_id=m.id
+      ) AS life_area_names,
       CASE
         WHEN se.media_id IS NOT NULL AND se.input_sha256=m.sha256 THEN 1
         ELSE 0
@@ -2161,6 +2203,25 @@ function listMedia(
     objectLabels: row.object_labels
       ? String(row.object_labels).split(",").filter(Boolean)
       : [],
+    markerLabels: [
+      ...(row.person_names
+        ? String(row.person_names).split("\u001f").filter(Boolean)
+            .map((name) => "Person: " + name)
+        : []),
+      ...(row.pet_names
+        ? String(row.pet_names).split("\u001f").filter(Boolean)
+            .map((name) => "Haustier: " + name)
+        : []),
+      ...(row.life_area_names
+        ? String(row.life_area_names).split("\u001f").filter(Boolean)
+            .map((name) => "Lebensbereich: " + name)
+        : []),
+      ...parseSemanticStringList(row.catalog_subjects_json),
+      ...parseSemanticStringList(row.catalog_actions_json),
+      ...parseSemanticStringList(row.catalog_scenes_json),
+      ...parseSemanticStringList(row.catalog_tags_json),
+      ...parseSemanticStringList(row.catalog_concepts_json)
+    ].filter((value, index, values) => value && values.indexOf(value) === index),
     semanticReady: Boolean(row.semantic_ready),
     semanticModel: row.semantic_model ? String(row.semantic_model) : null,
     semanticScore,
