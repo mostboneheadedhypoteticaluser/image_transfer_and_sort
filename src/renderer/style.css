@@ -4509,6 +4509,7 @@ body {
 
 .image-preview-detection {
   position: absolute;
+  box-sizing: border-box;
   min-width: 18px;
   min-height: 18px;
   border: 2px solid rgba(255, 214, 64, .95);
