@@ -884,8 +884,19 @@ function registerIpc(): void {
     catalogWatchService?.getSnapshot() ?? { sources: [], history: [] }
   );
 
-  ipcMain.handle("catalog:listMedia", (_event, sourceId: number, limit: number) =>
-    catalog!.request<MediaRecord[]>("listMedia", { sourceId, limit })
+  ipcMain.handle(
+    "catalog:listMedia",
+    (
+      _event,
+      sourceId: number,
+      limit: number,
+      mediaKind: "all" | "image" | "video" = "all"
+    ) =>
+      catalog!.request<MediaRecord[]>("listMedia", {
+        sourceId,
+        limit,
+        mediaKind
+      })
   );
 
   ipcMain.handle("catalog:listGeoMedia", (_event, sourceId?: number) =>
