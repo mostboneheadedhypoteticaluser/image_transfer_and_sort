@@ -610,6 +610,12 @@ export type PersonCorrectionResult = {
   affectedFaces: number;
 };
 
+export type DirectIdentityAssignmentResult = {
+  identityId: number;
+  name: string;
+  affected: number;
+};
+
 export type MergePersonsResult = {
   personId: number;
   name: string;
@@ -991,6 +997,7 @@ export type CatalogMethod =
   | "confirmPetDetection"
   | "mergePets"
   | "renamePet"
+  | "assignPetDetectionName"
   | "getPetCropInfo"
   | "getFaceEmbeddingsForClustering"
   | "replacePersonCandidates"
@@ -1003,6 +1010,7 @@ export type CatalogMethod =
   | "removeFaceFromPerson"
   | "mergePersons"
   | "renamePerson"
+  | "assignFaceDetectionName"
   | "getFaceCropInfo"
   | "getThumbnailInfo"
   | "getMediaPreviewInfo"
