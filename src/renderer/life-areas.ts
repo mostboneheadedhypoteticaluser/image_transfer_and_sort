@@ -133,6 +133,21 @@ const lifeAreaCreateDialog = document.querySelector<HTMLDialogElement>("#lifeAre
 const lifeAreaCreateForm = document.querySelector<HTMLFormElement>("#lifeAreaCreateForm")!;
 const lifeAreaCreateName = document.querySelector<HTMLInputElement>("#lifeAreaCreateName")!;
 const lifeAreaCreateError = document.querySelector<HTMLParagraphElement>("#lifeAreaCreateError")!;
+
+function lifeAreaLoading(text: string): HTMLDivElement {
+  const wrap = document.createElement("div");
+  wrap.className = "life-area-loading";
+  wrap.setAttribute("role", "status");
+  wrap.setAttribute("aria-live", "polite");
+  const spinner = document.createElement("span");
+  spinner.className = "life-area-spinner";
+  spinner.setAttribute("aria-hidden", "true");
+  const label = document.createElement("span");
+  label.textContent = text;
+  wrap.append(spinner, label);
+  return wrap;
+}
+
 const closeLifeAreaCreate = document.querySelector<HTMLButtonElement>("#closeLifeAreaCreate")!;
 const cancelLifeAreaCreate = document.querySelector<HTMLButtonElement>("#cancelLifeAreaCreate")!;
 const saveLifeAreaCreate = document.querySelector<HTMLButtonElement>("#saveLifeAreaCreate")!;
@@ -663,6 +678,7 @@ async function loadFacets(): Promise<void> {
 }
 
 async function reloadAreas(keepSelection = true): Promise<void> {
+  lifeAreaList.replaceChildren(lifeAreaLoading("Lebensbereiche werden geladen …"));
   areas = await window.imageSorter.catalog.listLifeAreas();
 
   if (
@@ -693,7 +709,10 @@ async function reloadSelectedArea(fitMap = true): Promise<void> {
     return;
   }
 
-  media = await window.imageSorter.catalog.listLifeAreaMedia(area.id);
+  lifeAreaDetail.hidden = false;
+  lifeAreaGallery.replaceChildren(lifeAreaLoading("Medien des Lebensbereichs werden geladen …"));
+  lifeAreaGalleryCount.textContent = "Wird geladen …";
+    media = await window.imageSorter.catalog.listLifeAreaMedia(area.id);
   lifeAreaEmpty.hidden = true;
   lifeAreaDetail.hidden = false;
   lifeAreaTitle.textContent = area.name;
