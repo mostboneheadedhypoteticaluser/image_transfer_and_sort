@@ -240,6 +240,14 @@ declare global {
         listDuplicateGroups(sourceId: number, limit?: number): Promise<DuplicateGroup[]>;
         listRecycleMedia(sourceId: number, limit?: number): Promise<MediaRecord[]>;
         getMediaDetails(mediaId: number): Promise<MediaDetails | null>;
+        assignVideoFrameIdentityName(
+          mediaId: number,
+          timestampMs: number,
+          kind: "person" | "pet",
+          detectionIndex: number,
+          petClass: "dog" | "cat" | null,
+          name: string
+        ): Promise<{ identityId: number; name: string; affected: number }>;
         reanalyzeMedia(
           mediaId: number
         ): Promise<{ mediaId: number; sourceId: number; requeued: number; cleared: number }>;
