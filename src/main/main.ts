@@ -1,8 +1,7 @@
 import path from "node:path";
-import { createReadStream } from "node:fs";
-import { readFile, readdir, rm, stat } from "node:fs/promises";
-import { Readable } from "node:stream";
-import { app, BrowserWindow, clipboard, dialog, ipcMain, protocol, shell, type OpenDialogOptions } from "electron";
+import { pathToFileURL } from "node:url";
+import { readFile, readdir, rm } from "node:fs/promises";
+import { app, BrowserWindow, clipboard, dialog, ipcMain, net, protocol, shell, type OpenDialogOptions } from "electron";
 import { CatalogService } from "./catalog-service";
 import { AnalysisService } from "./analysis-service";
 import { AnalysisCoordinator } from "./analysis-coordinator";
@@ -2040,76 +2039,15 @@ app.whenReady().then(() => {
       );
       if (!info) return new Response("Medium nicht gefunden.", { status: 404 });
 
-      const fileStat = await stat(info.absolutePath);
-      if (!fileStat.isFile()) {
-        return new Response("Medium ist keine Datei.", { status: 404 });
-      }
-
-      const extension = path.extname(info.absolutePath).toLowerCase();
-      const mime =
-        extension === ".mp4" || extension === ".m4v" ? "video/mp4" :
-        extension === ".webm" ? "video/webm" :
-        extension === ".mov" ? "video/quicktime" :
-        extension === ".avi" ? "video/x-msvideo" :
-        extension === ".mkv" ? "video/x-matroska" :
-        extension === ".wmv" ? "video/x-ms-wmv" :
-        extension === ".mts" || extension === ".m2ts" ? "video/mp2t" :
-        "application/octet-stream";
-
-      const total = fileStat.size;
-      const range = request.headers.get("range");
-      let start = 0;
-      let end = Math.max(0, total - 1);
-      let status = 200;
-
-      if (range) {
-        const match = /^bytes=(\d*)-(\d*)$/i.exec(range.trim());
-        if (!match) {
-          return new Response(null, {
-            status: 416,
-            headers: { "Content-Range": "bytes */" + total }
-          });
-        }
-
-        if (match[1]) start = Number(match[1]);
-        if (match[2]) end = Number(match[2]);
-        if (!match[1] && match[2]) {
-          const suffix = Number(match[2]);
-          start = Math.max(0, total - suffix);
-          end = total - 1;
-        }
-
-        if (
-          !Number.isFinite(start) ||
-          !Number.isFinite(end) ||
-          start < 0 ||
-          end < start ||
-          start >= total
-        ) {
-          return new Response(null, {
-            status: 416,
-            headers: { "Content-Range": "bytes */" + total }
-          });
-        }
-
-        end = Math.min(end, total - 1);
-        status = 206;
-      }
-
-      const nodeStream = createReadStream(info.absolutePath, { start, end });
-      const body = Readable.toWeb(nodeStream) as ReadableStream<Uint8Array>;
-      const headers: Record<string, string> = {
-        "Content-Type": mime,
-        "Accept-Ranges": "bytes",
-        "Content-Length": String(end - start + 1),
-        "Cache-Control": "no-store"
-      };
-      if (status === 206) {
-        headers["Content-Range"] =
-          "bytes " + start + "-" + end + "/" + total;
-      }
-
-      return new Response(body, { status, headers });
+      // Electron empfiehlt für lokale Dateien hinter protocol.handle() net.fetch()
+      // auf eine file:-URL. Chromium übernimmt damit Range-/HEAD-Anfragen,
+      // Content-Length und das Streaming selbst; das ist für <video> deutlich
+      // robuster als ein manuell gebauter ReadableStream.
+      const fileUrl = pathToFileURL(info.absolutePath).toString();
+      return net.fetch(fileUrl, {
+        method: request.method,
+        headers: request.headers
+      });
     } catch (error) {
       analysis?.logDiagnostic("MEDIA_STREAM_ERROR", {
         error: error instanceof Error ? error.message : String(error)
