@@ -7,6 +7,7 @@ import { AnalysisService } from "./analysis-service";
 import { AnalysisCoordinator } from "./analysis-coordinator";
 import { ThumbnailService } from "./thumbnail-service";
 import { ThumbnailCoordinator } from "./thumbnail-coordinator";
+import { getVideoFrameJpeg } from "./video-frame-service";
 import { PersonService } from "./person-service";
 import { PetService } from "./pet-service";
 import { CatalogWatchService } from "./catalog-watch-service";
@@ -144,6 +145,14 @@ protocol.registerSchemesAsPrivileged([
   },
   {
     scheme: "image-sorter-preview",
+    privileges: {
+      standard: true,
+      secure: true,
+      supportFetchAPI: true
+    }
+  },
+  {
+    scheme: "image-sorter-frame",
     privileges: {
       standard: true,
       secure: true,
@@ -2063,6 +2072,30 @@ app.whenReady().then(() => {
       return new Response("Große Vorschau konnte nicht geladen werden.", {
         status: 404
       });
+    }
+  });
+
+  protocol.handle("image-sorter-frame", async (request) => {
+    try {
+      const url = new URL(request.url);
+      if (url.hostname !== "media") return new Response("Ungültige Szenenbild-Adresse", { status: 400 });
+      const mediaId = Number(url.pathname.replace(/^\\//, ""));
+      const timestampMs = Number(url.searchParams.get("ms"));
+      const requestedWidth = Number(url.searchParams.get("width") || "320");
+      if (!Number.isSafeInteger(mediaId) || mediaId <= 0 || !Number.isSafeInteger(timestampMs) || timestampMs < 0) {
+        return new Response("Ungültige Szenenbild-Parameter", { status: 400 });
+      }
+      const info = await catalog!.request<MediaPreviewInfo | null>("getMediaPreviewInfo", { mediaId });
+      if (!info) return new Response("Video nicht gefunden", { status: 404 });
+      const jpg = await getVideoFrameJpeg(info.absolutePath, info.inputSha256, timestampMs, requestedWidth, thumbnailCacheRoot);
+      return new Response(jpg, {
+        status: 200,
+        headers: { "Content-Type": "image/jpeg", "Cache-Control": "no-store" }
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      analysis?.logDiagnostic("VIDEO_FRAME_GENERATION_ERROR", { error: message });
+      return new Response(message, { status: 500 });
     }
   });
 
