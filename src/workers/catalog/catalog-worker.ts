@@ -7169,6 +7169,13 @@ function completeVideoAnalysisJob(jobId: number, result: unknown) {
   }
 
   const sourceId = Number(media.source_id);
+  const previousVideoAnalysis = db.prepare(
+    "SELECT input_sha256 FROM media_video_analysis WHERE media_id=?"
+  ).get(mediaId);
+  const videoContentChanged =
+    Boolean(previousVideoAnalysis) &&
+    String(previousVideoAnalysis.input_sha256) !== inputSha256;
+
   const durationMs = Math.max(0, Math.trunc(Number(value.durationMs) || 0));
   const width = Math.max(0, Math.trunc(Number(value.width) || 0));
   const height = Math.max(0, Math.trunc(Number(value.height) || 0));
@@ -7445,6 +7452,12 @@ function completeVideoAnalysisJob(jobId: number, result: unknown) {
 
   db.exec("BEGIN IMMEDIATE");
   try {
+    if (videoContentChanged) {
+      db.prepare(
+        "DELETE FROM video_frame_identity_overrides WHERE media_id=?"
+      ).run(mediaId);
+    }
+
     db.prepare(
       "INSERT INTO media_video_analysis(" +
       "media_id,input_sha256,duration_ms,width,height,fps,sample_interval_ms," +
