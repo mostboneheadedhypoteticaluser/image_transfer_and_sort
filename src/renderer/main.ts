@@ -1234,6 +1234,10 @@ function fullMediaUrl(mediaId: number): string {
   return `image-sorter-media://media/${mediaId}`;
 }
 
+function videoSceneImageUrl(mediaId: number, timestampMs: number, width = 320): string {
+  return `image-sorter-frame://media/${mediaId}?ms=${timestampMs}&width=${width}`;
+}
+
 function isVideoExtension(extension: string): boolean {
   return LIBRARY_VIDEO_EXTENSIONS.has(extension.toLowerCase());
 }
@@ -2702,14 +2706,11 @@ async function openVideoFrameEditor(
   frame: NonNullable<MediaDetails["videoAnalysis"]>["frames"][number]
 ): Promise<void> {
   imagePreviewVideo.pause();
-  await seekPreviewVideo(imagePreviewVideo, frame.timestampMs);
-  const dataUrl = videoFrameDataUrl(imagePreviewVideo);
-
   currentVideoFrameTimestamp = frame.timestampMs;
   imagePreviewImageWrap.hidden = false;
   imagePreviewVideo.hidden = true;
   imagePreviewBackToVideo.hidden = false;
-  imagePreviewImage.src = dataUrl;
+  imagePreviewImage.src = videoSceneImageUrl(details.mediaId, frame.timestampMs, 1600);
   imagePreviewImage.alt =
     details.relativePath + " bei " + videoTimestamp(frame.timestampMs);
   imagePreviewCaption.textContent =
@@ -2743,82 +2744,28 @@ function restoreVideoPreview(): void {
   imagePreviewCaption.textContent = currentImagePreviewDetails.relativePath;
 }
 
-async function populateVideoFrameThumbnails(
+function populateVideoFrameThumbnails(
   details: MediaDetails,
   gallery: HTMLElement
-): Promise<void> {
-  const frames = details.videoAnalysis?.frames ?? [];
-  if (frames.length === 0) return;
-
-  const token = ++videoFrameThumbnailLoadToken;
-  const capture = document.createElement("video");
-  capture.muted = true;
-  capture.preload = "auto";
-  capture.src = fullMediaUrl(details.mediaId);
-
-  try {
-    await new Promise<void>((resolve, reject) => {
-      const onLoaded = () => {
-        cleanup();
-        resolve();
-      };
-      const onError = () => {
-        cleanup();
-        reject(new Error("Video konnte für Szenenbilder nicht decodiert werden."));
-      };
-      const cleanup = () => {
-        capture.removeEventListener("loadeddata", onLoaded);
-        capture.removeEventListener("error", onError);
-      };
-      // Metadaten allein reichen nicht: drawImage benötigt ein decodiertes Frame.
-      capture.addEventListener("loadeddata", onLoaded, { once: true });
-      capture.addEventListener("error", onError, { once: true });
-      if (capture.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
-        onLoaded();
-      } else {
-        capture.load();
+): void {
+  for (const image of gallery.querySelectorAll<HTMLImageElement>("img[data-frame-ms]")) {
+    const timestampMs = Number(image.dataset.frameMs);
+    if (!Number.isSafeInteger(timestampMs)) continue;
+    const placeholder = image.closest(".video-frame-card")?.querySelector<HTMLElement>(
+      ".video-frame-thumb-placeholder"
+    );
+    image.addEventListener("load", () => {
+      image.dataset.loaded = "1";
+      if (placeholder) placeholder.textContent = "";
+    }, { once: true });
+    image.addEventListener("error", () => {
+      image.removeAttribute("src");
+      if (placeholder) {
+        placeholder.textContent = "Vorschau nicht verfügbar";
+        placeholder.title = "OpenCV konnte dieses Szenenbild nicht erzeugen. Details im Analyseprotokoll (VIDEO_FRAME_GENERATION_ERROR).";
       }
-    });
-
-    for (const frame of frames) {
-      if (
-        token !== videoFrameThumbnailLoadToken ||
-        !imagePreviewDialog.open
-      ) {
-        break;
-      }
-
-      const image = gallery.querySelector<HTMLImageElement>(
-        'img[data-frame-ms="' + frame.timestampMs + '"]'
-      );
-      if (!image || image.dataset.loaded === "1") continue;
-
-      try {
-        image.src = await captureVideoFrameThumbnail(
-          capture,
-          frame.timestampMs
-        );
-        image.dataset.loaded = "1";
-      } catch (error) {
-        image.removeAttribute("src");
-        image.alt = "Szenenbild konnte nicht geladen werden";
-        const message = image.closest(".video-frame-card")?.querySelector<HTMLElement>(
-          ".video-frame-thumb-placeholder"
-        );
-        if (message) {
-          message.textContent = "Vorschau nicht verfügbar";
-          message.title = error instanceof Error ? error.message : String(error);
-        }
-      }
-
-      await new Promise<void>((resolve) =>
-        window.setTimeout(resolve, 0)
-      );
-    }
-  } finally {
-    capture.pause();
-    capture.removeAttribute("src");
-    capture.load();
+    }, { once: true });
+    image.src = videoSceneImageUrl(details.mediaId, timestampMs);
   }
 }
 
@@ -3141,18 +3088,7 @@ function renderImagePreviewDetails(details: MediaDetails): void {
 
           if (!gallery.hidden && !thumbnailsStarted) {
             thumbnailsStarted = true;
-            void populateVideoFrameThumbnails(details, gallery).catch((error) => {
-              const message = error instanceof Error ? error.message : String(error);
-              for (const item of gallery.querySelectorAll<HTMLElement>(
-                ".video-frame-thumb-placeholder"
-              )) {
-                if (item.parentElement?.querySelector<HTMLImageElement>(
-                  ".video-frame-thumb[src]"
-                )) continue;
-                item.textContent = "Vorschau nicht verfügbar";
-                item.title = message;
-              }
-            });
+            populateVideoFrameThumbnails(details, gallery);
           }
         });
 
