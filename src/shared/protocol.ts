@@ -191,6 +191,11 @@ export type MediaDetailFace = {
   assignmentConfidence: number | null;
   candidateId: number | null;
   candidateSimilarity: number | null;
+  suggestedPersons: Array<{
+    personId: number;
+    personName: string;
+    similarity: number;
+  }>;
 };
 
 export type MediaDetailPet = {
@@ -212,6 +217,11 @@ export type MediaDetailPet = {
   assignmentConfidence: number | null;
   candidateId: number | null;
   candidateSimilarity: number | null;
+  suggestedPets: Array<{
+    petId: number;
+    petName: string;
+    similarity: number;
+  }>;
 };
 
 export type MediaDetailObject = {
