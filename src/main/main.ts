@@ -1592,6 +1592,16 @@ function registerIpc(): void {
   );
 
   ipcMain.handle(
+    "people:assignDetectionName",
+    (
+      _event,
+      faceDetectionId: number,
+      name: string
+    ): Promise<DirectIdentityAssignmentResult> =>
+      personService!.assignDetectionName(faceDetectionId, name)
+  );
+
+  ipcMain.handle(
     "people:renamePerson",
     (
       _event,
@@ -1706,6 +1716,16 @@ function registerIpc(): void {
       sourcePetId: number
     ): Promise<MergePetsResult> =>
       petService!.mergePets(targetPetId, sourcePetId)
+  );
+
+  ipcMain.handle(
+    "pets:assignDetectionName",
+    (
+      _event,
+      petDetectionId: number,
+      name: string
+    ): Promise<DirectIdentityAssignmentResult> =>
+      petService!.assignDetectionName(petDetectionId, name)
   );
 
   ipcMain.handle(
