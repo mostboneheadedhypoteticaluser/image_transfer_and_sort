@@ -230,7 +230,7 @@ declare global {
         getMediaDetails(mediaId: number): Promise<MediaDetails | null>;
         reanalyzeMedia(
           mediaId: number
-        ): Promise<{ mediaId: number; requeued: number; cleared: number }>;
+        ): Promise<{ mediaId: number; sourceId: number; requeued: number; cleared: number }>;
         scanSource(sourceId: number): Promise<ScanResult>;
         restoreMedia(mediaId: number): Promise<RestoreResult>;
         resetCatalog(): Promise<ResetCatalogResult>;
