@@ -315,8 +315,12 @@ const api = {
     getStats: (sourceId: number): Promise<CatalogStats> => ipcRenderer.invoke("catalog:getStats", sourceId),
     getWatchSnapshot: (): Promise<CatalogWatchSnapshot> =>
       ipcRenderer.invoke("catalog:getWatchSnapshot"),
-    listMedia: (sourceId: number, limit = 500): Promise<MediaRecord[]> =>
-      ipcRenderer.invoke("catalog:listMedia", sourceId, limit),
+    listMedia: (
+      sourceId: number,
+      limit = 500,
+      mediaKind: "all" | "image" | "video" = "all"
+    ): Promise<MediaRecord[]> =>
+      ipcRenderer.invoke("catalog:listMedia", sourceId, limit, mediaKind),
     listGeoMedia: (sourceId?: number): Promise<GeoMediaPoint[]> =>
       ipcRenderer.invoke("catalog:listGeoMedia", sourceId),
     listLifeAreas: (): Promise<LifeAreaRecord[]> =>
