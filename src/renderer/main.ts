@@ -2365,10 +2365,11 @@ function renderPreviewIdentityOverlay(
 
     const badge = document.createElement("span");
     badge.className = "image-preview-detection-badge";
-    badge.textContent =
-      (identity.confirmed ? displayName : "Vorschlag: " + displayName) +
-      " · " +
-      (identity.confirmed ? "bestätigt" : "unbestätigt");
+    badge.textContent = identity.confirmed
+      ? displayName + " · bestätigt"
+      : identity.name || identity.suggestionName
+        ? "Vorschlag: " + displayName + " · unbestätigt"
+        : kindLabel + " · unbestätigt";
 
     const editor = document.createElement("form");
     editor.className = "image-preview-detection-editor";
