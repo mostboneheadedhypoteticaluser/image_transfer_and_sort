@@ -174,6 +174,7 @@ const closeImagePreviewButton = document.querySelector<HTMLButtonElement>("#clos
 const imagePreviewImage = document.querySelector<HTMLImageElement>("#imagePreviewImage")!;
 const imagePreviewVideo = document.querySelector<HTMLVideoElement>("#imagePreviewVideo")!;
 const imagePreviewVideoError = document.querySelector<HTMLDivElement>("#imagePreviewVideoError")!;
+const imagePreviewBackToVideo = document.querySelector<HTMLButtonElement>("#imagePreviewBackToVideo")!;
 const imagePreviewImageWrap = document.querySelector<HTMLDivElement>("#imagePreviewImageWrap")!;
 const imagePreviewOverlay = document.querySelector<HTMLDivElement>("#imagePreviewOverlay")!;
 const imagePreviewPersonNames = document.querySelector<HTMLDataListElement>("#imagePreviewPersonNames")!;
@@ -282,6 +283,8 @@ type CandidateReviewState = {
 
 let candidateReviewState: CandidateReviewState | null = null;
 let currentImagePreviewDetails: MediaDetails | null = null;
+let currentVideoFrameTimestamp: number | null = null;
+let videoFrameThumbnailLoadToken = 0;
 let imagePreviewDetailLoadToken = 0;
 
 function createLoadingIndicator(text = "Daten werden geladen …"): HTMLDivElement {
