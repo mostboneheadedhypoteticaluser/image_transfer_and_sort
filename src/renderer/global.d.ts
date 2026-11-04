@@ -196,7 +196,11 @@ declare global {
         getExplorerChildren(folderPath: string): Promise<ExplorerFolderNode[]>;
         getStats(sourceId: number): Promise<CatalogStats>;
         getWatchSnapshot(): Promise<CatalogWatchSnapshot>;
-        listMedia(sourceId: number, limit?: number): Promise<MediaRecord[]>;
+        listMedia(
+          sourceId: number,
+          limit?: number,
+          mediaKind?: "all" | "image" | "video"
+        ): Promise<MediaRecord[]>;
         listGeoMedia(sourceId?: number): Promise<GeoMediaPoint[]>;
         listLifeAreas(): Promise<LifeAreaRecord[]>;
         createLifeArea(name: string): Promise<{ id: number; name: string }>;
