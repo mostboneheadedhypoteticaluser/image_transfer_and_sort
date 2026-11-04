@@ -3141,7 +3141,18 @@ function renderImagePreviewDetails(details: MediaDetails): void {
 
           if (!gallery.hidden && !thumbnailsStarted) {
             thumbnailsStarted = true;
-            void populateVideoFrameThumbnails(details, gallery);
+            void populateVideoFrameThumbnails(details, gallery).catch((error) => {
+              const message = error instanceof Error ? error.message : String(error);
+              for (const item of gallery.querySelectorAll<HTMLElement>(
+                ".video-frame-thumb-placeholder"
+              )) {
+                if (item.parentElement?.querySelector<HTMLImageElement>(
+                  ".video-frame-thumb[src]"
+                )) continue;
+                item.textContent = "Vorschau nicht verfügbar";
+                item.title = message;
+              }
+            });
           }
         });
 
