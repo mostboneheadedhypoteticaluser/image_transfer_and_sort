@@ -643,6 +643,21 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_video_identity_media ON video_identity_tracks(media_id);
   CREATE INDEX IF NOT EXISTS idx_video_identity_lookup ON video_identity_tracks(identity_kind, identity_id);
 
+  CREATE TABLE IF NOT EXISTS video_frame_identity_overrides (
+    media_id INTEGER NOT NULL REFERENCES media_items(id) ON DELETE CASCADE,
+    timestamp_ms INTEGER NOT NULL,
+    identity_kind TEXT NOT NULL CHECK(identity_kind IN ('person','pet')),
+    detection_index INTEGER NOT NULL,
+    pet_class TEXT,
+    identity_id INTEGER NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY(media_id, timestamp_ms, identity_kind, detection_index)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_video_frame_override_media
+    ON video_frame_identity_overrides(media_id, timestamp_ms);
+
   CREATE TABLE IF NOT EXISTS video_tags (
     media_id INTEGER NOT NULL REFERENCES media_items(id) ON DELETE CASCADE,
     label TEXT NOT NULL,
@@ -829,6 +844,30 @@ runOneTimeCatalogMigration(
         finished_at=NULL,
         updated_at=CURRENT_TIMESTAMP
       WHERE status='FAILED'
+    `).run();
+  }
+);
+
+runOneTimeCatalogMigration(
+  "2026-11-04-video-frame-identities-v1",
+  () => {
+    db.prepare(`
+      UPDATE analysis_jobs
+      SET
+        status='PENDING',
+        attempts=0,
+        result_json=NULL,
+        error_message=NULL,
+        started_at=NULL,
+        finished_at=NULL,
+        updated_at=CURRENT_TIMESTAMP
+      WHERE module='video-analyze-v1'
+        AND status='DONE'
+        AND media_id IN (
+          SELECT media_id
+          FROM media_video_analysis
+          WHERE frames_json NOT LIKE '%"detectionIndex":%'
+        )
     `).run();
   }
 );
