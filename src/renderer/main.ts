@@ -48,6 +48,17 @@ const scanButton = document.querySelector<HTMLButtonElement>("#scanSource")!;
 const resetButton = document.querySelector<HTMLButtonElement>("#resetCatalog")!;
 const refreshButton = document.querySelector<HTMLButtonElement>("#refresh")!;
 const mediaRows = document.querySelector<HTMLTableSectionElement>("#mediaRows")!;
+const libraryToolbar = document.querySelector<HTMLElement>("#libraryToolbar")!;
+const libraryMediaType = document.querySelector<HTMLSelectElement>("#libraryMediaType")!;
+const libraryStatus = document.querySelector<HTMLSelectElement>("#libraryStatus")!;
+const libraryTextFilter = document.querySelector<HTMLInputElement>("#libraryTextFilter")!;
+const librarySort = document.querySelector<HTMLSelectElement>("#librarySort")!;
+const libraryGroup = document.querySelector<HTMLSelectElement>("#libraryGroup")!;
+const libraryReset = document.querySelector<HTMLButtonElement>("#libraryReset")!;
+const libraryMarksFilter = document.querySelector<HTMLDetailsElement>("#libraryMarksFilter")!;
+const libraryMarksCount = document.querySelector<HTMLSpanElement>("#libraryMarksCount")!;
+const libraryMarksOptions = document.querySelector<HTMLDivElement>("#libraryMarksOptions")!;
+const librarySummary = document.querySelector<HTMLSpanElement>("#librarySummary")!;
 const duplicateGroups = document.querySelector<HTMLDivElement>("#duplicateGroups")!;
 const mediaView = document.querySelector<HTMLDivElement>("#mediaView")!;
 const duplicateView = document.querySelector<HTMLDivElement>("#duplicateView")!;
@@ -219,6 +230,16 @@ const identityRangeFill = document.querySelector<HTMLDivElement>("#identityRange
 
 let sources: SourceRecord[] = [];
 let currentView: CatalogView = "media";
+
+const LIBRARY_IMAGE_EXTENSIONS = new Set([
+  ".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif", ".tif", ".tiff",
+  ".heic", ".heif", ".avif", ".dng", ".cr2", ".cr3", ".nef", ".arw"
+]);
+const LIBRARY_VIDEO_EXTENSIONS = new Set([
+  ".mp4", ".mov", ".m4v", ".avi", ".mkv", ".webm", ".wmv", ".mts", ".m2ts"
+]);
+let libraryRows: MediaRecord[] = [];
+const selectedLibraryMarks = new Set<string>();
 let identityBrowserMode: "people" | "pets" = "people";
 let identityBrowserMediaFilter: "all" | "image" | "video" = "all";
 type ConfirmationMediaFilter = "all" | "image" | "video";
@@ -2200,6 +2221,53 @@ function detailChips(values: string[]): HTMLElement {
 function renderImagePreviewDetails(details: MediaDetails): void {
   imagePreviewDetails.replaceChildren();
 
+  const reanalyzePanel = document.createElement("div");
+  reanalyzePanel.className = "image-detail-reanalyze";
+
+  const reanalyzeCopy = document.createElement("div");
+  const reanalyzeTitle = document.createElement("strong");
+  reanalyzeTitle.textContent = "Analyse dieses Mediums";
+  const reanalyzeHint = document.createElement("small");
+  reanalyzeHint.textContent =
+    "Entfernt alle automatisch erkannten Daten dieses Mediums und legt sämtliche Analyse-Stufen mit höchster Priorität neu in die Warteschlange.";
+  reanalyzeCopy.append(reanalyzeTitle, reanalyzeHint);
+
+  const reanalyzeButton = document.createElement("button");
+  reanalyzeButton.type = "button";
+  reanalyzeButton.className = "danger";
+  reanalyzeButton.textContent = "Bevorzugt neu analysieren";
+  reanalyzeButton.addEventListener("click", () => {
+    const confirmed = window.confirm(
+      "Alle automatisch erkannten Daten für dieses Medium löschen und vollständig neu analysieren? " +
+      "Bestätigte Gesichts-/Haustierzuordnungen dieses Mediums werden dabei ebenfalls entfernt. " +
+      "Manuelle Lebensbereiche bleiben erhalten."
+    );
+    if (!confirmed) return;
+
+    void runSafely(async () => {
+      reanalyzeButton.disabled = true;
+      reanalyzeButton.textContent = "Wird neu eingereiht …";
+      try {
+        const result = await window.imageSorter.catalog.reanalyzeMedia(details.mediaId);
+        progressText.textContent =
+          "Medium bevorzugt neu eingereiht · " +
+          result.requeued.toLocaleString("de-DE") + " Analyse-Stufen · " +
+          result.cleared.toLocaleString("de-DE") + " alte Ergebnisse entfernt.";
+        await Promise.all([
+          loadImagePreviewDetails(details.mediaId),
+          refreshCatalog(),
+          refreshSelectedPipelineStatus()
+        ]);
+      } finally {
+        reanalyzeButton.disabled = false;
+        reanalyzeButton.textContent = "Bevorzugt neu analysieren";
+      }
+    });
+  });
+
+  reanalyzePanel.append(reanalyzeCopy, reanalyzeButton);
+  imagePreviewDetails.appendChild(reanalyzePanel);
+
   const fileRows: Array<[string, unknown]> = [
     ["Datei", details.relativePath],
     ["Vollständiger Pfad", details.absolutePath],
@@ -3232,6 +3300,7 @@ function setView(view: CatalogView): void {
   petsTab.classList.toggle("active", view === "pets");
   recycleTab.classList.toggle("active", view === "recycle");
 
+  libraryToolbar.hidden = view !== "media";
   searchPanel.hidden = view !== "search";
   duplicateView.hidden = view !== "duplicates";
   personView.hidden = view !== "people";
@@ -3240,6 +3309,178 @@ function setView(view: CatalogView): void {
     view === "duplicates" || view === "people" || view === "pets";
 
   void runSafely(refreshCatalog);
+}
+
+function libraryMediaKind(row: MediaRecord): "image" | "video" | "other" {
+  const extension = row.extension.toLocaleLowerCase("de-DE");
+  if (LIBRARY_IMAGE_EXTENSIONS.has(extension)) return "image";
+  if (LIBRARY_VIDEO_EXTENSIONS.has(extension)) return "video";
+  return "other";
+}
+
+function libraryMarkerEntries(row: MediaRecord): string[] {
+  const marks = new Set<string>();
+  if (row.faceCount > 0) marks.add("Gesicht");
+  if (row.dogCount > 0) marks.add("Hund");
+  if (row.catCount > 0) marks.add("Katze");
+  if (row.duplicateCount > 0) marks.add("Dublette");
+  if (row.catalogSemanticReady) marks.add("Qwen 4B");
+  if (row.semanticReady) marks.add("SigLIP2");
+
+  for (const label of row.objectLabels ?? []) {
+    const translated = MOTIF_LABELS_DE[label] ?? germanIdentityTerm(label);
+    if (translated) marks.add(translated);
+  }
+  for (const concept of row.semanticConcepts ?? []) {
+    const translated = germanIdentityTerm(concept);
+    if (translated) marks.add(translated);
+  }
+  return [...marks].sort((a, b) => a.localeCompare(b, "de"));
+}
+
+function libraryTimestamp(row: MediaRecord): number {
+  const captured = row.capturedAt ? Date.parse(row.capturedAt) : Number.NaN;
+  if (Number.isFinite(captured)) return captured;
+  const seen = Date.parse(row.lastSeenAt);
+  return Number.isFinite(seen) ? seen : 0;
+}
+
+function libraryGroupLabel(row: MediaRecord): string {
+  switch (libraryGroup.value) {
+    case "media-type":
+      return libraryMediaKind(row) === "video"
+        ? "Videos"
+        : libraryMediaKind(row) === "image"
+          ? "Bilder"
+          : "Sonstige Medien";
+    case "month": {
+      const timestamp = libraryTimestamp(row);
+      if (!timestamp) return "Ohne Datum";
+      return new Date(timestamp).toLocaleDateString("de-DE", {
+        year: "numeric",
+        month: "long"
+      });
+    }
+    case "status":
+      return row.availability === "AVAILABLE" ? "Verfügbar" : "Fehlend";
+    case "marker":
+      return libraryMarkerEntries(row)[0] ?? "Ohne Kennzeichen";
+    default:
+      return "";
+  }
+}
+
+function updateLibraryMarkOptions(rows: MediaRecord[]): void {
+  const available = [...new Set(rows.flatMap(libraryMarkerEntries))]
+    .sort((a, b) => a.localeCompare(b, "de"));
+
+  for (const selected of [...selectedLibraryMarks]) {
+    if (!available.includes(selected)) selectedLibraryMarks.delete(selected);
+  }
+
+  libraryMarksOptions.replaceChildren();
+  if (available.length === 0) {
+    const empty = document.createElement("span");
+    empty.className = "muted";
+    empty.textContent = "Noch keine erkannten Kennzeichen vorhanden.";
+    libraryMarksOptions.appendChild(empty);
+  } else {
+    for (const mark of available) {
+      const label = document.createElement("label");
+      label.className = "library-mark-option";
+      const input = document.createElement("input");
+      input.type = "checkbox";
+      input.checked = selectedLibraryMarks.has(mark);
+      input.addEventListener("change", () => {
+        if (input.checked) selectedLibraryMarks.add(mark);
+        else selectedLibraryMarks.delete(mark);
+        applyLibraryView();
+      });
+      const span = document.createElement("span");
+      span.textContent = mark;
+      label.append(input, span);
+      libraryMarksOptions.appendChild(label);
+    }
+  }
+
+  libraryMarksCount.textContent = selectedLibraryMarks.size
+    ? String(selectedLibraryMarks.size)
+    : String(available.length);
+  libraryMarksFilter.classList.toggle("active", selectedLibraryMarks.size > 0);
+}
+
+function filteredLibraryRows(): MediaRecord[] {
+  const type = libraryMediaType.value;
+  const status = libraryStatus.value;
+  const query = libraryTextFilter.value.trim().toLocaleLowerCase("de-DE");
+  const selectedMarks = [...selectedLibraryMarks];
+
+  const rows = libraryRows.filter((row) => {
+    const kind = libraryMediaKind(row);
+    if (type !== "all" && kind !== type) return false;
+    if (status === "available" && row.availability !== "AVAILABLE") return false;
+    if (status === "missing" && row.availability !== "MISSING") return false;
+
+    if (
+      query &&
+      !row.relativePath.toLocaleLowerCase("de-DE").includes(query) &&
+      !(row.sourcePath ?? "").toLocaleLowerCase("de-DE").includes(query)
+    ) {
+      return false;
+    }
+
+    if (selectedMarks.length > 0) {
+      const marks = new Set(libraryMarkerEntries(row));
+      if (!selectedMarks.every((mark) => marks.has(mark))) return false;
+    }
+    return true;
+  });
+
+  rows.sort((left, right) => {
+    switch (librarySort.value) {
+      case "captured-asc":
+        return libraryTimestamp(left) - libraryTimestamp(right) ||
+          left.relativePath.localeCompare(right.relativePath, "de");
+      case "path-desc":
+        return right.relativePath.localeCompare(left.relativePath, "de");
+      case "size-desc":
+        return right.sizeBytes - left.sizeBytes ||
+          left.relativePath.localeCompare(right.relativePath, "de");
+      case "size-asc":
+        return left.sizeBytes - right.sizeBytes ||
+          left.relativePath.localeCompare(right.relativePath, "de");
+      case "type-asc":
+        return left.extension.localeCompare(right.extension, "de") ||
+          left.relativePath.localeCompare(right.relativePath, "de");
+      case "path-asc":
+        return left.relativePath.localeCompare(right.relativePath, "de");
+      default:
+        return libraryTimestamp(right) - libraryTimestamp(left) ||
+          left.relativePath.localeCompare(right.relativePath, "de");
+    }
+  });
+
+  if (libraryGroup.value !== "none") {
+    rows.sort((left, right) =>
+      libraryGroupLabel(left).localeCompare(libraryGroupLabel(right), "de") ||
+      (libraryTimestamp(right) - libraryTimestamp(left)) ||
+      left.relativePath.localeCompare(right.relativePath, "de")
+    );
+  }
+
+  return rows;
+}
+
+function applyLibraryView(): void {
+  if (currentView !== "media") return;
+  const rows = filteredLibraryRows();
+  librarySummary.textContent =
+    rows.length.toLocaleString("de-DE") + " von " +
+    libraryRows.length.toLocaleString("de-DE") + " Medien" +
+    (selectedLibraryMarks.size
+      ? " · " + selectedLibraryMarks.size.toLocaleString("de-DE") + " Kennzeichen aktiv"
+      : "");
+  renderRows(rows, "Keine Medien entsprechen den gewählten Filtern.");
 }
 
 function renderRows(rows: MediaRecord[], emptyText = "Noch keine Medien katalogisiert."): void {
@@ -3257,8 +3498,23 @@ function renderRows(rows: MediaRecord[], emptyText = "Noch keine Medien katalogi
   }
 
   const fragment = document.createDocumentFragment();
+  let previousGroup = "";
 
   for (const row of rows) {
+    if (currentView === "media" && libraryGroup.value !== "none") {
+      const group = libraryGroupLabel(row);
+      if (group !== previousGroup) {
+        const groupRow = document.createElement("tr");
+        groupRow.className = "media-group-row";
+        const groupCell = document.createElement("td");
+        groupCell.colSpan = 6;
+        groupCell.textContent = group;
+        groupRow.appendChild(groupCell);
+        fragment.appendChild(groupRow);
+        previousGroup = group;
+      }
+    }
+
     const tr = document.createElement("tr");
 
     const previewCell = document.createElement("td");
@@ -5542,8 +5798,10 @@ async function refreshCatalog(): Promise<void> {
     return;
   }
 
-  const rows = await window.imageSorter.catalog.listMedia(sourceId, 500);
-  renderRows(rows);
+  const rows = await window.imageSorter.catalog.listMedia(sourceId, 2000);
+  libraryRows = rows;
+  updateLibraryMarkOptions(rows);
+  applyLibraryView();
 }
 
 async function loadSources(preselectId?: number): Promise<void> {
@@ -5711,6 +5969,28 @@ resetButton.addEventListener("click", () => {
       scanButton.disabled = selectedSourceId() === null;
     }
   });
+});
+
+for (const control of [
+  libraryMediaType,
+  libraryStatus,
+  librarySort,
+  libraryGroup
+]) {
+  control.addEventListener("change", applyLibraryView);
+}
+
+libraryTextFilter.addEventListener("input", applyLibraryView);
+
+libraryReset.addEventListener("click", () => {
+  libraryMediaType.value = "all";
+  libraryStatus.value = "all";
+  libraryTextFilter.value = "";
+  librarySort.value = "captured-desc";
+  libraryGroup.value = "none";
+  selectedLibraryMarks.clear();
+  updateLibraryMarkOptions(libraryRows);
+  applyLibraryView();
 });
 
 mediaTab.addEventListener("click", () => setView("media"));
