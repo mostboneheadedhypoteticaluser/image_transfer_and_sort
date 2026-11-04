@@ -457,6 +457,64 @@
               </div>
             </section>
 
+            <section id="libraryToolbar" class="library-toolbar" aria-label="Medien filtern, sortieren und gruppieren">
+              <div class="library-toolbar-row library-toolbar-main">
+                <label>
+                  <span>Medienart</span>
+                  <select id="libraryMediaType">
+                    <option value="all">Bilder &amp; Videos</option>
+                    <option value="image">Nur Bilder</option>
+                    <option value="video">Nur Videos</option>
+                  </select>
+                </label>
+                <label>
+                  <span>Status</span>
+                  <select id="libraryStatus">
+                    <option value="all">Alle</option>
+                    <option value="available">Verfügbar</option>
+                    <option value="missing">Fehlend</option>
+                  </select>
+                </label>
+                <label class="library-search-field">
+                  <span>Datei / Pfad</span>
+                  <input id="libraryTextFilter" type="search" autocomplete="off" placeholder="Dateiname oder Ordner …" />
+                </label>
+                <label>
+                  <span>Sortieren</span>
+                  <select id="librarySort">
+                    <option value="captured-desc">Aufnahme · neueste zuerst</option>
+                    <option value="captured-asc">Aufnahme · älteste zuerst</option>
+                    <option value="path-asc">Pfad · A–Z</option>
+                    <option value="path-desc">Pfad · Z–A</option>
+                    <option value="size-desc">Größe · absteigend</option>
+                    <option value="size-asc">Größe · aufsteigend</option>
+                    <option value="type-asc">Dateityp</option>
+                  </select>
+                </label>
+                <label>
+                  <span>Gruppieren</span>
+                  <select id="libraryGroup">
+                    <option value="none">Nicht gruppieren</option>
+                    <option value="media-type">Medienart</option>
+                    <option value="month">Aufnahmemonat</option>
+                    <option value="status">Status</option>
+                    <option value="marker">Kennzeichen / Motiv</option>
+                  </select>
+                </label>
+                <button id="libraryReset" class="ghost library-reset" type="button">Filter zurücksetzen</button>
+              </div>
+              <div class="library-toolbar-row library-toolbar-secondary">
+                <details id="libraryMarksFilter" class="library-marks-filter">
+                  <summary>Kennzeichen filtern <span id="libraryMarksCount">0</span></summary>
+                  <div class="library-marks-panel">
+                    <p>Mehrere ausgewählte Kennzeichen werden mit UND verknüpft.</p>
+                    <div id="libraryMarksOptions" class="library-marks-options"></div>
+                  </div>
+                </details>
+                <span id="librarySummary" class="library-summary">Medien werden geladen …</span>
+              </div>
+            </section>
+
             <div class="table-wrap">
               <table>
                 <thead>
