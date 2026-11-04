@@ -2079,7 +2079,7 @@ app.whenReady().then(() => {
     try {
       const url = new URL(request.url);
       if (url.hostname !== "media") return new Response("Ungültige Szenenbild-Adresse", { status: 400 });
-      const mediaId = Number(url.pathname.replace(/^\\//, ""));
+      const mediaId = Number(url.pathname.slice(1));
       const timestampMs = Number(url.searchParams.get("ms"));
       const requestedWidth = Number(url.searchParams.get("width") || "320");
       if (!Number.isSafeInteger(mediaId) || mediaId <= 0 || !Number.isSafeInteger(timestampMs) || timestampMs < 0) {
