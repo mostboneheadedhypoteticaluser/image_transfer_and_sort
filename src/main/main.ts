@@ -1801,6 +1801,9 @@ app.whenReady().then(() => {
       );
 
       if (!info) {
+        analysis?.logDiagnostic("FACE_CROP_INFO_MISSING", {
+          faceDetectionId
+        });
         return new Response("Gesichtsausschnitt nicht gefunden.", { status: 404 });
       }
 
@@ -1825,10 +1828,13 @@ app.whenReady().then(() => {
         status: 200,
         headers: {
           "Content-Type": "image/jpeg",
-          "Cache-Control": "public, max-age=31536000, immutable"
+          "Cache-Control": "no-store"
         }
       });
-    } catch {
+    } catch (error) {
+      analysis?.logDiagnostic("FACE_CROP_GENERATION_ERROR", {
+        error: error instanceof Error ? error.message : String(error)
+      });
       return new Response("Gesichtsausschnitt konnte nicht geladen werden.", {
         status: 404
       });
@@ -1853,6 +1859,9 @@ app.whenReady().then(() => {
       );
 
       if (!info) {
+        analysis?.logDiagnostic("PET_CROP_INFO_MISSING", {
+          petDetectionId
+        });
         return new Response("Haustierausschnitt nicht gefunden.", { status: 404 });
       }
 
@@ -1877,10 +1886,14 @@ app.whenReady().then(() => {
         status: 200,
         headers: {
           "Content-Type": "image/jpeg",
-          "Cache-Control": "public, max-age=31536000, immutable"
+          "Cache-Control": "no-store"
         }
       });
-    } catch {
+    } catch (error) {
+      analysis?.logDiagnostic("PET_CROP_GENERATION_ERROR", {
+        petDetectionId,
+        error: error instanceof Error ? error.message : String(error)
+      });
       return new Response("Haustierausschnitt konnte nicht geladen werden.", {
         status: 404
       });
