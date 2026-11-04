@@ -1842,13 +1842,14 @@ app.whenReady().then(() => {
   });
 
   protocol.handle("image-sorter-pet", async (request) => {
+    let petDetectionId: number | null = null;
     try {
       const url = new URL(request.url);
       if (url.hostname !== "pet") {
         return new Response("Ungültige Haustieradresse.", { status: 400 });
       }
 
-      const petDetectionId = Number(url.pathname.replace(/^\//, ""));
+      petDetectionId = Number(url.pathname.replace(/^\//, ""));
       if (!Number.isFinite(petDetectionId)) {
         return new Response("Ungültige Haustier-ID.", { status: 400 });
       }
