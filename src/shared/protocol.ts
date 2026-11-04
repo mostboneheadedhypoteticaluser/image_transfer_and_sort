@@ -726,6 +726,7 @@ export type MediaRecord = {
   petSingleModelCount: number;
   objectCount: number;
   objectLabels: string[];
+  markerLabels: string[];
   semanticReady: boolean;
   semanticModel: string | null;
   semanticScore: number | null;
