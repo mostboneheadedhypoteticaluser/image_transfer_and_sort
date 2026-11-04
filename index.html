@@ -986,7 +986,12 @@
       <div class="image-preview-layout">
         <div class="image-preview-main">
           <div class="image-preview-stage">
-            <img id="imagePreviewImage" alt="" />
+            <div id="imagePreviewImageWrap" class="image-preview-image-wrap">
+              <img id="imagePreviewImage" alt="" />
+              <div id="imagePreviewOverlay" class="image-preview-overlay" aria-label="Erkannte Personen und Haustiere"></div>
+            </div>
+            <datalist id="imagePreviewPersonNames"></datalist>
+            <datalist id="imagePreviewPetNames"></datalist>
           </div>
           <div id="imagePreviewCaption" class="image-preview-caption"></div>
         </div>
