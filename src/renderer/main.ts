@@ -2762,6 +2762,7 @@ function populateVideoFrameThumbnails(
       image.removeAttribute("src");
       if (placeholder) {
         placeholder.textContent = "Vorschau nicht verfügbar";
+        placeholder.classList.add("video-frame-thumb-error");
         placeholder.title = "OpenCV konnte dieses Szenenbild nicht erzeugen. Details im Analyseprotokoll (VIDEO_FRAME_GENERATION_ERROR).";
       }
     }, { once: true });
