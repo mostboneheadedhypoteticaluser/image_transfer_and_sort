@@ -3002,34 +3002,34 @@ async function loadImagePreviewDetails(
       imagePreviewOverlay.replaceChildren();
     }
 
-    window.setTimeout(() => {
-      if (
-        !imagePreviewDialog.open ||
-        loadToken !== imagePreviewDetailLoadToken
-      ) {
-        return;
-      }
+    if (!isVideoExtension(details.extension)) {
+      window.setTimeout(() => {
+        if (
+          !imagePreviewDialog.open ||
+          loadToken !== imagePreviewDetailLoadToken
+        ) {
+          return;
+        }
 
-      void window.imageSorter.catalog
-        .getSearchFacets(details.sourceId)
-        .then((facets) => {
-          if (
-            !imagePreviewDialog.open ||
-            loadToken !== imagePreviewDetailLoadToken ||
-            currentImagePreviewDetails?.mediaId !== mediaId
-          ) {
-            return;
-          }
-          fillPreviewIdentityNames(facets.persons, facets.pets);
-          if (!isVideoExtension(details.extension)) {
+        void window.imageSorter.catalog
+          .getSearchFacets(details.sourceId)
+          .then((facets) => {
+            if (
+              !imagePreviewDialog.open ||
+              loadToken !== imagePreviewDetailLoadToken ||
+              currentImagePreviewDetails?.mediaId !== mediaId
+            ) {
+              return;
+            }
+            fillPreviewIdentityNames(facets.persons, facets.pets);
             renderImagePreviewOverlay(details);
-          }
-        })
-        .catch(() => {
-          // Die Detailansicht ist bereits vollständig nutzbar; eine langsame
-          // oder fehlgeschlagene Namensliste darf sie nicht wieder verdecken.
-        });
-    }, isVideoExtension(details.extension) ? 500 : 0);
+          })
+          .catch(() => {
+            // Die Detailansicht ist bereits vollständig nutzbar; eine langsame
+            // oder fehlgeschlagene Namensliste darf sie nicht wieder verdecken.
+          });
+      }, 0);
+    }
 
     return details;
   } catch (error) {
@@ -4313,11 +4313,14 @@ function renderRows(rows: MediaRecord[], emptyText = "Noch keine Medien katalogi
     analysisStage.className =
       "analysis-stage-badge " +
       (row.analysisStageStatus === "DONE" ? "done" : "waiting");
-    analysisStage.textContent = row.analysisStage
-      ? analysisModuleLabel(row.analysisStage)
+    const displayedStage = displayedMediaAnalysisStage(row);
+    analysisStage.textContent = displayedStage
+      ? analysisModuleLabel(displayedStage)
       : "Noch nicht analysiert";
-    analysisStage.title = row.analysisStage
-      ? "Höchste vollständig abgeschlossene Analyse-Stufe"
+    analysisStage.title = displayedStage
+      ? row.analysisStage
+        ? "Höchste vollständig abgeschlossene Analyse-Stufe"
+        : "Aus bereits gespeicherten Analyseergebnissen abgeleitete Stufe"
       : "Für diese Datei ist noch keine Analyse-Stufe vollständig abgeschlossen.";
     analysisCell.appendChild(analysisStage);
 
@@ -6169,6 +6172,17 @@ const analysisModuleLabels: Record<string, string> = {
 
 function analysisModuleLabel(module: string): string {
   return analysisModuleLabels[module] ?? module;
+}
+
+function displayedMediaAnalysisStage(row: MediaRecord): string {
+  if (row.analysisStage) return row.analysisStage;
+  if (row.catalogSemanticReady) return "catalog-semantic-qwen3vl4b-v3";
+  if (row.semanticReady) return "semantic-embed-siglip2-v1";
+  if (row.petCount > 0) return "pet-fuse-ensemble-v1";
+  if (row.faceEmbeddingCount > 0) return "face-embed-sface-v1";
+  if (row.faceCount > 0) return "face-detect-yunet-v1";
+  if (row.thumbnailReady) return "thumbnail-v1";
+  return "";
 }
 
 function isUnavailableAnalysisError(error: AnalysisErrorRecord): boolean {
