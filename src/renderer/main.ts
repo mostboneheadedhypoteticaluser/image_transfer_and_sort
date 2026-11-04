@@ -172,6 +172,7 @@ const lifeAreaAssignList = document.querySelector<HTMLDivElement>("#lifeAreaAssi
 const imagePreviewDialog = document.querySelector<HTMLDialogElement>("#imagePreviewDialog")!;
 const closeImagePreviewButton = document.querySelector<HTMLButtonElement>("#closeImagePreview")!;
 const imagePreviewImage = document.querySelector<HTMLImageElement>("#imagePreviewImage")!;
+const imagePreviewVideo = document.querySelector<HTMLVideoElement>("#imagePreviewVideo")!;
 const imagePreviewImageWrap = document.querySelector<HTMLDivElement>("#imagePreviewImageWrap")!;
 const imagePreviewOverlay = document.querySelector<HTMLDivElement>("#imagePreviewOverlay")!;
 const imagePreviewPersonNames = document.querySelector<HTMLDataListElement>("#imagePreviewPersonNames")!;
@@ -1189,6 +1190,15 @@ function createIdentitySimilarityList(
 function fullPreviewUrl(mediaId: number): string {
   return `image-sorter-preview://media/${mediaId}?v=${IDENTITY_IMAGE_CACHE_VERSION}`;
 }
+
+function fullMediaUrl(mediaId: number): string {
+  return `image-sorter-media://media/${mediaId}`;
+}
+
+function isVideoExtension(extension: string): boolean {
+  return LIBRARY_VIDEO_EXTENSIONS.has(extension.toLowerCase());
+}
+
 
 
 function renderCandidateReviewBox(): void {
@@ -2821,7 +2831,11 @@ async function loadImagePreviewDetails(mediaId: number): Promise<void> {
     const facets = await window.imageSorter.catalog.getSearchFacets(details.sourceId);
     fillPreviewIdentityNames(facets.persons, facets.pets);
     renderImagePreviewDetails(details);
-    renderImagePreviewOverlay(details);
+    if (!isVideoExtension(details.extension)) {
+      renderImagePreviewOverlay(details);
+    } else {
+      imagePreviewOverlay.replaceChildren();
+    }
   } catch (error) {
     if (!imagePreviewDialog.open) return;
     imagePreviewDetails.replaceChildren();
@@ -2932,12 +2946,30 @@ async function openLifeAreaAssignment(
   }
 }
 
-function openImagePreview(mediaId: number, caption: string): void {
+function openImagePreview(
+  mediaId: number,
+  caption: string,
+  extension = ""
+): void {
   currentImagePreviewDetails = null;
   imagePreviewOverlay.replaceChildren();
-  imagePreviewImage.src = fullPreviewUrl(mediaId);
-  imagePreviewImage.alt = caption;
   imagePreviewCaption.textContent = caption;
+
+  const video = isVideoExtension(extension);
+  imagePreviewImageWrap.hidden = video;
+  imagePreviewVideo.hidden = !video;
+
+  if (video) {
+    imagePreviewImage.removeAttribute("src");
+    imagePreviewVideo.src = fullMediaUrl(mediaId);
+    imagePreviewVideo.load();
+  } else {
+    imagePreviewVideo.pause();
+    imagePreviewVideo.removeAttribute("src");
+    imagePreviewVideo.load();
+    imagePreviewImage.src = fullPreviewUrl(mediaId);
+    imagePreviewImage.alt = caption;
+  }
 
   if (!imagePreviewDialog.open) {
     imagePreviewDialog.showModal();
@@ -2947,8 +2979,18 @@ function openImagePreview(mediaId: number, caption: string): void {
 }
 
 imagePreviewImage.addEventListener("load", () => {
-  if (!imagePreviewDialog.open || !currentImagePreviewDetails) return;
+  if (
+    !imagePreviewDialog.open ||
+    !currentImagePreviewDetails ||
+    isVideoExtension(currentImagePreviewDetails.extension)
+  ) return;
   renderImagePreviewOverlay(currentImagePreviewDetails);
+});
+
+imagePreviewDialog.addEventListener("close", () => {
+  imagePreviewVideo.pause();
+  imagePreviewVideo.removeAttribute("src");
+  imagePreviewVideo.load();
 });
 
 function makePreviewable(
@@ -2961,7 +3003,9 @@ function makePreviewable(
   image.setAttribute("role", "button");
   image.setAttribute("aria-label", "Bild groß anzeigen");
 
-  const open = () => openImagePreview(mediaId, caption);
+  const extension =
+    caption.includes(".") ? "." + caption.split(".").pop()!.toLowerCase() : "";
+  const open = () => openImagePreview(mediaId, caption, extension);
   image.addEventListener("click", open);
   image.addEventListener("keydown", (event) => {
     if (event.key === "Enter" || event.key === " ") {
@@ -3727,7 +3771,7 @@ function renderRows(rows: MediaRecord[], emptyText = "Noch keine Medien katalogi
   if (rows.length === 0) {
     const tr = document.createElement("tr");
     const td = document.createElement("td");
-    td.colSpan = 6;
+    td.colSpan = 7;
     td.className = "empty";
     td.textContent = emptyText;
     tr.appendChild(td);
@@ -3745,7 +3789,7 @@ function renderRows(rows: MediaRecord[], emptyText = "Noch keine Medien katalogi
         const groupRow = document.createElement("tr");
         groupRow.className = "media-group-row";
         const groupCell = document.createElement("td");
-        groupCell.colSpan = 6;
+        groupCell.colSpan = 7;
         groupCell.textContent = group;
         groupRow.appendChild(groupCell);
         fragment.appendChild(groupRow);
@@ -3975,6 +4019,20 @@ function renderRows(rows: MediaRecord[], emptyText = "Noch keine Medien katalogi
       stateCell.appendChild(semanticBadge);
     }
 
+    const analysisCell = document.createElement("td");
+    analysisCell.className = "analysis-stage-cell";
+    const analysisStage = document.createElement("span");
+    analysisStage.className =
+      "analysis-stage-badge " +
+      (row.analysisStageStatus === "DONE" ? "done" : "waiting");
+    analysisStage.textContent = row.analysisStage
+      ? analysisModuleLabel(row.analysisStage)
+      : "Noch nicht analysiert";
+    analysisStage.title = row.analysisStage
+      ? "Höchste vollständig abgeschlossene Analyse-Stufe"
+      : "Für diese Datei ist noch keine Analyse-Stufe vollständig abgeschlossen.";
+    analysisCell.appendChild(analysisStage);
+
     const actionCell = document.createElement("td");
     if (row.availability === "MISSING" && row.recycleState === "RESTORABLE") {
       const restoreButton = document.createElement("button");
@@ -4005,7 +4063,7 @@ function renderRows(rows: MediaRecord[], emptyText = "Noch keine Medien katalogi
       actionCell.className = "muted";
     }
 
-    tr.append(previewCell, pathCell, typeCell, sizeCell, stateCell, actionCell);
+    tr.append(previewCell, pathCell, typeCell, sizeCell, stateCell, analysisCell, actionCell);
     fragment.appendChild(tr);
   }
 
