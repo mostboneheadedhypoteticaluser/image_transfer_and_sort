@@ -4743,3 +4743,23 @@ body {
   line-height: 1;
   pointer-events: none;
 }
+
+
+.analysis-stage-summary {
+  display: block;
+  margin-top: 5px;
+  max-width: 230px;
+  color: #6f7984;
+  font-size: 10px;
+  line-height: 1.35;
+  white-space: normal;
+}
+
+.image-detail-identity-suggestions {
+  display: block;
+  margin-top: 5px;
+  color: #425f78;
+  font-size: 11px;
+  line-height: 1.4;
+  white-space: normal;
+}
