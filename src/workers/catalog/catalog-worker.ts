@@ -708,6 +708,20 @@ db.exec(`
     ON media_items(source_id, in_recycle_bin);
   CREATE INDEX IF NOT EXISTS idx_media_identity
     ON media_items(source_id, device_id, inode);
+  CREATE INDEX IF NOT EXISTS idx_media_library_duplicates
+    ON media_items(source_id, availability, sha256, size_bytes);
+  CREATE INDEX IF NOT EXISTS idx_analysis_media_sha_status
+    ON analysis_jobs(media_id, input_sha256, status);
+  CREATE INDEX IF NOT EXISTS idx_face_media_sha
+    ON face_detections(media_id, input_sha256);
+  CREATE INDEX IF NOT EXISTS idx_face_embedding_media_sha
+    ON face_embeddings(media_id, input_sha256);
+  CREATE INDEX IF NOT EXISTS idx_pet_fused_media_sha_class
+    ON pet_fused_detections(media_id, input_sha256, pet_class);
+  CREATE INDEX IF NOT EXISTS idx_pet_embedding_media_sha
+    ON pet_embeddings(media_id, input_sha256);
+  CREATE INDEX IF NOT EXISTS idx_object_fused_media_sha_label
+    ON object_fused_detections(media_id, input_sha256, label);
 
   DELETE FROM media_items
   WHERE lower(relative_path) LIKE '$recycle.bin/%'
