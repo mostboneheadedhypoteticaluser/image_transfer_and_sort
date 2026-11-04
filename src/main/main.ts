@@ -2284,11 +2284,22 @@ async function performGracefulShutdown(): Promise<void> {
     "Alle gespeicherten Daten sind gesichert. App wird geschlossen …"
   );
 
-  // Ein kurzer Paint-Zyklus macht den finalen Status noch sichtbar.
+  // Ein kurzer Paint-Zyklus macht den finalen Status noch sichtbar und
+  // gibt dem Renderer Zeit, seine automatischen Refreshes zu stoppen.
   await delay(120);
 
+  // Bereits gestartete IPC-/Katalogabfragen dürfen noch sauber antworten.
+  // Beim normalen Shutdown werden verbleibende Promises danach nicht mehr
+  // künstlich rejected, weil der Renderer unmittelbar mit beendet wird.
+  if (catalog) {
+    const catalogIdle = await catalog.waitUntilIdle(1800);
+    if (!catalogIdle) {
+      analysis?.logDiagnostic("APP_SHUTDOWN_CATALOG_REQUESTS_STILL_PENDING");
+    }
+  }
+
   isQuitting = true;
-  catalog?.stop();
+  catalog?.stop(false);
 
   allowQuit = true;
   app.quit();
