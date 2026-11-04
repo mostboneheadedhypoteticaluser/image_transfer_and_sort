@@ -987,6 +987,11 @@ td .badge + .badge {
   object-fit: cover;
 }
 
+.person-face img[hidden],
+.face-fallback[hidden] {
+  display: none !important;
+}
+
 .face-fallback {
   display: flex;
   align-items: center;
