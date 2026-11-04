@@ -353,6 +353,16 @@ export class PetService {
     );
   }
 
+  async assignDetectionName(
+    petDetectionId: number,
+    name: string
+  ): Promise<DirectIdentityAssignmentResult> {
+    return this.catalog.request<DirectIdentityAssignmentResult>(
+      "assignPetDetectionName",
+      { petDetectionId, name }
+    );
+  }
+
   async renamePet(
     petId: number,
     name: string
