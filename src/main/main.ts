@@ -1045,8 +1045,17 @@ function registerIpc(): void {
       // eintragen. Deshalb beide Pipelines kurz sauber anhalten.
       await analysisCoordinator?.pauseForMaintenance();
       thumbnailCoordinator?.stop();
+
+      if (personRefreshTimer) {
+        clearTimeout(personRefreshTimer);
+        personRefreshTimer = null;
+      }
+
       try {
-        await thumbnailCoordinator?.waitUntilIdle();
+        await Promise.all([
+          thumbnailCoordinator?.waitUntilIdle() ?? Promise.resolve(),
+          waitForIdentityRefreshIdle()
+        ]);
         const result = await catalog!.request<ReanalyzeMediaResult>(
           "reanalyzeMedia",
           { mediaId }
