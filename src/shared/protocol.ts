@@ -915,6 +915,12 @@ export type ResetCatalogResult = {
   reset: true;
 };
 
+export type ReanalyzeMediaResult = {
+  mediaId: number;
+  requeued: number;
+  cleared: number;
+};
+
 export type ScanProgress = {
   sourceId: number;
   discovered: number;
@@ -999,6 +1005,7 @@ export type CatalogMethod =
   | "getThumbnailInfo"
   | "getMediaPreviewInfo"
   | "getMediaDetails"
+  | "reanalyzeMedia"
   | "getMediaPath"
   | "scanSource"
   | "reconcileSourceChanges"
