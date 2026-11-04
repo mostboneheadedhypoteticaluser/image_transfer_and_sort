@@ -370,6 +370,10 @@ const api = {
       ipcRenderer.invoke("catalog:listRecycleMedia", sourceId, limit),
     getMediaDetails: (mediaId: number): Promise<MediaDetails | null> =>
       ipcRenderer.invoke("catalog:getMediaDetails", mediaId),
+    reanalyzeMedia: (
+      mediaId: number
+    ): Promise<{ mediaId: number; requeued: number; cleared: number }> =>
+      ipcRenderer.invoke("catalog:reanalyzeMedia", mediaId),
     scanSource: (sourceId: number): Promise<ScanResult> => ipcRenderer.invoke("catalog:scanSource", sourceId),
     restoreMedia: (mediaId: number): Promise<RestoreResult> => ipcRenderer.invoke("catalog:restoreMedia", mediaId),
     resetCatalog: (): Promise<ResetCatalogResult> => ipcRenderer.invoke("catalog:resetCatalog"),
