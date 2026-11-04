@@ -173,6 +173,7 @@ const imagePreviewDialog = document.querySelector<HTMLDialogElement>("#imagePrev
 const closeImagePreviewButton = document.querySelector<HTMLButtonElement>("#closeImagePreview")!;
 const imagePreviewImage = document.querySelector<HTMLImageElement>("#imagePreviewImage")!;
 const imagePreviewVideo = document.querySelector<HTMLVideoElement>("#imagePreviewVideo")!;
+const imagePreviewVideoError = document.querySelector<HTMLDivElement>("#imagePreviewVideoError")!;
 const imagePreviewImageWrap = document.querySelector<HTMLDivElement>("#imagePreviewImageWrap")!;
 const imagePreviewOverlay = document.querySelector<HTMLDivElement>("#imagePreviewOverlay")!;
 const imagePreviewPersonNames = document.querySelector<HTMLDataListElement>("#imagePreviewPersonNames")!;
@@ -3155,6 +3156,8 @@ function openImagePreview(
   const video = isVideoExtension(extension);
   imagePreviewImageWrap.hidden = video;
   imagePreviewVideo.hidden = !video;
+  imagePreviewVideoError.hidden = true;
+  imagePreviewVideoError.textContent = "";
 
   if (video) {
     imagePreviewImage.removeAttribute("src");
@@ -3190,6 +3193,21 @@ function openImagePreview(
   });
 }
 
+imagePreviewVideo.addEventListener("loadedmetadata", () => {
+  imagePreviewVideoError.hidden = true;
+  imagePreviewVideoError.textContent = "";
+});
+
+imagePreviewVideo.addEventListener("error", () => {
+  if (imagePreviewVideo.hidden || !imagePreviewDialog.open) return;
+  const code = imagePreviewVideo.error?.code ?? 0;
+  imagePreviewVideoError.hidden = false;
+  imagePreviewVideoError.textContent =
+    "Video kann im integrierten Player nicht wiedergegeben werden" +
+    (code ? " (Fehlercode " + code + ")" : "") +
+    ". Datei/Codec oder Videostream prüfen.";
+});
+
 imagePreviewImage.addEventListener("load", () => {
   if (
     !imagePreviewDialog.open ||
@@ -3203,6 +3221,8 @@ imagePreviewDialog.addEventListener("close", () => {
   imagePreviewDetailLoadToken += 1;
   currentImagePreviewDetails = null;
   imagePreviewVideo.pause();
+  imagePreviewVideoError.hidden = true;
+  imagePreviewVideoError.textContent = "";
   imagePreviewVideo.removeAttribute("src");
   imagePreviewVideo.load();
 });
