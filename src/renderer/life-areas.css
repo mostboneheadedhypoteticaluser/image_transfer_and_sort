@@ -792,3 +792,29 @@
     justify-self: end;
   }
 }
+
+
+.life-area-loading {
+  display: flex;
+  min-height: 72px;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 14px;
+  color: #68727d;
+  font-size: 12px;
+}
+
+.life-area-spinner {
+  width: 20px;
+  height: 20px;
+  flex: 0 0 20px;
+  border: 2px solid rgba(23, 32, 42, .16);
+  border-top-color: #d72622;
+  border-radius: 50%;
+  animation: life-area-spin .75s linear infinite;
+}
+
+@keyframes life-area-spin {
+  to { transform: rotate(360deg); }
+}
