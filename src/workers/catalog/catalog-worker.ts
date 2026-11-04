@@ -2495,6 +2495,9 @@ function listRecycleMedia(sourceId: number, requestedLimit: number) {
     objectLabels: row.object_labels
       ? String(row.object_labels).split(",").filter(Boolean)
       : [],
+    markerLabels: [],
+    analysisStage: "",
+    analysisStageStatus: "NONE",
     semanticReady: false,
     semanticModel: null,
     semanticScore: null,
