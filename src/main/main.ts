@@ -67,6 +67,9 @@ import type {
 let windowRef: BrowserWindow | null = null;
 let sourceManagerWindowRef: BrowserWindow | null = null;
 let catalog: CatalogService | null = null;
+// Eigener Lese-Worker für interaktive Detail-/Player-Abfragen. Dadurch kann
+// eine große Medienlistenabfrage die Detailansicht nicht mehr blockieren.
+let interactiveCatalog: CatalogService | null = null;
 let analysis: AnalysisService | null = null;
 let analysisCoordinator: AnalysisCoordinator | null = null;
 let thumbnailService: ThumbnailService | null = null;
@@ -1046,7 +1049,10 @@ function registerIpc(): void {
   );
 
   ipcMain.handle("catalog:getMediaDetails", (_event, mediaId: number) =>
-    catalog!.request<MediaDetails | null>("getMediaDetails", { mediaId })
+    (interactiveCatalog ?? catalog)!.request<MediaDetails | null>(
+      "getMediaDetails",
+      { mediaId }
+    )
   );
 
   ipcMain.handle(
@@ -1102,6 +1108,7 @@ function registerIpc(): void {
 
   ipcMain.handle("catalog:resetCatalog", async () => {
     semanticTextCache.clear();
+    interactiveCatalog?.stop();
     analysis?.logDiagnostic("CATALOG_RESET_BEGIN");
     catalogWatchService?.stop();
 
@@ -1210,6 +1217,7 @@ function registerIpc(): void {
         // fehlgeschlagenen Reset wird dagegen ein Sicherheitsabgleich der
         // weiterhin vorhandenen Quellen durchgeführt.
         await catalogWatchService?.start(!resetSucceeded);
+        interactiveCatalog?.start();
       }
     }
   });
@@ -1771,6 +1779,9 @@ app.whenReady().then(() => {
   catalog = new CatalogService(workerPath, dbPath, (progress) => {
     sendToRenderer("catalog:progress", progress);
   });
+  interactiveCatalog = new CatalogService(workerPath, dbPath, () => {
+    // Der interaktive Worker führt keine Scans aus.
+  });
 
   const analysisDevLogPath = path.join(
     app.getPath("userData"),
@@ -1815,6 +1826,7 @@ app.whenReady().then(() => {
   );
 
   catalog.start();
+  interactiveCatalog.start();
   thumbnailService.start();
   registerIpc();
 
@@ -1984,7 +1996,7 @@ app.whenReady().then(() => {
         return new Response("Ungültige Medien-ID.", { status: 400 });
       }
 
-      const info = await catalog!.request<MediaPreviewInfo | null>(
+      const info = await (interactiveCatalog ?? catalog)!.request<MediaPreviewInfo | null>(
         "getMediaPreviewInfo",
         { mediaId }
       );
@@ -2237,8 +2249,15 @@ async function performGracefulShutdown(): Promise<void> {
       analysis?.logDiagnostic("APP_SHUTDOWN_CATALOG_REQUESTS_STILL_PENDING");
     }
   }
+  if (interactiveCatalog) {
+    const interactiveIdle = await interactiveCatalog.waitUntilIdle(1800);
+    if (!interactiveIdle) {
+      analysis?.logDiagnostic("APP_SHUTDOWN_INTERACTIVE_CATALOG_REQUESTS_STILL_PENDING");
+    }
+  }
 
   isQuitting = true;
+  interactiveCatalog?.stop(false);
   catalog?.stop(false);
 
   allowQuit = true;
@@ -2258,6 +2277,7 @@ function beginGracefulShutdown(): Promise<void> {
     // nur unsere eigenen Worker hart beendet.
     analysis?.stopImmediately();
     thumbnailService?.stop();
+    interactiveCatalog?.stop();
     catalog?.stop();
     isQuitting = true;
     allowQuit = true;
@@ -2285,6 +2305,7 @@ function shutdownServicesImmediately(): void {
   thumbnailCoordinator?.stop();
   analysis?.stopImmediately();
   thumbnailService?.stop();
+  interactiveCatalog?.stop();
   catalog?.stop();
 }
 
