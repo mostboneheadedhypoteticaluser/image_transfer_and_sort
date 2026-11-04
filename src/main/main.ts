@@ -2029,7 +2029,7 @@ app.whenReady().then(() => {
         return new Response("Ungültige Medienadresse.", { status: 400 });
       }
 
-      const mediaId = Number(url.pathname.replace(/^\\//, ""));
+      const mediaId = Number(url.pathname.replace(/^\//, ""));
       if (!Number.isFinite(mediaId)) {
         return new Response("Ungültige Medien-ID.", { status: 400 });
       }
@@ -2063,7 +2063,7 @@ app.whenReady().then(() => {
       let status = 200;
 
       if (range) {
-        const match = /^bytes=(\\d*)-(\\d*)$/i.exec(range.trim());
+        const match = /^bytes=(\d*)-(\d*)$/i.exec(range.trim());
         if (!match) {
           return new Response(null, {
             status: 416,
