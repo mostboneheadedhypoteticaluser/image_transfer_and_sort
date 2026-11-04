@@ -981,12 +981,14 @@ function thumbnailUrl(row: MediaRecord): string | null {
   return `image-sorter-thumb://media/${row.id}?v=${encodeURIComponent(row.thumbnailVersion)}`;
 }
 
+const IDENTITY_IMAGE_CACHE_VERSION = "2026-11-04-v2";
+
 function faceCropUrl(faceDetectionId: number): string {
-  return `image-sorter-face://face/${faceDetectionId}`;
+  return `image-sorter-face://face/${faceDetectionId}?v=${IDENTITY_IMAGE_CACHE_VERSION}`;
 }
 
 function petCropUrl(petDetectionId: number): string {
-  return `image-sorter-pet://pet/${petDetectionId}`;
+  return `image-sorter-pet://pet/${petDetectionId}?v=${IDENTITY_IMAGE_CACHE_VERSION}`;
 }
 
 type IdentityNameOption = {
@@ -1159,7 +1161,7 @@ function createIdentitySimilarityList(
 }
 
 function fullPreviewUrl(mediaId: number): string {
-  return `image-sorter-preview://media/${mediaId}`;
+  return `image-sorter-preview://media/${mediaId}?v=${IDENTITY_IMAGE_CACHE_VERSION}`;
 }
 
 
