@@ -2819,6 +2819,80 @@ function renderImagePreviewDetails(details: MediaDetails): void {
   reanalyzePanel.append(reanalyzeCopy, reanalyzeButton);
   imagePreviewDetails.appendChild(reanalyzePanel);
 
+  if (!isVideoExtension(details.extension)) {
+    const pendingFaces = details.faces
+      .filter((face) => !(face.personId && face.assignmentSource === "CONFIRMED"))
+      .map((face) => ({
+        id: face.id,
+        name: face.personName ?? face.suggestedPersons[0]?.personName ?? ""
+      }))
+      .filter((face) => face.name.trim().length > 0);
+    const pendingPets = details.pets
+      .filter((pet) => !(pet.petId && pet.assignmentSource === "CONFIRMED"))
+      .map((pet) => ({
+        id: pet.id,
+        name: pet.petName ?? pet.suggestedPets[0]?.petName ?? ""
+      }))
+      .filter((pet) => pet.name.trim().length > 0);
+    const pendingCount = pendingFaces.length + pendingPets.length;
+    if (pendingCount > 0) {
+      const panel = document.createElement("div");
+      panel.className = "image-detail-reanalyze";
+      const description = document.createElement("div");
+      const title = document.createElement("strong");
+      title.textContent = "Erkannte Personen und Haustiere";
+      const hint = document.createElement("small");
+      hint.textContent =
+        pendingCount + (pendingCount === 1
+          ? " unbestätigter Namensvorschlag"
+          : " unbestätigte Namensvorschläge") +
+        " · Erkennungen ohne Namensvorschlag bleiben unverändert.";
+      description.append(title, hint);
+
+      const confirmAll = document.createElement("button");
+      confirmAll.type = "button";
+      confirmAll.className = "secondary";
+      confirmAll.textContent = "Alle bestätigen (" + pendingCount + ")";
+      confirmAll.addEventListener("click", () => {
+        void runSafely(async () => {
+          confirmAll.disabled = true;
+          let succeeded = 0;
+          const failures: string[] = [];
+          try {
+            for (const face of pendingFaces) {
+              try {
+                await window.imageSorter.persons.assignDetectionName(face.id, face.name);
+                succeeded += 1;
+              } catch (error) {
+                failures.push("Person " + face.id + ": " + String(error));
+              }
+            }
+            for (const pet of pendingPets) {
+              try {
+                await window.imageSorter.pets.assignDetectionName(pet.id, pet.name);
+                succeeded += 1;
+              } catch (error) {
+                failures.push("Haustier " + pet.id + ": " + String(error));
+              }
+            }
+            progressText.textContent =
+              succeeded + " Zuordnungen bestätigt." +
+              (failures.length ? " " + failures.length + " fehlgeschlagen: " + failures.slice(0, 2).join("; ") : "");
+            await Promise.all([
+              loadImagePreviewDetails(details.mediaId),
+              refreshIdentityTabStats(),
+              refreshCatalog()
+            ]);
+          } finally {
+            confirmAll.disabled = false;
+          }
+        });
+      });
+      panel.append(description, confirmAll);
+      imagePreviewDetails.appendChild(panel);
+    }
+  }
+
   const fileRows: Array<[string, unknown]> = [
     ["Datei", details.relativePath],
     ["Vollständiger Pfad", details.absolutePath],
