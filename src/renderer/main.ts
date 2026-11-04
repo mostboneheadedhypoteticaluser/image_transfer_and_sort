@@ -245,6 +245,7 @@ const LIBRARY_VIDEO_EXTENSIONS = new Set([
   ".mp4", ".mov", ".m4v", ".avi", ".mkv", ".webm", ".wmv", ".mts", ".m2ts"
 ]);
 let libraryRows: MediaRecord[] = [];
+let libraryLoadToken = 0;
 const selectedLibraryMarks = new Set<string>();
 let identityBrowserMode: "people" | "pets" = "people";
 let identityBrowserMediaFilter: "all" | "image" | "video" = "all";
@@ -3162,7 +3163,7 @@ function openImagePreview(
   if (video) {
     imagePreviewImage.removeAttribute("src");
     imagePreviewVideo.pause();
-    imagePreviewVideo.removeAttribute("src");
+    imagePreviewVideo.src = fullMediaUrl(mediaId);
     imagePreviewVideo.load();
   } else {
     imagePreviewVideo.pause();
@@ -3176,21 +3177,9 @@ function openImagePreview(
     imagePreviewDialog.showModal();
   }
 
-  void loadImagePreviewDetails(mediaId).then((details) => {
-    if (
-      !video ||
-      !details ||
-      !imagePreviewDialog.open ||
-      currentImagePreviewDetails?.mediaId !== mediaId
-    ) {
-      return;
-    }
-
-    // Erst nach dem Detail-IPC den Videostream starten. Damit konkurriert
-    // getMediaPreviewInfo nicht mit der Detailabfrage im Katalog-Worker.
-    imagePreviewVideo.src = fullMediaUrl(mediaId);
-    imagePreviewVideo.load();
-  });
+  // Player und Detaildaten sind absichtlich unabhängig. Ein Video kann sofort
+  // starten, auch wenn Analyse-/Mediendaten noch nicht vorhanden sind.
+  void loadImagePreviewDetails(mediaId);
 }
 
 imagePreviewVideo.addEventListener("loadedmetadata", () => {
@@ -6385,6 +6374,46 @@ function scheduleWatchCatalogRefresh(): void {
   }, 900);
 }
 
+async function loadLibraryRows(
+  sourceId: number,
+  showLoading = false
+): Promise<void> {
+  const loadToken = ++libraryLoadToken;
+  const mediaKind =
+    libraryMediaType.value === "image" || libraryMediaType.value === "video"
+      ? libraryMediaType.value
+      : "all";
+
+  if (showLoading || libraryRows.length === 0) {
+    showTableLoading(
+      mediaKind === "video"
+        ? "Videos werden geladen …"
+        : mediaKind === "image"
+          ? "Bilder werden geladen …"
+          : "Medienbibliothek wird geladen …"
+    );
+  }
+
+  const rows = await window.imageSorter.catalog.listMedia(
+    sourceId,
+    2000,
+    mediaKind
+  );
+
+  if (
+    rendererShuttingDown ||
+    loadToken !== libraryLoadToken ||
+    currentView !== "media" ||
+    selectedSourceId() !== sourceId
+  ) {
+    return;
+  }
+
+  libraryRows = rows;
+  updateLibraryMarkOptions(rows);
+  applyLibraryView();
+}
+
 async function refreshCatalog(): Promise<void> {
   if (rendererShuttingDown) return;
   const sourceId = selectedSourceId();
@@ -6392,6 +6421,8 @@ async function refreshCatalog(): Promise<void> {
   resetButton.disabled = scanning || restoring || resetting;
 
   if (sourceId === null) {
+    libraryLoadToken += 1;
+    libraryRows = [];
     totalCount.textContent = "0";
     availableCount.textContent = "0";
     missingCount.textContent = "0";
@@ -6424,8 +6455,15 @@ async function refreshCatalog(): Promise<void> {
     return;
   }
 
+  // Medienliste sofort losschicken. Sie steht damit in der Worker-Queue vor
+  // den weniger wichtigen Zähler-/Statistikabfragen und kann sichtbar werden,
+  // ohne auf diese Nebeninformationen zu warten.
+  const libraryPromise =
+    currentView === "media"
+      ? loadLibraryRows(sourceId, libraryRows.length === 0)
+      : null;
+
   const stats = await window.imageSorter.catalog.getStats(sourceId);
-  await refreshAnalysisErrorCount();
 
   totalCount.textContent = stats.total.toLocaleString("de-DE");
   availableCount.textContent = stats.available.toLocaleString("de-DE");
@@ -6434,8 +6472,21 @@ async function refreshCatalog(): Promise<void> {
   lastScan.textContent = stats.lastScan ?? "—";
   mediaTabCount.textContent = stats.total.toLocaleString("de-DE");
   duplicateTabCount.textContent = stats.duplicateGroups.toLocaleString("de-DE");
-  await refreshIdentityTabStats();
   recycleTabCount.textContent = stats.recycleBin.toLocaleString("de-DE");
+
+  if (currentView === "media") {
+    // Zähler aktualisieren die Navigation nur ergänzend. Sie dürfen die
+    // eigentliche Medienansicht nicht verzögern.
+    void refreshAnalysisErrorCount().catch(() => undefined);
+    void refreshIdentityTabStats().catch(() => undefined);
+    await libraryPromise;
+    return;
+  }
+
+  await Promise.all([
+    refreshAnalysisErrorCount(),
+    refreshIdentityTabStats()
+  ]);
 
   if (currentView === "duplicates") {
     const groups = await window.imageSorter.catalog.listDuplicateGroups(sourceId, 100);
@@ -6463,13 +6514,7 @@ async function refreshCatalog(): Promise<void> {
     const searchSourceId = searchScopeSourceId();
     await loadSearchFacets(searchSourceId);
     await runCombinedSearch(searchSourceId);
-    return;
   }
-
-  const rows = await window.imageSorter.catalog.listMedia(sourceId, 2000);
-  libraryRows = rows;
-  updateLibraryMarkOptions(rows);
-  applyLibraryView();
 }
 
 async function loadSources(preselectId?: number): Promise<void> {
@@ -6640,8 +6685,13 @@ resetButton.addEventListener("click", () => {
   });
 });
 
+libraryMediaType.addEventListener("change", () => {
+  const sourceId = selectedSourceId();
+  if (sourceId === null || currentView !== "media") return;
+  void runSafely(() => loadLibraryRows(sourceId, true));
+});
+
 for (const control of [
-  libraryMediaType,
   libraryStatus,
   librarySort,
   libraryGroup
@@ -6652,12 +6702,20 @@ for (const control of [
 libraryTextFilter.addEventListener("input", applyLibraryView);
 
 libraryReset.addEventListener("click", () => {
+  const mediaKindChanged = libraryMediaType.value !== "all";
   libraryMediaType.value = "all";
   libraryStatus.value = "all";
   libraryTextFilter.value = "";
   librarySort.value = "captured-desc";
   libraryGroup.value = "none";
   selectedLibraryMarks.clear();
+
+  const sourceId = selectedSourceId();
+  if (mediaKindChanged && sourceId !== null && currentView === "media") {
+    void runSafely(() => loadLibraryRows(sourceId, true));
+    return;
+  }
+
   updateLibraryMarkOptions(libraryRows);
   applyLibraryView();
 });
