@@ -2397,8 +2397,10 @@ function renderImagePreviewOverlay(details: MediaDetails): void {
             renderImagePreviewOverlay(refreshed);
           }
 
-          await refreshIdentityTabStats();
-          scheduleCatalogWatchRefresh();
+          await Promise.all([
+            refreshIdentityTabStats(),
+            refreshCatalog()
+          ]);
         } finally {
           save.disabled = false;
           input.disabled = false;
