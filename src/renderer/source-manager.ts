@@ -134,6 +134,11 @@ function refreshRenderedSelections(): void {
 }
 
 async function refreshSources(): Promise<void> {
+  const loading = document.createElement("div");
+  loading.className = "tree-status loading";
+  loading.textContent = "Medienquellen werden geladen …";
+  activeSources.replaceChildren(loading);
+
   sources = await window.imageSorter.catalog.listSources();
   renderSources();
   refreshRenderedSelections();
