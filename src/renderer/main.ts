@@ -172,6 +172,10 @@ const lifeAreaAssignList = document.querySelector<HTMLDivElement>("#lifeAreaAssi
 const imagePreviewDialog = document.querySelector<HTMLDialogElement>("#imagePreviewDialog")!;
 const closeImagePreviewButton = document.querySelector<HTMLButtonElement>("#closeImagePreview")!;
 const imagePreviewImage = document.querySelector<HTMLImageElement>("#imagePreviewImage")!;
+const imagePreviewImageWrap = document.querySelector<HTMLDivElement>("#imagePreviewImageWrap")!;
+const imagePreviewOverlay = document.querySelector<HTMLDivElement>("#imagePreviewOverlay")!;
+const imagePreviewPersonNames = document.querySelector<HTMLDataListElement>("#imagePreviewPersonNames")!;
+const imagePreviewPetNames = document.querySelector<HTMLDataListElement>("#imagePreviewPetNames")!;
 const imagePreviewCaption = document.querySelector<HTMLDivElement>("#imagePreviewCaption")!;
 const imagePreviewDetails = document.querySelector<HTMLDivElement>("#imagePreviewDetails")!;
 const candidateReviewDialog = document.querySelector<HTMLDialogElement>("#candidateReviewDialog")!;
@@ -2218,6 +2222,194 @@ function detailChips(values: string[]): HTMLElement {
   return wrapper;
 }
 
+
+function fillPreviewIdentityNames(
+  persons: Array<{ name: string }>,
+  pets: Array<{ name: string }>
+): void {
+  imagePreviewPersonNames.replaceChildren();
+  for (const name of [...new Set(persons.map((item) => item.name))].sort((a, b) =>
+    a.localeCompare(b, "de", { sensitivity: "base" })
+  )) {
+    const option = document.createElement("option");
+    option.value = name;
+    imagePreviewPersonNames.appendChild(option);
+  }
+
+  imagePreviewPetNames.replaceChildren();
+  for (const name of [...new Set(pets.map((item) => item.name))].sort((a, b) =>
+    a.localeCompare(b, "de", { sensitivity: "base" })
+  )) {
+    const option = document.createElement("option");
+    option.value = name;
+    imagePreviewPetNames.appendChild(option);
+  }
+}
+
+function previewDetectionPercent(
+  value: number,
+  total: number
+): number {
+  if (!Number.isFinite(value) || !Number.isFinite(total) || total <= 0) return 0;
+  return Math.max(0, Math.min(100, (value / total) * 100));
+}
+
+function renderImagePreviewOverlay(details: MediaDetails): void {
+  imagePreviewOverlay.replaceChildren();
+
+  const naturalWidth = imagePreviewImage.naturalWidth || details.imageMetadata?.width || 0;
+  const naturalHeight = imagePreviewImage.naturalHeight || details.imageMetadata?.height || 0;
+  if (!naturalWidth || !naturalHeight) return;
+
+  type OverlayIdentity = {
+    kind: "person" | "pet";
+    id: number;
+    name: string | null;
+    confirmed: boolean;
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    petClass?: "dog" | "cat";
+  };
+
+  const identities: OverlayIdentity[] = [
+    ...details.faces.map((face) => ({
+      kind: "person" as const,
+      id: face.id,
+      name: face.personName,
+      confirmed: Boolean(face.personId && face.assignmentSource === "CONFIRMED"),
+      x: face.x,
+      y: face.y,
+      width: face.width,
+      height: face.height
+    })),
+    ...details.pets.map((pet) => ({
+      kind: "pet" as const,
+      id: pet.id,
+      name: pet.petName,
+      confirmed: Boolean(pet.petId && pet.assignmentSource === "CONFIRMED"),
+      x: pet.x,
+      y: pet.y,
+      width: pet.width,
+      height: pet.height,
+      petClass: pet.petClass
+    }))
+  ];
+
+  for (const identity of identities) {
+    const box = document.createElement("div");
+    box.className =
+      "image-preview-detection " +
+      identity.kind +
+      (identity.confirmed ? " confirmed" : " unconfirmed");
+
+    const left = previewDetectionPercent(identity.x, naturalWidth);
+    const top = previewDetectionPercent(identity.y, naturalHeight);
+    const width = Math.min(
+      100 - left,
+      Math.max(1, previewDetectionPercent(identity.width, naturalWidth))
+    );
+    const height = Math.min(
+      100 - top,
+      Math.max(1, previewDetectionPercent(identity.height, naturalHeight))
+    );
+
+    box.style.left = left + "%";
+    box.style.top = top + "%";
+    box.style.width = width + "%";
+    box.style.height = height + "%";
+
+    const editor = document.createElement("form");
+    editor.className = "image-preview-detection-editor";
+    editor.addEventListener("click", (event) => event.stopPropagation());
+
+    const kind = document.createElement("span");
+    kind.className = "image-preview-detection-kind";
+    kind.textContent =
+      identity.kind === "person"
+        ? "Person"
+        : identity.petClass === "cat"
+          ? "Katze"
+          : "Hund";
+
+    const input = document.createElement("input");
+    input.type = "text";
+    input.maxLength = 120;
+    input.autocomplete = "off";
+    input.value = identity.name ?? "";
+    input.placeholder = identity.name ? identity.name : "Name …";
+    input.setAttribute(
+      "list",
+      identity.kind === "person"
+        ? "imagePreviewPersonNames"
+        : "imagePreviewPetNames"
+    );
+    input.setAttribute(
+      "aria-label",
+      identity.kind === "person" ? "Personenname" : "Haustiername"
+    );
+
+    const save = document.createElement("button");
+    save.type = "submit";
+    save.className = "image-preview-detection-save";
+    save.textContent = "✓";
+    save.title = identity.confirmed
+      ? "Zuordnung ändern oder erneut bestätigen"
+      : "Name zuweisen und bestätigen";
+
+    const state = document.createElement("span");
+    state.className = "image-preview-detection-state";
+    state.textContent = identity.confirmed ? "bestätigt" : "unbestätigt";
+
+    editor.append(kind, input, save, state);
+    box.appendChild(editor);
+
+    editor.addEventListener("submit", (event) => {
+      event.preventDefault();
+      const name = input.value.trim();
+      if (!name) {
+        input.focus();
+        return;
+      }
+
+      void runSafely(async () => {
+        save.disabled = true;
+        input.disabled = true;
+        state.textContent = "speichert …";
+
+        try {
+          if (identity.kind === "person") {
+            await window.imageSorter.people.assignDetectionName(identity.id, name);
+          } else {
+            await window.imageSorter.pets.assignDetectionName(identity.id, name);
+          }
+
+          progressText.textContent =
+            (identity.kind === "person" ? "Gesicht" : "Haustierfundstelle") +
+            " wurde „" + name + "“ zugeordnet und bestätigt.";
+
+          const refreshed = await window.imageSorter.catalog.getMediaDetails(details.mediaId);
+          if (refreshed && imagePreviewDialog.open) {
+            const facets = await window.imageSorter.catalog.getSearchFacets(details.sourceId);
+            fillPreviewIdentityNames(facets.persons, facets.pets);
+            renderImagePreviewDetails(refreshed);
+            renderImagePreviewOverlay(refreshed);
+          }
+
+          await refreshIdentityTabStats();
+          scheduleCatalogWatchRefresh();
+        } finally {
+          save.disabled = false;
+          input.disabled = false;
+        }
+      });
+    });
+
+    imagePreviewOverlay.appendChild(box);
+  }
+}
+
 function renderImagePreviewDetails(details: MediaDetails): void {
   imagePreviewDetails.replaceChildren();
 
@@ -2605,6 +2797,7 @@ function renderImagePreviewDetails(details: MediaDetails): void {
 
 async function loadImagePreviewDetails(mediaId: number): Promise<void> {
   imagePreviewDetails.replaceChildren();
+  imagePreviewOverlay.replaceChildren();
   const loading = document.createElement("div");
   loading.className = "image-preview-detail-loading";
   loading.textContent = "Daten werden geladen …";
@@ -2621,7 +2814,10 @@ async function loadImagePreviewDetails(mediaId: number): Promise<void> {
       imagePreviewDetails.appendChild(empty);
       return;
     }
+    const facets = await window.imageSorter.catalog.getSearchFacets(details.sourceId);
+    fillPreviewIdentityNames(facets.persons, facets.pets);
     renderImagePreviewDetails(details);
+    renderImagePreviewOverlay(details);
   } catch (error) {
     if (!imagePreviewDialog.open) return;
     imagePreviewDetails.replaceChildren();
@@ -2733,6 +2929,7 @@ async function openLifeAreaAssignment(
 }
 
 function openImagePreview(mediaId: number, caption: string): void {
+  imagePreviewOverlay.replaceChildren();
   imagePreviewImage.src = fullPreviewUrl(mediaId);
   imagePreviewImage.alt = caption;
   imagePreviewCaption.textContent = caption;
@@ -2743,6 +2940,14 @@ function openImagePreview(mediaId: number, caption: string): void {
 
   void loadImagePreviewDetails(mediaId);
 }
+
+imagePreviewImage.addEventListener("load", () => {
+  if (!imagePreviewDialog.open) return;
+  const mediaId = Number(
+    imagePreviewImage.src.match(/\/([0-9]+)(?:\?|$)/)?.[1] ?? 0
+  );
+  if (mediaId > 0) void loadImagePreviewDetails(mediaId);
+});
 
 function makePreviewable(
   image: HTMLImageElement,
