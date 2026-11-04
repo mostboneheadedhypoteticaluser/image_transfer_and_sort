@@ -1030,6 +1030,7 @@ function renderPipelineStatus(status: PipelineStatus): void {
     // werden. Die Personenansicht enthält jedoch Eingabefelder; ein komplettes
     // Re-Rendern würde dort den Fokus/Cursor beim Tippen zerstören.
     if (
+      !imagePreviewDialog.open &&
       (currentView === "media" || currentView === "search") &&
       selectedSourceId() !== null
     ) {
@@ -3214,6 +3215,18 @@ imagePreviewDialog.addEventListener("close", () => {
   imagePreviewVideoError.textContent = "";
   imagePreviewVideo.removeAttribute("src");
   imagePreviewVideo.load();
+
+  if (
+    !rendererShuttingDown &&
+    currentView === "media" &&
+    selectedSourceId() !== null
+  ) {
+    window.setTimeout(() => {
+      if (!imagePreviewDialog.open) {
+        void runSafely(refreshCatalog);
+      }
+    }, 100);
+  }
 });
 
 function makePreviewable(
@@ -6363,6 +6376,7 @@ function scheduleWatchCatalogRefresh(): void {
       scanning ||
       restoring ||
       resetting ||
+      imagePreviewDialog.open ||
       isEditingPersonView() ||
       isEditingPetView()
     ) {
