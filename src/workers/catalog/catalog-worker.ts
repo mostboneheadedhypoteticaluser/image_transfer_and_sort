@@ -1762,12 +1762,24 @@ function listMedia(
   sourceId: number | undefined,
   requestedLimit: number,
   rawSearch?: SearchFilter,
-  semantic?: SemanticTextEmbedding | null
+  semantic?: SemanticTextEmbedding | null,
+  mediaKind: "all" | "image" | "video" = "all"
 ) {
   const limit = Math.max(1, Math.min(2000, Math.trunc(requestedLimit || 500)));
   const sourceWhere = sourceId === undefined ? "1=1" : "m.source_id=?";
   const sourceArgs: Array<number | string> =
     sourceId === undefined ? [] : [sourceId];
+  const kindExtensions =
+    mediaKind === "video"
+      ? [...VIDEO_EXTENSIONS]
+      : mediaKind === "image"
+        ? [...IMAGE_EXTENSIONS]
+        : [];
+  const mediaKindSql = kindExtensions.length > 0
+    ? " AND lower(m.extension) IN (" +
+      kindExtensions.map(() => "?").join(",") +
+      ")"
+    : "";
   const search = normalizeSearchFilter(rawSearch);
   const searchClauses: string[] = [];
   const searchArgs: Array<number | string> = [];
@@ -2109,7 +2121,7 @@ function listMedia(
     LEFT JOIN media_image_metadata md ON md.media_id=m.id
     LEFT JOIN semantic_embeddings se ON se.media_id=m.id
     LEFT JOIN media_semantic_annotations msa ON msa.media_id=m.id
-    WHERE ${sourceWhere}${searchSql}
+    WHERE ${sourceWhere}${mediaKindSql}${searchSql}
     ORDER BY
       CASE
         WHEN m.availability='MISSING' AND m.in_recycle_bin=1 THEN 1
@@ -2121,6 +2133,7 @@ function listMedia(
     ${limitSql}
   `).all(
     ...sourceArgs,
+    ...kindExtensions,
     ...searchArgs,
     ...(semanticActive ? [] : [limit])
   );
@@ -12061,7 +12074,12 @@ async function dispatch(method: CatalogMethod, payload: Record<string, unknown> 
     case "listMedia":
       return listMedia(
         asNumber(payload.sourceId, "sourceId"),
-        payload.limit === undefined ? 500 : asNumber(payload.limit, "limit")
+        payload.limit === undefined ? 500 : asNumber(payload.limit, "limit"),
+        undefined,
+        undefined,
+        payload.mediaKind === "image" || payload.mediaKind === "video"
+          ? payload.mediaKind
+          : "all"
       );
     case "listGeoMedia":
       return listGeoMedia(
