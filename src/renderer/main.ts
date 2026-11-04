@@ -2739,15 +2739,20 @@ async function populateVideoFrameThumbnails(
       };
       const onError = () => {
         cleanup();
-        reject(new Error("Video konnte für Szenenbilder nicht geladen werden."));
+        reject(new Error("Video konnte für Szenenbilder nicht decodiert werden."));
       };
       const cleanup = () => {
-        capture.removeEventListener("loadedmetadata", onLoaded);
+        capture.removeEventListener("loadeddata", onLoaded);
         capture.removeEventListener("error", onError);
       };
-      capture.addEventListener("loadedmetadata", onLoaded, { once: true });
+      // Metadaten allein reichen nicht: drawImage benötigt ein decodiertes Frame.
+      capture.addEventListener("loadeddata", onLoaded, { once: true });
       capture.addEventListener("error", onError, { once: true });
-      capture.load();
+      if (capture.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
+        onLoaded();
+      } else {
+        capture.load();
+      }
     });
 
     for (const frame of frames) {
@@ -2769,8 +2774,16 @@ async function populateVideoFrameThumbnails(
           frame.timestampMs
         );
         image.dataset.loaded = "1";
-      } catch {
+      } catch (error) {
+        image.removeAttribute("src");
         image.alt = "Szenenbild konnte nicht geladen werden";
+        const message = image.closest(".video-frame-card")?.querySelector<HTMLElement>(
+          ".video-frame-thumb-placeholder"
+        );
+        if (message) {
+          message.textContent = "Vorschau nicht verfügbar";
+          message.title = error instanceof Error ? error.message : String(error);
+        }
       }
 
       await new Promise<void>((resolve) =>
