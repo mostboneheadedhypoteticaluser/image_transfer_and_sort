@@ -7,6 +7,7 @@ import type {
   FaceEmbeddingSet,
   MergePersonsResult,
   PersonCorrectionResult,
+  DirectIdentityAssignmentResult,
   PersonCandidate,
   PersonClusterInput,
   PersonOverview,
@@ -335,6 +336,16 @@ export class PersonService {
     return this.catalog.request<MergePersonsResult>(
       "mergePersons",
       { targetPersonId, sourcePersonId }
+    );
+  }
+
+  async assignDetectionName(
+    faceDetectionId: number,
+    name: string
+  ): Promise<DirectIdentityAssignmentResult> {
+    return this.catalog.request<DirectIdentityAssignmentResult>(
+      "assignFaceDetectionName",
+      { faceDetectionId, name }
     );
   }
 
