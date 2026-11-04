@@ -842,6 +842,21 @@ def extract_image_metadata(file_path: str) -> dict:
         }
 
 
+def read_oriented_face_image(file_path: str):
+    """Load the same EXIF-oriented pixels that sharp.rotate() previews show."""
+    if cv2 is None:
+        raise RuntimeError("OpenCV fehlt.")
+    if Image is not None and ImageOps is not None and np is not None:
+        try:
+            with Image.open(file_path) as source:
+                oriented = ImageOps.exif_transpose(source).convert("RGB")
+                return cv2.cvtColor(np.asarray(oriented), cv2.COLOR_RGB2BGR)
+        except Exception:
+            # Keep OpenCV as a fallback for formats Pillow cannot decode.
+            pass
+    return cv2.imread(file_path, cv2.IMREAD_COLOR)
+
+
 def detect_faces(file_path: str) -> dict:
     started = time.perf_counter()
 
@@ -855,9 +870,9 @@ def detect_faces(file_path: str) -> dict:
             "YuNet-Modell fehlt. Einmal 'npm.cmd run setup:ai' ausführen."
         )
 
-    image = cv2.imread(file_path, cv2.IMREAD_COLOR)
+    image = read_oriented_face_image(file_path)
     if image is None:
-        raise RuntimeError("Bild konnte von OpenCV nicht gelesen werden.")
+        raise RuntimeError("Bild konnte nicht gelesen werden.")
 
     original_height, original_width = image.shape[:2]
 
@@ -962,9 +977,9 @@ def extract_face_embeddings(file_path: str, faces: list[dict]) -> dict:
             "SFace-Modell fehlt. Einmal 'npm.cmd run setup:ai' ausführen."
         )
 
-    image = cv2.imread(file_path, cv2.IMREAD_COLOR)
+    image = read_oriented_face_image(file_path)
     if image is None:
-        raise RuntimeError("Bild konnte von OpenCV nicht gelesen werden.")
+        raise RuntimeError("Bild konnte nicht gelesen werden.")
 
     embeddings: list[dict] = []
     skipped = 0
