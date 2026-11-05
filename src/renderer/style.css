@@ -4475,6 +4475,36 @@ body {
   line-height: 1.35;
 }
 
+.video-confirmation-names {
+  display: flex !important;
+  flex-wrap: wrap;
+  gap: 6px !important;
+  margin-top: 5px;
+}
+
+.video-confirmation-name {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.video-confirmation-name.person {
+  border-color: rgba(71, 170, 255, .38);
+  background: rgba(71, 170, 255, .08);
+}
+
+.video-confirmation-name.pet {
+  border-color: rgba(100, 220, 135, .42);
+  background: rgba(100, 220, 135, .09);
+}
+
 @media (max-width: 900px) {
   .library-toolbar-row {
     align-items: stretch;
