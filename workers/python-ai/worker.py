@@ -6238,6 +6238,8 @@ def detect_qwen3vl_objects(
 def analyze_video_frames(
     file_path: str,
     progress_request_id: str | None = None,
+    frame_cache_root: str | None = None,
+    content_sha256: str | None = None,
 ) -> dict:
     """Analysiert Videos sparsam über zeitlich verteilte Frames.
 
@@ -6473,6 +6475,37 @@ def analyze_video_frames(
                         entry["hitCount"] += 1
                         entry["maxScore"] = max(entry["maxScore"], score)
 
+                # Cache the exact analyzed pixels, not a second frame decoded
+                # later by another seek. This keeps boxes aligned with the scene.
+                if frame_cache_root and content_sha256 and (frame_faces or frame_pets):
+                    frame_folder = os.path.join(
+                        frame_cache_root, "video-frames",
+                        content_sha256[:2], content_sha256,
+                    )
+                    os.makedirs(frame_folder, exist_ok=True)
+                    preview_frame = frame
+                    if frame_width > 1600:
+                        preview_frame = cv2.resize(
+                            frame,
+                            (1600, max(1, round(frame_height * 1600 / frame_width))),
+                            interpolation=cv2.INTER_AREA,
+                        )
+                    output_frame = os.path.join(
+                        frame_folder, f"{int(timestamp_ms)}-1600.jpg"
+                    )
+                    temporary_frame = output_frame + f".{os.getpid()}.tmp.jpg"
+                    if cv2.imwrite(
+                        temporary_frame, preview_frame,
+                        [int(cv2.IMWRITE_JPEG_QUALITY), 88],
+                    ):
+                        os.replace(temporary_frame, output_frame)
+                    else:
+                        dev_log(
+                            "VIDEO_FRAME_CACHE_FAILED",
+                            target=file_path,
+                            timestampMs=int(timestamp_ms),
+                        )
+
                 frames.append({
                     "timestampMs": int(timestamp_ms),
                     "sceneChange": scene_change,
@@ -6596,6 +6629,8 @@ def handle(message: dict) -> bool:
             result=analyze_video_frames(
                 file_path,
                 progress_request_id=request_id,
+                frame_cache_root=str(payload.get("videoFrameCacheRoot") or "") or None,
+                content_sha256=str(payload.get("expectedSha256") or "") or None,
             ),
         )
         return True
