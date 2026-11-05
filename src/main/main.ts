@@ -1848,8 +1848,7 @@ app.whenReady().then(() => {
   analysisCoordinator = new AnalysisCoordinator(
     catalog,
     analysis,
-    (stage, stats) => updatePipelineStage(stage, stats),
-    thumbnailCacheRoot
+    (stage, stats) => updatePipelineStage(stage, stats)
   );
 
   thumbnailCoordinator = new ThumbnailCoordinator(
