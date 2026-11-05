@@ -222,7 +222,8 @@ export class AnalysisCoordinator {
     private readonly onStats: (
       stage: PythonStage,
       stats: AnalysisQueueStats
-    ) => void
+    ) => void,
+    private readonly videoFrameCacheRoot?: string
   ) {}
 
   setConcurrency(value: number): number {
@@ -755,6 +756,9 @@ export class AnalysisCoordinator {
           expectedSizeBytes: job.sizeBytes,
           expectedSha256: job.sha256,
           extension: job.extension,
+          ...(spec.module === "video-analyze-v1" && this.videoFrameCacheRoot
+            ? { videoFrameCacheRoot: this.videoFrameCacheRoot }
+            : {}),
           ...extraPayload
         },
         spec.timeoutMs
