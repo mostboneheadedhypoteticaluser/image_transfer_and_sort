@@ -1105,9 +1105,11 @@ function registerIpc(): void {
   ipcMain.handle(
     "catalog:reanalyzeMedia",
     async (_event, mediaId: number): Promise<ReanalyzeMediaResult> => {
-      // Keine laufende Analyse darf nach dem Reset alte Ergebnisse wieder
-      // eintragen. Deshalb beide Pipelines kurz sauber anhalten.
-      await analysisCoordinator?.pauseForMaintenance();
+      // Nur laufende Arbeit am betroffenen Medium muss abgeschlossen werden.
+      // Andere Videos/KI-Jobs laufen weiter. Ein Reset löscht deren Daten nie.
+      const requeueStartedAt = Date.now();
+      analysis?.logDiagnostic("REANALYZE_REQUEST_BEGIN", { mediaId });
+      await analysisCoordinator?.pauseForMaintenance(mediaId);
       thumbnailCoordinator?.stop();
 
       if (personRefreshTimer) {
@@ -1117,7 +1119,7 @@ function registerIpc(): void {
 
       try {
         await Promise.all([
-          thumbnailCoordinator?.waitUntilIdle() ?? Promise.resolve(),
+          thumbnailCoordinator?.waitForMediaIdle(mediaId) ?? Promise.resolve(),
           waitForIdentityRefreshIdle()
         ]);
         const result = await catalog!.request<ReanalyzeMediaResult>(
@@ -1132,6 +1134,11 @@ function registerIpc(): void {
         groupedPetEmbeddingCounts.delete(result.sourceId);
         schedulePersonRefresh();
         scheduleLifeAreaRuleRefresh();
+        analysis?.logDiagnostic("REANALYZE_QUEUED", {
+          mediaId,
+          stages: result.requeued,
+          elapsedMs: Date.now() - requeueStartedAt
+        });
 
         return result;
       } finally {
