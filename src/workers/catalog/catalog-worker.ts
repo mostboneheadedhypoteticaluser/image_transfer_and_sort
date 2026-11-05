@@ -1958,6 +1958,14 @@ function listMedia(
       CASE WHEN t.media_id IS NOT NULL AND t.input_sha256=m.sha256 THEN t.input_sha256 ELSE NULL END AS thumbnail_version,
       CASE WHEN md.input_sha256=m.sha256 THEN md.captured_at ELSE NULL END AS captured_at,
       (
+        SELECT MAX(aj_last.finished_at)
+        FROM analysis_jobs aj_last
+        WHERE aj_last.media_id=m.id
+          AND aj_last.input_sha256=m.sha256
+          AND aj_last.status='DONE'
+          AND aj_last.finished_at IS NOT NULL
+      ) AS last_analyzed_at,
+      (
         SELECT COUNT(*)
         FROM face_detections fd
         WHERE fd.media_id=m.id
@@ -2281,6 +2289,7 @@ function listMedia(
     thumbnailReady: Boolean(row.thumbnail_ready),
     thumbnailVersion: row.thumbnail_version ? String(row.thumbnail_version) : null,
     capturedAt: row.captured_at ? String(row.captured_at) : null,
+    lastAnalyzedAt: row.last_analyzed_at ? String(row.last_analyzed_at) : null,
     faceCount: Number(row.face_count ?? 0),
     faceEmbeddingCount: Number(row.face_embedding_count ?? 0),
     petCount: Number(row.pet_count ?? 0),
