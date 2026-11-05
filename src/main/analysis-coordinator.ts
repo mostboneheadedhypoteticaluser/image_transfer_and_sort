@@ -311,19 +311,19 @@ export class AnalysisCoordinator {
     }
   }
 
-  async pauseForMaintenance(mediaId?: number): Promise<void> {
+  async pauseForMaintenance(mediaId?: number, waitForActive = true): Promise<void> {
     this.maintenancePaused = true;
 
-    // A media-specific reset only needs jobs for this same media to finish.
-    // Other running videos and expensive AI jobs may continue; their database
-    // writes use separate media IDs. Waiting on all jobs previously caused the
-    // requeue button to stall for the full duration of an unrelated video.
-    // Waiting for pump() to finish also covers in-flight claimAnalysisJob calls.
+    // A requeue invalidates old job IDs atomically. Completed results from
+    // invalidated jobs are rejected by the Catalog Worker, so expensive work
+    // does not have to finish before a new job can be queued. We still wait
+    // for claimAnalysisJob calls in pump() to finish before invalidation.
     while (
       (this.pumping ||
-        (mediaId === undefined
-          ? this.activeTasks.size > 0
-          : (this.activeMediaTasks.get(mediaId) ?? 0) > 0)) &&
+        (waitForActive &&
+          (mediaId === undefined
+            ? this.activeTasks.size > 0
+            : (this.activeMediaTasks.get(mediaId) ?? 0) > 0))) &&
       !this.stopped
     ) {
       await new Promise<void>((resolve) => setTimeout(resolve, 50));
