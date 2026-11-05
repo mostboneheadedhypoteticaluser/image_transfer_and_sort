@@ -2811,7 +2811,7 @@ function renderImagePreviewDetails(details: MediaDetails): void {
           try {
             for (const face of pendingFaces) {
               try {
-                await window.imageSorter.persons.assignDetectionName(face.id, face.name);
+                await window.imageSorter.people.assignDetectionName(face.id, face.name);
                 succeeded += 1;
               } catch (error) {
                 failures.push("Person " + face.id + ": " + String(error));
