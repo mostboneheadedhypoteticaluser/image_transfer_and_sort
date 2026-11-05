@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 import gc
+import hashlib
 import importlib.util
 import io
 import json
@@ -6238,8 +6239,6 @@ def detect_qwen3vl_objects(
 def analyze_video_frames(
     file_path: str,
     progress_request_id: str | None = None,
-    frame_cache_root: str | None = None,
-    content_sha256: str | None = None,
 ) -> dict:
     """Analysiert Videos sparsam über zeitlich verteilte Frames.
 
@@ -6315,6 +6314,14 @@ def analyze_video_frames(
                 frame_height, frame_width = frame.shape[:2]
                 if frame_width <= 0 or frame_height <= 0:
                     continue
+
+                # Sampling timestamps are only hints; record the decoded index.
+                decoded_position = float(capture.get(cv2.CAP_PROP_POS_FRAMES))
+                exact_frame_index = (
+                    int(round(decoded_position)) - 1
+                    if math.isfinite(decoded_position) and decoded_position >= 1
+                    else None
+                )
 
                 # Grobe Szenenwechselerkennung für spätere repräsentative
                 # Keyframes. Sie ist bewusst billig und läuft nur auf den
@@ -6475,39 +6482,18 @@ def analyze_video_frames(
                         entry["hitCount"] += 1
                         entry["maxScore"] = max(entry["maxScore"], score)
 
-                # Cache the exact analyzed pixels, not a second frame decoded
-                # later by another seek. This keeps boxes aligned with the scene.
-                if frame_cache_root and content_sha256 and (frame_faces or frame_pets):
-                    frame_folder = os.path.join(
-                        frame_cache_root, "video-frames",
-                        content_sha256[:2], content_sha256,
-                    )
-                    os.makedirs(frame_folder, exist_ok=True)
-                    preview_frame = frame
-                    if frame_width > 1600:
-                        preview_frame = cv2.resize(
-                            frame,
-                            (1600, max(1, round(frame_height * 1600 / frame_width))),
-                            interpolation=cv2.INTER_AREA,
-                        )
-                    output_frame = os.path.join(
-                        frame_folder, f"{int(timestamp_ms)}-analyzed-1600.jpg"
-                    )
-                    temporary_frame = output_frame + f".{os.getpid()}.tmp.jpg"
-                    if cv2.imwrite(
-                        temporary_frame, preview_frame,
-                        [int(cv2.IMWRITE_JPEG_QUALITY), 88],
-                    ):
-                        os.replace(temporary_frame, output_frame)
-                    else:
-                        dev_log(
-                            "VIDEO_FRAME_CACHE_FAILED",
-                            target=file_path,
-                            timestampMs=int(timestamp_ms),
-                        )
+                # Verify a later seek against the exact analyzed pixels.
+                # Only scenes with identities need an image fingerprint.
+                frame_hash = (
+                    hashlib.blake2b(frame.tobytes(), digest_size=16).hexdigest()
+                    if (frame_faces or frame_pets) and exact_frame_index is not None
+                    else None
+                )
 
                 frames.append({
                     "timestampMs": int(timestamp_ms),
+                    "frameIndex": exact_frame_index,
+                    "frameHash": frame_hash,
                     "sceneChange": scene_change,
                     "width": int(frame_width),
                     "height": int(frame_height),
@@ -6629,8 +6615,6 @@ def handle(message: dict) -> bool:
             result=analyze_video_frames(
                 file_path,
                 progress_request_id=request_id,
-                frame_cache_root=str(payload.get("videoFrameCacheRoot") or "") or None,
-                content_sha256=str(payload.get("expectedSha256") or "") or None,
             ),
         )
         return True

@@ -284,7 +284,7 @@ type CandidateReviewState = {
 let candidateReviewState: CandidateReviewState | null = null;
 let currentImagePreviewDetails: MediaDetails | null = null;
 let currentVideoFrameTimestamp: number | null = null;
-let videoFrameThumbnailLoadToken = 0;
+let videoFrameThumbnailObserver: IntersectionObserver | null = null;
 let imagePreviewDetailLoadToken = 0;
 
 function createLoadingIndicator(text = "Daten werden geladen …"): HTMLDivElement {
@@ -1234,8 +1234,20 @@ function fullMediaUrl(mediaId: number): string {
   return `image-sorter-media://media/${mediaId}`;
 }
 
-function videoSceneImageUrl(mediaId: number, timestampMs: number, width = 320): string {
-  return `image-sorter-frame://media/${mediaId}?ms=${timestampMs}&width=${width}`;
+function videoSceneImageUrl(
+  mediaId: number,
+  frame: { timestampMs: number; frameIndex: number | null; frameHash: string | null },
+  width = 320
+): string {
+  const params = new URLSearchParams({
+    ms: String(frame.timestampMs),
+    width: String(width)
+  });
+  if (frame.frameIndex !== null && frame.frameHash) {
+    params.set("i", String(frame.frameIndex));
+    params.set("h", frame.frameHash);
+  }
+  return `image-sorter-frame://media/${mediaId}?${params.toString()}`;
 }
 
 function isVideoExtension(extension: string): boolean {
@@ -2540,100 +2552,6 @@ function renderImagePreviewOverlay(details: MediaDetails): void {
   renderPreviewIdentityOverlay(identities, naturalWidth, naturalHeight);
 }
 
-function seekPreviewVideo(
-  video: HTMLVideoElement,
-  timestampMs: number
-): Promise<void> {
-  const target = Math.max(
-    0,
-    Math.min(
-      Number.isFinite(video.duration) ? video.duration : timestampMs / 1000,
-      timestampMs / 1000
-    )
-  );
-
-  if (
-    video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA &&
-    Math.abs(video.currentTime - target) < 0.03
-  ) {
-    return Promise.resolve();
-  }
-
-  return new Promise<void>((resolve, reject) => {
-    const cleanup = () => {
-      video.removeEventListener("seeked", onSeeked);
-      video.removeEventListener("error", onError);
-    };
-    const onSeeked = () => {
-      cleanup();
-      resolve();
-    };
-    const onError = () => {
-      cleanup();
-      reject(new Error("Videoframe konnte nicht geladen werden."));
-    };
-    video.addEventListener("seeked", onSeeked, { once: true });
-    video.addEventListener("error", onError, { once: true });
-
-    try {
-      video.currentTime = target;
-    } catch (error) {
-      cleanup();
-      reject(error);
-    }
-  });
-}
-
-function videoFrameDataUrl(
-  video: HTMLVideoElement,
-  maxWidth = 1600,
-  quality = 0.9
-): string {
-  const sourceWidth = Math.max(1, video.videoWidth);
-  const sourceHeight = Math.max(1, video.videoHeight);
-  const scale = Math.min(1, maxWidth / sourceWidth);
-  const canvas = document.createElement("canvas");
-  canvas.width = Math.max(1, Math.round(sourceWidth * scale));
-  canvas.height = Math.max(1, Math.round(sourceHeight * scale));
-  const context = canvas.getContext("2d");
-  if (!context) throw new Error("Szenenbild konnte nicht erzeugt werden.");
-  context.drawImage(video, 0, 0, canvas.width, canvas.height);
-  return canvas.toDataURL("image/jpeg", quality);
-}
-
-async function captureVideoFrameThumbnail(
-  video: HTMLVideoElement,
-  timestampMs: number
-): Promise<string> {
-  await seekPreviewVideo(video, timestampMs);
-
-  // Nach "seeked" kann der Decoder noch das alte oder ein schwarzes Frame
-  // bereitstellen. Auf das tatsächlich präsentierte Frame warten.
-  if (typeof video.requestVideoFrameCallback === "function") {
-    await new Promise<void>((resolve) => {
-      let finished = false;
-      const callbackId = video.requestVideoFrameCallback(() => {
-        if (!finished) {
-          finished = true;
-          window.clearTimeout(timeout);
-          resolve();
-        }
-      });
-      const timeout = window.setTimeout(() => {
-        if (finished) return;
-        finished = true;
-        video.cancelVideoFrameCallback?.(callbackId);
-        resolve();
-      }, 1200);
-    });
-  }
-
-  if (video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
-    throw new Error("Videoframe ist noch nicht decodiert.");
-  }
-  return videoFrameDataUrl(video, 320, 0.78);
-}
-
 async function refreshCurrentVideoFrameAfterAssignment(
   details: MediaDetails,
   timestampMs: number
@@ -2710,7 +2628,7 @@ async function openVideoFrameEditor(
   imagePreviewImageWrap.hidden = false;
   imagePreviewVideo.hidden = true;
   imagePreviewBackToVideo.hidden = false;
-  imagePreviewImage.src = videoSceneImageUrl(details.mediaId, frame.timestampMs, 1600);
+  imagePreviewImage.src = videoSceneImageUrl(details.mediaId, frame, 1600);
   imagePreviewImage.alt =
     details.relativePath + " bei " + videoTimestamp(frame.timestampMs);
   imagePreviewCaption.textContent =
@@ -2719,9 +2637,10 @@ async function openVideoFrameEditor(
   try {
     await imagePreviewImage.decode();
   } catch {
+    imagePreviewImage.removeAttribute("src");
     imagePreviewOverlay.replaceChildren();
     imagePreviewCaption.textContent =
-      "Szenenbild fehlt. Bitte dieses Video über „Bevorzugt neu analysieren“ neu analysieren.";
+      "Szenenbild konnte nicht geladen oder verifiziert werden. Bei älteren Analysen bitte Video neu analysieren.";
     return;
   }
   if (!imagePreviewDialog.open || currentVideoFrameTimestamp !== frame.timestampMs) {
@@ -2751,12 +2670,19 @@ function populateVideoFrameThumbnails(
   details: MediaDetails,
   gallery: HTMLElement
 ): void {
+  videoFrameThumbnailObserver?.disconnect();
+  videoFrameThumbnailObserver = null;
+  const framesByTime = new Map(
+    (details.videoAnalysis?.frames ?? []).map((frame) => [frame.timestampMs, frame])
+  );
+  const pending = new Map<Element, { image: HTMLImageElement; url: string }>();
   for (const image of gallery.querySelectorAll<HTMLImageElement>("img[data-frame-ms]")) {
     const timestampMs = Number(image.dataset.frameMs);
-    if (!Number.isSafeInteger(timestampMs)) continue;
-    const placeholder = image.closest(".video-frame-card")?.querySelector<HTMLElement>(
-      ".video-frame-thumb-placeholder"
-    );
+    const frame = framesByTime.get(timestampMs);
+    if (!frame) continue;
+    const card = image.closest(".video-frame-card");
+    if (!card) continue;
+    const placeholder = card.querySelector<HTMLElement>(".video-frame-thumb-placeholder");
     image.addEventListener("load", () => {
       image.dataset.loaded = "1";
       if (placeholder) placeholder.textContent = "";
@@ -2764,16 +2690,36 @@ function populateVideoFrameThumbnails(
     image.addEventListener("error", () => {
       image.removeAttribute("src");
       if (placeholder) {
-        placeholder.textContent = "Video neu analysieren";
+        placeholder.textContent = "Szenenbild nicht verfügbar";
         placeholder.classList.add("video-frame-thumb-error");
-        placeholder.title = "Das exakte Analyseframe fehlt noch. Über „Bevorzugt neu analysieren“ wird es neu erzeugt.";
+        placeholder.title =
+          "Frame konnte nicht verifiziert werden; bei älteren Videos ist ggf. eine erneute Videoanalyse nötig.";
       }
     }, { once: true });
-    image.src = videoSceneImageUrl(details.mediaId, timestampMs);
+    pending.set(card, { image, url: videoSceneImageUrl(details.mediaId, frame) });
+  }
+
+  if (typeof IntersectionObserver !== "undefined") {
+    const observer = new IntersectionObserver((entries) => {
+      for (const entry of entries) {
+        if (!entry.isIntersecting) continue;
+        const item = pending.get(entry.target);
+        if (!item) continue;
+        observer.unobserve(entry.target);
+        pending.delete(entry.target);
+        item.image.src = item.url;
+      }
+    }, { rootMargin: "300px 0px" });
+    videoFrameThumbnailObserver = observer;
+    for (const card of pending.keys()) observer.observe(card);
+  } else {
+    for (const item of pending.values()) item.image.src = item.url;
   }
 }
 
 function renderImagePreviewDetails(details: MediaDetails): void {
+  videoFrameThumbnailObserver?.disconnect();
+  videoFrameThumbnailObserver = null;
   imagePreviewDetails.replaceChildren();
 
   const reanalyzePanel = document.createElement("div");
@@ -2865,7 +2811,7 @@ function renderImagePreviewDetails(details: MediaDetails): void {
           try {
             for (const face of pendingFaces) {
               try {
-                await window.imageSorter.persons.assignDetectionName(face.id, face.name);
+                await window.imageSorter.people.assignDetectionName(face.id, face.name);
                 succeeded += 1;
               } catch (error) {
                 failures.push("Person " + face.id + ": " + String(error));
@@ -3642,7 +3588,6 @@ function openImagePreview(
 ): void {
   currentImagePreviewDetails = null;
   currentVideoFrameTimestamp = null;
-  videoFrameThumbnailLoadToken += 1;
   imagePreviewBackToVideo.hidden = true;
   imagePreviewOverlay.replaceChildren();
   imagePreviewCaption.textContent = caption;
@@ -3705,7 +3650,8 @@ imagePreviewImage.addEventListener("load", () => {
 
 imagePreviewDialog.addEventListener("close", () => {
   imagePreviewDetailLoadToken += 1;
-  videoFrameThumbnailLoadToken += 1;
+  videoFrameThumbnailObserver?.disconnect();
+  videoFrameThumbnailObserver = null;
   currentVideoFrameTimestamp = null;
   imagePreviewBackToVideo.hidden = true;
   currentImagePreviewDetails = null;

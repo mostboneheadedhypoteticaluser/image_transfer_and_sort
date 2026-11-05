@@ -7,7 +7,7 @@ import { AnalysisService } from "./analysis-service";
 import { AnalysisCoordinator } from "./analysis-coordinator";
 import { ThumbnailService } from "./thumbnail-service";
 import { ThumbnailCoordinator } from "./thumbnail-coordinator";
-import { getVideoFrameJpeg } from "./video-frame-service";
+import { getVideoFrameJpeg, pruneVideoFrameCache } from "./video-frame-service";
 import { PersonService } from "./person-service";
 import { PetService } from "./pet-service";
 import { CatalogWatchService } from "./catalog-watch-service";
@@ -1821,6 +1821,9 @@ app.whenReady().then(() => {
     "thumbnail-worker.js"
   );
   thumbnailCacheRoot = path.join(app.getPath("userData"), "thumbnails");
+  // Clean older, previously unlimited scene JPEGs as well as new on-demand
+  // entries. This runs independently of the normal image thumbnail cache.
+  void pruneVideoFrameCache(thumbnailCacheRoot).catch(() => {});
 
   catalog = new CatalogService(workerPath, dbPath, (progress) => {
     sendToRenderer("catalog:progress", progress);
@@ -1848,8 +1851,7 @@ app.whenReady().then(() => {
   analysisCoordinator = new AnalysisCoordinator(
     catalog,
     analysis,
-    (stage, stats) => updatePipelineStage(stage, stats),
-    thumbnailCacheRoot
+    (stage, stats) => updatePipelineStage(stage, stats)
   );
 
   thumbnailCoordinator = new ThumbnailCoordinator(
@@ -2081,14 +2083,25 @@ app.whenReady().then(() => {
       const url = new URL(request.url);
       if (url.hostname !== "media") return new Response("Ungültige Szenenbild-Adresse", { status: 400 });
       const mediaId = Number(url.pathname.slice(1));
-      const timestampMs = Number(url.searchParams.get("ms"));
+      const msParam = url.searchParams.get("ms");
+      const timestampMs = msParam === null ? NaN : Number(msParam);
       const requestedWidth = Number(url.searchParams.get("width") || "320");
-      if (!Number.isSafeInteger(mediaId) || mediaId <= 0 || !Number.isSafeInteger(timestampMs) || timestampMs < 0) {
+      const indexParam = url.searchParams.get("i");
+      const frameIndex = indexParam === null ? null : Number(indexParam);
+      const frameHash = url.searchParams.get("h");
+      if (!Number.isSafeInteger(mediaId) || mediaId <= 0 ||
+          !Number.isSafeInteger(timestampMs) || timestampMs < 0 ||
+          !Number.isFinite(requestedWidth) || requestedWidth <= 0 ||
+          (frameIndex !== null && (!Number.isSafeInteger(frameIndex) || frameIndex < 0)) ||
+          (frameHash !== null && !/^[a-f0-9]{32}$/i.test(frameHash))) {
         return new Response("Ungültige Szenenbild-Parameter", { status: 400 });
       }
       const info = await catalog!.request<MediaPreviewInfo | null>("getMediaPreviewInfo", { mediaId });
       if (!info) return new Response("Video nicht gefunden", { status: 404 });
-      const jpg = await getVideoFrameJpeg(info.absolutePath, info.inputSha256, timestampMs, requestedWidth, thumbnailCacheRoot);
+      const jpg = await getVideoFrameJpeg(
+        info.absolutePath, info.inputSha256, timestampMs,
+        frameIndex, frameHash, requestedWidth, thumbnailCacheRoot
+      );
       return new Response(jpg, {
         status: 200,
         headers: { "Content-Type": "image/jpeg", "Cache-Control": "no-store" }

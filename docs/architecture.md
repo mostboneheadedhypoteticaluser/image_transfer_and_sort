@@ -135,3 +135,12 @@ Bestehende abgeschlossene YOLOX-Jobs ohne `objectCount` werden einmalig erneut e
 Ein Python-Dateizugriff versucht einen katalogisierten Pfad mehrfach mit gestaffelten Wartezeiten und einem echten Lesezugriff. Das fängt insbesondere langsam aufwachende externe/rotierende Laufwerke ab.
 
 Bleibt die Datei unerreichbar, wird der Zustand als `UNAVAILABLE` getrennt von echten Analysefehlern geführt. Abhängige Analysejobs werden nicht als eigene fachliche AI-Fehler präsentiert. Die Diagnoseansicht bündelt unerreichbare Medien pro Datei und bietet Datei öffnen, Ordner öffnen sowie erneute Prüfung. Ist die Datei später wieder vorhanden, können alle blockierten Jobs dieses Mediums reaktiviert werden.
+
+## Szenenbilder aus Videos – bedarfsgesteuerter Cache
+
+- Die Videoanalyse speichert keine JPEGs mehr dauerhaft. In `media_video_analysis.frames_json` stehen Zeitposition, tatsächliche Framenummer (`frameIndex`), der BLAKE2b-128-Fingerabdruck (`frameHash`), Bildmaße und Identitätserkennungen.
+- Die Galerie lädt nur sichtbare Vorschaubilder mit 300 px Vorlauf. OpenCV decodiert beim Abruf das gespeicherte Frame. Der Pixel-Fingerabdruck wird vor Verwendung verifiziert. Falls die Pixel nicht übereinstimmen, wird kein falsches Bild mit Rechtecken angezeigt.
+- Die erste Galerieansicht erstellt maximal 320 px breite JPEGs (Qualität 78). Die Detailansicht erstellt erst bei Bedarf maximal 1600 px breite JPEGs (Qualität 88). Beide sind nur Cache-Dateien.
+- Ablage: Electron-userData/thumbnails/video-frames/<Video-Hash-Prefix>/<Video-Hash>/; Cache-Schlüssel: Video-SHA-256, Framenummer, Frame-Fingerabdruck und Ausgabegröße. Die Datenbank speichert keine Bilddaten.
+- Das LRU-Limit beträgt 500 MiB; auch bisherige Szenenbild-JPEGs werden mitgezählt. Die Bereinigung läuft beim Start und nach neuen Cacheeinträgen. Maximal zwei Extraktionen laufen parallel.
+- Ältere Analysen ohne Framenummer können noch auf frühere, exakt analysierte JPEGs zugreifen, solange diese im begrenzten Cache vorhanden sind. Fehlen sie, ist eine Video-Neuanalyse nötig. Die allgemeine Funktion „Bevorzugt neu analysieren“ kann dabei manuelle Zuordnungen des Mediums entfernen.

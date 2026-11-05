@@ -11,6 +11,7 @@ on:
       - "2026-10-30-medienquellen-ui"
       - "2026-10-30-navigation-kartenansicht"
       - "2026-11-03-lebensbereiche"
+      - "2026-11-05-szenenbilder-on-demand-cache"
   pull_request:
 
 jobs:
@@ -35,7 +36,7 @@ jobs:
         run: node --check scripts/setup-ai.mjs
 
       - name: Check Python worker syntax
-        run: python3 -m py_compile workers/python-ai/worker.py
+        run: python3 -m py_compile workers/python-ai/worker.py workers/python-ai/extract_frame.py
 
       - name: Build
         run: npm run build
