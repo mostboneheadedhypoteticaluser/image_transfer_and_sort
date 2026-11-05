@@ -3903,8 +3903,11 @@ function completeAnalysisJob(jobId: number, result: unknown) {
   const job = db.prepare(`
     SELECT id, media_id, module, input_sha256
     FROM analysis_jobs
-    WHERE id=?
+    WHERE id=? AND status='RUNNING'
   `).get(jobId);
+  // A previous run may still return after an explicit requeue. Never let such
+  // results update the replacement job's state or enqueue stale modules.
+  if (!job) throw new Error("Veraltetes Analyseergebnis nach Neueinreihung verworfen.");
 
   db.prepare(`
     UPDATE analysis_jobs
@@ -12298,7 +12301,7 @@ function assignVideoFrameIdentityName(
 
 function reanalyzeMedia(mediaId: number) {
   const media = db.prepare(`
-    SELECT id, source_id, sha256, availability
+    SELECT id, source_id, sha256, availability, extension
     FROM media_items
     WHERE id=?
   `).get(mediaId);
@@ -12312,6 +12315,7 @@ function reanalyzeMedia(mediaId: number) {
 
   const sourceId = Number(media.source_id);
   const sha256 = String(media.sha256);
+  const videoExtension = VIDEO_EXTENSIONS.has(String(media.extension).toLowerCase());
   const modules = [
     "file-probe-v1",
     "thumbnail-v1",
@@ -12363,25 +12367,28 @@ function reanalyzeMedia(mediaId: number) {
       deleteFrom(table);
     }
 
-    // Durch CASCADE sind Embeddings, Kandidaten-Zuordnungen und bestätigte
-    // Detektionszuordnungen des Mediums ebenfalls verschwunden. Leere
-    // Kandidatengruppen anschließend entfernen und Clusterstände invalidieren.
-    db.prepare(`
-      DELETE FROM person_candidates
-      WHERE NOT EXISTS (
-        SELECT 1 FROM person_candidate_faces pcf
-        WHERE pcf.candidate_id=person_candidates.id
-      )
-    `).run();
-    db.prepare(`
-      DELETE FROM pet_candidates
-      WHERE NOT EXISTS (
-        SELECT 1 FROM pet_candidate_items pci
-        WHERE pci.candidate_id=pet_candidates.id
-      )
-    `).run();
-    db.prepare("DELETE FROM person_cluster_runs WHERE source_id=?").run(sourceId);
-    db.prepare("DELETE FROM pet_cluster_runs WHERE source_id=?").run(sourceId);
+    // Videos haben keine normalen face_detections/pet_fused_detections
+    // Zuordnungen. Teure globale Kandidatenbereinigung und Gruppen-Refresh
+    // sind nur für Bilder notwendig. So blockiert ein Video-Reset nicht die
+    // gesamte Personen-/Haustiergruppierung.
+    if (!videoExtension) {
+      db.prepare(`
+        DELETE FROM person_candidates
+        WHERE NOT EXISTS (
+          SELECT 1 FROM person_candidate_faces pcf
+          WHERE pcf.candidate_id=person_candidates.id
+        )
+      `).run();
+      db.prepare(`
+        DELETE FROM pet_candidates
+        WHERE NOT EXISTS (
+          SELECT 1 FROM pet_candidate_items pci
+          WHERE pci.candidate_id=pet_candidates.id
+        )
+      `).run();
+      db.prepare("DELETE FROM person_cluster_runs WHERE source_id=?").run(sourceId);
+      db.prepare("DELETE FROM pet_cluster_runs WHERE source_id=?").run(sourceId);
+    }
 
     db.prepare("DELETE FROM analysis_jobs WHERE media_id=?").run(mediaId);
 
