@@ -248,6 +248,16 @@ declare global {
           petClass: "dog" | "cat" | null,
           name: string
         ): Promise<{ identityId: number; name: string; affected: number }>;
+        assignVideoFrameIdentityNames(
+          mediaId: number,
+          assignments: Array<{
+            timestampMs: number;
+            kind: "person" | "pet";
+            detectionIndex: number;
+            petClass: "dog" | "cat" | null;
+            name: string;
+          }>
+        ): Promise<{ mediaId: number; affected: number }>;
         reanalyzeMedia(
           mediaId: number
         ): Promise<{ mediaId: number; sourceId: number; requeued: number; cleared: number }>;
