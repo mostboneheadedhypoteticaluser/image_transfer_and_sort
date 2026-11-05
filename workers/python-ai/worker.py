@@ -6491,7 +6491,7 @@ def analyze_video_frames(
                             interpolation=cv2.INTER_AREA,
                         )
                     output_frame = os.path.join(
-                        frame_folder, f"{int(timestamp_ms)}-1600.jpg"
+                        frame_folder, f"{int(timestamp_ms)}-analyzed-1600.jpg"
                     )
                     temporary_frame = output_frame + f".{os.getpid()}.tmp.jpg"
                     if cv2.imwrite(
