@@ -284,7 +284,6 @@ type CandidateReviewState = {
 let candidateReviewState: CandidateReviewState | null = null;
 let currentImagePreviewDetails: MediaDetails | null = null;
 let currentVideoFrameTimestamp: number | null = null;
-let videoFrameThumbnailLoadToken = 0;
 let videoFrameThumbnailObserver: IntersectionObserver | null = null;
 let imagePreviewDetailLoadToken = 0;
 
@@ -2553,100 +2552,6 @@ function renderImagePreviewOverlay(details: MediaDetails): void {
   renderPreviewIdentityOverlay(identities, naturalWidth, naturalHeight);
 }
 
-function seekPreviewVideo(
-  video: HTMLVideoElement,
-  timestampMs: number
-): Promise<void> {
-  const target = Math.max(
-    0,
-    Math.min(
-      Number.isFinite(video.duration) ? video.duration : timestampMs / 1000,
-      timestampMs / 1000
-    )
-  );
-
-  if (
-    video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA &&
-    Math.abs(video.currentTime - target) < 0.03
-  ) {
-    return Promise.resolve();
-  }
-
-  return new Promise<void>((resolve, reject) => {
-    const cleanup = () => {
-      video.removeEventListener("seeked", onSeeked);
-      video.removeEventListener("error", onError);
-    };
-    const onSeeked = () => {
-      cleanup();
-      resolve();
-    };
-    const onError = () => {
-      cleanup();
-      reject(new Error("Videoframe konnte nicht geladen werden."));
-    };
-    video.addEventListener("seeked", onSeeked, { once: true });
-    video.addEventListener("error", onError, { once: true });
-
-    try {
-      video.currentTime = target;
-    } catch (error) {
-      cleanup();
-      reject(error);
-    }
-  });
-}
-
-function videoFrameDataUrl(
-  video: HTMLVideoElement,
-  maxWidth = 1600,
-  quality = 0.9
-): string {
-  const sourceWidth = Math.max(1, video.videoWidth);
-  const sourceHeight = Math.max(1, video.videoHeight);
-  const scale = Math.min(1, maxWidth / sourceWidth);
-  const canvas = document.createElement("canvas");
-  canvas.width = Math.max(1, Math.round(sourceWidth * scale));
-  canvas.height = Math.max(1, Math.round(sourceHeight * scale));
-  const context = canvas.getContext("2d");
-  if (!context) throw new Error("Szenenbild konnte nicht erzeugt werden.");
-  context.drawImage(video, 0, 0, canvas.width, canvas.height);
-  return canvas.toDataURL("image/jpeg", quality);
-}
-
-async function captureVideoFrameThumbnail(
-  video: HTMLVideoElement,
-  timestampMs: number
-): Promise<string> {
-  await seekPreviewVideo(video, timestampMs);
-
-  // Nach "seeked" kann der Decoder noch das alte oder ein schwarzes Frame
-  // bereitstellen. Auf das tatsächlich präsentierte Frame warten.
-  if (typeof video.requestVideoFrameCallback === "function") {
-    await new Promise<void>((resolve) => {
-      let finished = false;
-      const callbackId = video.requestVideoFrameCallback(() => {
-        if (!finished) {
-          finished = true;
-          window.clearTimeout(timeout);
-          resolve();
-        }
-      });
-      const timeout = window.setTimeout(() => {
-        if (finished) return;
-        finished = true;
-        video.cancelVideoFrameCallback?.(callbackId);
-        resolve();
-      }, 1200);
-    });
-  }
-
-  if (video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
-    throw new Error("Videoframe ist noch nicht decodiert.");
-  }
-  return videoFrameDataUrl(video, 320, 0.78);
-}
-
 async function refreshCurrentVideoFrameAfterAssignment(
   details: MediaDetails,
   timestampMs: number
@@ -2732,6 +2637,7 @@ async function openVideoFrameEditor(
   try {
     await imagePreviewImage.decode();
   } catch {
+    imagePreviewImage.removeAttribute("src");
     imagePreviewOverlay.replaceChildren();
     imagePreviewCaption.textContent =
       "Szenenbild konnte nicht geladen oder verifiziert werden. Bei älteren Analysen bitte Video neu analysieren.";
@@ -3682,7 +3588,6 @@ function openImagePreview(
 ): void {
   currentImagePreviewDetails = null;
   currentVideoFrameTimestamp = null;
-  videoFrameThumbnailLoadToken += 1;
   imagePreviewBackToVideo.hidden = true;
   imagePreviewOverlay.replaceChildren();
   imagePreviewCaption.textContent = caption;
@@ -3745,7 +3650,6 @@ imagePreviewImage.addEventListener("load", () => {
 
 imagePreviewDialog.addEventListener("close", () => {
   imagePreviewDetailLoadToken += 1;
-  videoFrameThumbnailLoadToken += 1;
   videoFrameThumbnailObserver?.disconnect();
   videoFrameThumbnailObserver = null;
   currentVideoFrameTimestamp = null;
