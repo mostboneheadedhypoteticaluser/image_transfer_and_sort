@@ -4280,6 +4280,16 @@ function libraryMarkerEntries(row: MediaRecord): string[] {
   return [...marks].sort((a, b) => a.localeCompare(b, "de"));
 }
 
+function lastAnalyzedTimestamp(row: MediaRecord): number {
+  if (!row.lastAnalyzedAt) return 0;
+  // SQLite CURRENT_TIMESTAMP ist UTC, aber ohne 'Z'.
+  const normalized = row.lastAnalyzedAt.includes("T")
+    ? row.lastAnalyzedAt
+    : row.lastAnalyzedAt.replace(" ", "T") + "Z";
+  const value = Date.parse(normalized);
+  return Number.isFinite(value) ? value : 0;
+}
+
 function libraryTimestamp(row: MediaRecord): number {
   const captured = row.capturedAt ? Date.parse(row.capturedAt) : Number.NaN;
   if (Number.isFinite(captured)) return captured;
@@ -4406,6 +4416,16 @@ function filteredLibraryRows(): MediaRecord[] {
       case "captured-asc":
         return libraryTimestamp(left) - libraryTimestamp(right) ||
           left.relativePath.localeCompare(right.relativePath, "de");
+      case "analyzed-desc":
+        return (lastAnalyzedTimestamp(right) ? 1 : 0) -
+          (lastAnalyzedTimestamp(left) ? 1 : 0) ||
+          lastAnalyzedTimestamp(right) - lastAnalyzedTimestamp(left) ||
+          left.relativePath.localeCompare(right.relativePath, "de");
+      case "analyzed-asc":
+        return (lastAnalyzedTimestamp(right) ? 1 : 0) -
+          (lastAnalyzedTimestamp(left) ? 1 : 0) ||
+          lastAnalyzedTimestamp(left) - lastAnalyzedTimestamp(right) ||
+          left.relativePath.localeCompare(right.relativePath, "de");
       case "path-desc":
         return right.relativePath.localeCompare(left.relativePath, "de");
       case "size-desc":
@@ -4428,7 +4448,13 @@ function filteredLibraryRows(): MediaRecord[] {
   if (libraryGroup.value !== "none") {
     rows.sort((left, right) =>
       libraryGroupLabel(left).localeCompare(libraryGroupLabel(right), "de") ||
-      (libraryTimestamp(right) - libraryTimestamp(left)) ||
+      (librarySort.value === "analyzed-desc" || librarySort.value === "analyzed-asc"
+        ? (lastAnalyzedTimestamp(right) ? 1 : 0) -
+            (lastAnalyzedTimestamp(left) ? 1 : 0) ||
+          (librarySort.value === "analyzed-desc"
+            ? lastAnalyzedTimestamp(right) - lastAnalyzedTimestamp(left)
+            : lastAnalyzedTimestamp(left) - lastAnalyzedTimestamp(right))
+        : libraryTimestamp(right) - libraryTimestamp(left)) ||
       left.relativePath.localeCompare(right.relativePath, "de")
     );
   }
@@ -4585,6 +4611,16 @@ function renderRows(rows: MediaRecord[], emptyText = "Noch keine Medien katalogi
       source.textContent = "Quelle: " + sourceName;
       source.title = row.sourcePath;
       pathCell.appendChild(source);
+    }
+
+    if (row.lastAnalyzedAt) {
+      const analyzed = document.createElement("small");
+      analyzed.className = "path-meta";
+      const analyzedAt = lastAnalyzedTimestamp(row);
+      analyzed.textContent = "Letzte Analyse: " +
+        (analyzedAt ? new Date(analyzedAt).toLocaleString("de-DE") : row.lastAnalyzedAt);
+      analyzed.title = "Zuletzt erfolgreich abgeschlossener Analysejob für die aktuelle Dateiversion.";
+      pathCell.appendChild(analyzed);
     }
 
     if (row.capturedAt) {
