@@ -84,6 +84,14 @@ export class ThumbnailCoordinator {
     });
   }
 
+  async waitUntilClaimsSettled(timeoutMs = 10000): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    while (this.pumping && Date.now() < deadline) {
+      await new Promise<void>((resolve) => setTimeout(resolve, 50));
+    }
+    if (this.pumping) throw new Error("Thumbnail-Queue konnte nicht pausiert werden.");
+  }
+
   async waitForMediaIdle(mediaId: number, timeoutMs = 15000): Promise<void> {
     const deadline = Date.now() + timeoutMs;
     while (
