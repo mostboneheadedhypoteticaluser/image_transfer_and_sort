@@ -2719,7 +2719,10 @@ async function openVideoFrameEditor(
   try {
     await imagePreviewImage.decode();
   } catch {
-    // onload/Browser-Decodierung genügt als Fallback.
+    imagePreviewOverlay.replaceChildren();
+    imagePreviewCaption.textContent =
+      "Szenenbild fehlt. Bitte dieses Video über „Bevorzugt neu analysieren“ neu analysieren.";
+    return;
   }
   if (!imagePreviewDialog.open || currentVideoFrameTimestamp !== frame.timestampMs) {
     return;
@@ -2761,9 +2764,9 @@ function populateVideoFrameThumbnails(
     image.addEventListener("error", () => {
       image.removeAttribute("src");
       if (placeholder) {
-        placeholder.textContent = "Vorschau nicht verfügbar";
+        placeholder.textContent = "Video neu analysieren";
         placeholder.classList.add("video-frame-thumb-error");
-        placeholder.title = "OpenCV konnte dieses Szenenbild nicht erzeugen. Details im Analyseprotokoll (VIDEO_FRAME_GENERATION_ERROR).";
+        placeholder.title = "Das exakte Analyseframe fehlt noch. Über „Bevorzugt neu analysieren“ wird es neu erzeugt.";
       }
     }, { once: true });
     image.src = videoSceneImageUrl(details.mediaId, timestampMs);
