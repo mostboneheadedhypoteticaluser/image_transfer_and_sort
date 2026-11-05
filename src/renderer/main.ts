@@ -6720,7 +6720,7 @@ async function reloadPersonOverviewPreservingPosition(
 ): Promise<void> {
   const scrollX = window.scrollX;
   const scrollY = window.scrollY;
-  await reloadPersonOverviewPreservingPosition(sourceId);
+  await loadPersonOverview(sourceId);
   window.scrollTo({ left: scrollX, top: scrollY, behavior: "auto" });
 }
 
@@ -6729,7 +6729,7 @@ async function reloadPetOverviewPreservingPosition(
 ): Promise<void> {
   const scrollX = window.scrollX;
   const scrollY = window.scrollY;
-  await reloadPetOverviewPreservingPosition(sourceId);
+  await loadPetOverview(sourceId);
   window.scrollTo({ left: scrollX, top: scrollY, behavior: "auto" });
 }
 
