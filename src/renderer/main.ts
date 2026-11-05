@@ -285,6 +285,7 @@ let candidateReviewState: CandidateReviewState | null = null;
 let currentImagePreviewDetails: MediaDetails | null = null;
 let currentVideoFrameTimestamp: number | null = null;
 let videoFrameThumbnailLoadToken = 0;
+let videoFrameThumbnailObserver: IntersectionObserver | null = null;
 let imagePreviewDetailLoadToken = 0;
 
 function createLoadingIndicator(text = "Daten werden geladen …"): HTMLDivElement {
@@ -2763,16 +2764,19 @@ function populateVideoFrameThumbnails(
   details: MediaDetails,
   gallery: HTMLElement
 ): void {
+  videoFrameThumbnailObserver?.disconnect();
+  videoFrameThumbnailObserver = null;
   const framesByTime = new Map(
     (details.videoAnalysis?.frames ?? []).map((frame) => [frame.timestampMs, frame])
   );
+  const pending = new Map<Element, { image: HTMLImageElement; url: string }>();
   for (const image of gallery.querySelectorAll<HTMLImageElement>("img[data-frame-ms]")) {
     const timestampMs = Number(image.dataset.frameMs);
     const frame = framesByTime.get(timestampMs);
     if (!frame) continue;
-    const placeholder = image.closest(".video-frame-card")?.querySelector<HTMLElement>(
-      ".video-frame-thumb-placeholder"
-    );
+    const card = image.closest(".video-frame-card");
+    if (!card) continue;
+    const placeholder = card.querySelector<HTMLElement>(".video-frame-thumb-placeholder");
     image.addEventListener("load", () => {
       image.dataset.loaded = "1";
       if (placeholder) placeholder.textContent = "";
@@ -2780,16 +2784,36 @@ function populateVideoFrameThumbnails(
     image.addEventListener("error", () => {
       image.removeAttribute("src");
       if (placeholder) {
-        placeholder.textContent = "Video neu analysieren";
+        placeholder.textContent = "Szenenbild nicht verfügbar";
         placeholder.classList.add("video-frame-thumb-error");
-        placeholder.title = "Szenenbild konnte nicht decodiert oder verifiziert werden. Bei älteren Analysen bitte das Video neu analysieren.";
+        placeholder.title =
+          "Frame konnte nicht verifiziert werden; bei älteren Videos ist ggf. eine erneute Videoanalyse nötig.";
       }
     }, { once: true });
-    image.src = videoSceneImageUrl(details.mediaId, frame);
+    pending.set(card, { image, url: videoSceneImageUrl(details.mediaId, frame) });
+  }
+
+  if (typeof IntersectionObserver !== "undefined") {
+    const observer = new IntersectionObserver((entries) => {
+      for (const entry of entries) {
+        if (!entry.isIntersecting) continue;
+        const item = pending.get(entry.target);
+        if (!item) continue;
+        observer.unobserve(entry.target);
+        pending.delete(entry.target);
+        item.image.src = item.url;
+      }
+    }, { rootMargin: "300px 0px" });
+    videoFrameThumbnailObserver = observer;
+    for (const card of pending.keys()) observer.observe(card);
+  } else {
+    for (const item of pending.values()) item.image.src = item.url;
   }
 }
 
 function renderImagePreviewDetails(details: MediaDetails): void {
+  videoFrameThumbnailObserver?.disconnect();
+  videoFrameThumbnailObserver = null;
   imagePreviewDetails.replaceChildren();
 
   const reanalyzePanel = document.createElement("div");
@@ -3722,6 +3746,8 @@ imagePreviewImage.addEventListener("load", () => {
 imagePreviewDialog.addEventListener("close", () => {
   imagePreviewDetailLoadToken += 1;
   videoFrameThumbnailLoadToken += 1;
+  videoFrameThumbnailObserver?.disconnect();
+  videoFrameThumbnailObserver = null;
   currentVideoFrameTimestamp = null;
   imagePreviewBackToVideo.hidden = true;
   currentImagePreviewDetails = null;
