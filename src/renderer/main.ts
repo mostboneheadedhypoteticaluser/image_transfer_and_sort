@@ -64,6 +64,7 @@ const mediaView = document.querySelector<HTMLDivElement>("#mediaView")!;
 const duplicateView = document.querySelector<HTMLDivElement>("#duplicateView")!;
 const personView = document.querySelector<HTMLDivElement>("#personView")!;
 const petView = document.querySelector<HTMLDivElement>("#petView")!;
+const appWorkspace = document.querySelector<HTMLElement>(".app-workspace")!;
 const personCandidates = document.querySelector<HTMLDivElement>("#personCandidates")!;
 const petCandidates = document.querySelector<HTMLDivElement>("#petCandidates")!;
 const confirmedPets = document.querySelector<HTMLDivElement>("#confirmedPets")!;
@@ -2897,7 +2898,47 @@ function renderImagePreviewDetails(details: MediaDetails): void {
       hint.textContent =
         parts.join(" · ") +
         " mit Namensvorschlag sind noch unbestätigt. Treffer ohne Namen bleiben unverändert.";
-      description.append(title, hint);
+
+      const groupedNames = new Map<
+        string,
+        { kind: "person" | "pet"; name: string; count: number }
+      >();
+      for (const assignment of pendingVideoAssignments) {
+        const key =
+          assignment.kind + ":" + normalizedIdentityName(assignment.name);
+        const current = groupedNames.get(key);
+        if (current) {
+          current.count += 1;
+        } else {
+          groupedNames.set(key, {
+            kind: assignment.kind,
+            name: assignment.name,
+            count: 1
+          });
+        }
+      }
+
+      const names = document.createElement("div");
+      names.className = "video-confirmation-names";
+      const sortedNames = [...groupedNames.values()].sort(
+        (left, right) =>
+          left.kind.localeCompare(right.kind) ||
+          right.count - left.count ||
+          left.name.localeCompare(right.name, "de-DE")
+      );
+      for (const entry of sortedNames) {
+        const item = document.createElement("span");
+        item.className =
+          "video-confirmation-name " +
+          (entry.kind === "person" ? "person" : "pet");
+        item.textContent =
+          (entry.kind === "person" ? "Person: " : "Haustier: ") +
+          entry.name +
+          " (" + entry.count.toLocaleString("de-DE") + ")";
+        names.appendChild(item);
+      }
+
+      description.append(title, hint, names);
 
       const confirmAll = document.createElement("button");
       confirmAll.type = "button";
@@ -5814,9 +5855,25 @@ async function loadPersonOverview(
   forceRefresh = false
 ): Promise<void> {
   refreshPeopleButton.disabled = true;
-  showBlockLoading(personCandidates, "Personenvorschläge werden geladen …");
-  showBlockLoading(confirmedPersons, "Bestätigte Personen werden geladen …");
-  personStatus.textContent = "Personendaten werden geladen …";
+
+  const workspacePage = personView.closest<HTMLElement>(".workspace-page");
+  const preserveWorkspacePosition =
+    !personView.hidden && workspacePage !== null && !workspacePage.hidden;
+  const workspaceScrollTop = preserveWorkspacePosition
+    ? appWorkspace.scrollTop
+    : 0;
+
+  // Während einer Bestätigung die vorhandenen Karten stehen lassen. Wenn wir
+  // sie vor der DB-Antwort durch einen kleinen Ladeblock ersetzen, schrumpft
+  // der Workspace und der Browser klemmt scrollTop bereits auf 0/oben fest.
+  if (!preserveWorkspacePosition) {
+    showBlockLoading(personCandidates, "Personenvorschläge werden geladen …");
+    showBlockLoading(confirmedPersons, "Bestätigte Personen werden geladen …");
+  }
+  personStatus.textContent = preserveWorkspacePosition
+    ? "Personendaten werden aktualisiert …"
+    : "Personendaten werden geladen …";
+
   try {
     const overview = await window.imageSorter.people.getOverview(
       sourceId,
@@ -5824,6 +5881,16 @@ async function loadPersonOverview(
     );
     lastPersonOverview = overview;
     renderPersonOverview(overview);
+
+    if (preserveWorkspacePosition) {
+      appWorkspace.scrollTop = workspaceScrollTop;
+      window.requestAnimationFrame(() => {
+        if (!personView.hidden && workspacePage !== null && !workspacePage.hidden) {
+          appWorkspace.scrollTop = workspaceScrollTop;
+        }
+      });
+    }
+
     await refreshIdentityTabStats();
   } finally {
     refreshPeopleButton.disabled = false;
@@ -6702,9 +6769,22 @@ async function loadPetOverview(
   forceRefresh = false
 ): Promise<void> {
   refreshPetsButton.disabled = true;
-  showBlockLoading(petCandidates, "Haustiergruppen werden geladen …");
-  showBlockLoading(confirmedPets, "Bestätigte Haustiere werden geladen …");
-  petStatus.textContent = "Haustierdaten werden geladen …";
+
+  const workspacePage = petView.closest<HTMLElement>(".workspace-page");
+  const preserveWorkspacePosition =
+    !petView.hidden && workspacePage !== null && !workspacePage.hidden;
+  const workspaceScrollTop = preserveWorkspacePosition
+    ? appWorkspace.scrollTop
+    : 0;
+
+  if (!preserveWorkspacePosition) {
+    showBlockLoading(petCandidates, "Haustiergruppen werden geladen …");
+    showBlockLoading(confirmedPets, "Bestätigte Haustiere werden geladen …");
+  }
+  petStatus.textContent = preserveWorkspacePosition
+    ? "Haustierdaten werden aktualisiert …"
+    : "Haustierdaten werden geladen …";
+
   try {
     const overview = await window.imageSorter.pets.getOverview(
       sourceId,
@@ -6712,6 +6792,16 @@ async function loadPetOverview(
     );
     lastPetOverview = overview;
     renderPetOverview(overview);
+
+    if (preserveWorkspacePosition) {
+      appWorkspace.scrollTop = workspaceScrollTop;
+      window.requestAnimationFrame(() => {
+        if (!petView.hidden && workspacePage !== null && !workspacePage.hidden) {
+          appWorkspace.scrollTop = workspaceScrollTop;
+        }
+      });
+    }
+
     await refreshIdentityTabStats();
   } finally {
     refreshPetsButton.disabled = false;
@@ -6721,19 +6811,13 @@ async function loadPetOverview(
 async function reloadPersonOverviewPreservingPosition(
   sourceId: number
 ): Promise<void> {
-  const scrollX = window.scrollX;
-  const scrollY = window.scrollY;
   await loadPersonOverview(sourceId);
-  window.scrollTo({ left: scrollX, top: scrollY, behavior: "auto" });
 }
 
 async function reloadPetOverviewPreservingPosition(
   sourceId: number
 ): Promise<void> {
-  const scrollX = window.scrollX;
-  const scrollY = window.scrollY;
   await loadPetOverview(sourceId);
-  window.scrollTo({ left: scrollX, top: scrollY, behavior: "auto" });
 }
 
 function setPersonConfirmationMediaFilter(filter: ConfirmationMediaFilter): void {
