@@ -1103,6 +1103,25 @@ function registerIpc(): void {
   );
 
   ipcMain.handle(
+    "catalog:assignVideoFrameIdentityNames",
+    (
+      _event,
+      mediaId: number,
+      assignments: Array<{
+        timestampMs: number;
+        kind: "person" | "pet";
+        detectionIndex: number;
+        petClass: "dog" | "cat" | null;
+        name: string;
+      }>
+    ) =>
+      catalog!.request("assignVideoFrameIdentityNames", {
+        mediaId,
+        assignments
+      })
+  );
+
+  ipcMain.handle(
     "catalog:reanalyzeMedia",
     async (_event, mediaId: number): Promise<ReanalyzeMediaResult> => {
       const requeueStartedAt = Date.now();
