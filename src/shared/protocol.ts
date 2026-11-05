@@ -1058,6 +1058,7 @@ export type CatalogMethod =
   | "getMediaPreviewInfo"
   | "getMediaDetails"
   | "assignVideoFrameIdentityName"
+  | "assignVideoFrameIdentityNames"
   | "reanalyzeMedia"
   | "getMediaPath"
   | "scanSource"
