@@ -2754,7 +2754,9 @@ function renderImagePreviewDetails(details: MediaDetails): void {
           "Medium bevorzugt neu eingereiht · " +
           result.requeued.toLocaleString("de-DE") + " Analyse-Stufen · " +
           result.cleared.toLocaleString("de-DE") + " alte Ergebnisse entfernt.";
-        await Promise.all([
+        // The queue operation is finished. Do not keep the button locked
+        // while the unrelated library/stats requests refresh in the background.
+        void Promise.allSettled([
           loadImagePreviewDetails(details.mediaId),
           refreshCatalog(),
           refreshSelectedPipelineStatus()
@@ -2843,8 +2845,14 @@ function renderImagePreviewDetails(details: MediaDetails): void {
     }
   }
 
+  const lastSuccessfulAnalysis = details.analysisJobs
+    .filter((job) => job.status === "DONE" && job.finishedAt)
+    .map((job) => job.finishedAt as string)
+    .sort()
+    .at(-1) ?? null;
   const fileRows: Array<[string, unknown]> = [
     ["Datei", details.relativePath],
+    ["Letzte erfolgreiche Analyse", detailTimestamp(lastSuccessfulAnalysis)],
     ["Vollständiger Pfad", details.absolutePath],
     ["Dateityp", details.extension],
     ["Größe", formatBytes(details.sizeBytes)],
