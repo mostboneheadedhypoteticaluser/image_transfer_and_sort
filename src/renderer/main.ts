@@ -1234,8 +1234,20 @@ function fullMediaUrl(mediaId: number): string {
   return `image-sorter-media://media/${mediaId}`;
 }
 
-function videoSceneImageUrl(mediaId: number, timestampMs: number, width = 320): string {
-  return `image-sorter-frame://media/${mediaId}?ms=${timestampMs}&width=${width}`;
+function videoSceneImageUrl(
+  mediaId: number,
+  frame: { timestampMs: number; frameIndex: number | null; frameHash: string | null },
+  width = 320
+): string {
+  const params = new URLSearchParams({
+    ms: String(frame.timestampMs),
+    width: String(width)
+  });
+  if (frame.frameIndex !== null && frame.frameHash) {
+    params.set("i", String(frame.frameIndex));
+    params.set("h", frame.frameHash);
+  }
+  return `image-sorter-frame://media/${mediaId}?${params.toString()}`;
 }
 
 function isVideoExtension(extension: string): boolean {
@@ -2710,7 +2722,7 @@ async function openVideoFrameEditor(
   imagePreviewImageWrap.hidden = false;
   imagePreviewVideo.hidden = true;
   imagePreviewBackToVideo.hidden = false;
-  imagePreviewImage.src = videoSceneImageUrl(details.mediaId, frame.timestampMs, 1600);
+  imagePreviewImage.src = videoSceneImageUrl(details.mediaId, frame, 1600);
   imagePreviewImage.alt =
     details.relativePath + " bei " + videoTimestamp(frame.timestampMs);
   imagePreviewCaption.textContent =
@@ -2721,7 +2733,7 @@ async function openVideoFrameEditor(
   } catch {
     imagePreviewOverlay.replaceChildren();
     imagePreviewCaption.textContent =
-      "Szenenbild fehlt. Bitte dieses Video über „Bevorzugt neu analysieren“ neu analysieren.";
+      "Szenenbild konnte nicht geladen oder verifiziert werden. Bei älteren Analysen bitte Video neu analysieren.";
     return;
   }
   if (!imagePreviewDialog.open || currentVideoFrameTimestamp !== frame.timestampMs) {
@@ -2751,9 +2763,13 @@ function populateVideoFrameThumbnails(
   details: MediaDetails,
   gallery: HTMLElement
 ): void {
+  const framesByTime = new Map(
+    (details.videoAnalysis?.frames ?? []).map((frame) => [frame.timestampMs, frame])
+  );
   for (const image of gallery.querySelectorAll<HTMLImageElement>("img[data-frame-ms]")) {
     const timestampMs = Number(image.dataset.frameMs);
-    if (!Number.isSafeInteger(timestampMs)) continue;
+    const frame = framesByTime.get(timestampMs);
+    if (!frame) continue;
     const placeholder = image.closest(".video-frame-card")?.querySelector<HTMLElement>(
       ".video-frame-thumb-placeholder"
     );
@@ -2766,10 +2782,10 @@ function populateVideoFrameThumbnails(
       if (placeholder) {
         placeholder.textContent = "Video neu analysieren";
         placeholder.classList.add("video-frame-thumb-error");
-        placeholder.title = "Das exakte Analyseframe fehlt noch. Über „Bevorzugt neu analysieren“ wird es neu erzeugt.";
+        placeholder.title = "Szenenbild konnte nicht decodiert oder verifiziert werden. Bei älteren Analysen bitte das Video neu analysieren.";
       }
     }, { once: true });
-    image.src = videoSceneImageUrl(details.mediaId, timestampMs);
+    image.src = videoSceneImageUrl(details.mediaId, frame);
   }
 }
 
