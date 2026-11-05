@@ -2489,11 +2489,98 @@ function renderPreviewIdentityOverlay(
   }
 }
 
+type PreviewBox = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+};
+
+function previewOrientedDimensions(
+  width: number,
+  height: number,
+  orientation: number
+): { width: number; height: number } {
+  return [5, 6, 7, 8].includes(orientation)
+    ? { width: height, height: width }
+    : { width, height };
+}
+
+function orientRawPreviewBox(
+  box: PreviewBox,
+  rawWidth: number,
+  rawHeight: number,
+  orientation: number
+): PreviewBox {
+  if (
+    orientation === 1 ||
+    rawWidth <= 0 ||
+    rawHeight <= 0
+  ) {
+    return box;
+  }
+
+  const points = [
+    [box.x, box.y],
+    [box.x + box.width, box.y],
+    [box.x, box.y + box.height],
+    [box.x + box.width, box.y + box.height]
+  ] as const;
+
+  const orientPoint = (x: number, y: number): [number, number] => {
+    switch (orientation) {
+      case 2:
+        return [rawWidth - x, y];
+      case 3:
+        return [rawWidth - x, rawHeight - y];
+      case 4:
+        return [x, rawHeight - y];
+      case 5:
+        return [y, x];
+      case 6:
+        return [rawHeight - y, x];
+      case 7:
+        return [rawHeight - y, rawWidth - x];
+      case 8:
+        return [y, rawWidth - x];
+      default:
+        return [x, y];
+    }
+  };
+
+  const oriented = points.map(([x, y]) => orientPoint(x, y));
+  const xs = oriented.map(([x]) => x);
+  const ys = oriented.map(([, y]) => y);
+  const left = Math.min(...xs);
+  const top = Math.min(...ys);
+  const right = Math.max(...xs);
+  const bottom = Math.max(...ys);
+
+  return {
+    x: left,
+    y: top,
+    width: Math.max(0, right - left),
+    height: Math.max(0, bottom - top)
+  };
+}
+
 function renderImagePreviewOverlay(details: MediaDetails): void {
-  const naturalWidth =
-    imagePreviewImage.naturalWidth || details.imageMetadata?.width || 0;
-  const naturalHeight =
-    imagePreviewImage.naturalHeight || details.imageMetadata?.height || 0;
+  const rawWidth =
+    details.imageMetadata?.width || imagePreviewImage.naturalWidth || 0;
+  const rawHeight =
+    details.imageMetadata?.height || imagePreviewImage.naturalHeight || 0;
+  const orientation = details.imageMetadata?.orientation ?? 1;
+  const orientedDimensions = previewOrientedDimensions(
+    rawWidth,
+    rawHeight,
+    orientation
+  );
+
+  // Die große Vorschau wird auf maximal 1920×1440 verkleinert. Die
+  // Erkennungsboxen liegen dagegen in Pixelkoordinaten des Analysebilds.
+  // Deshalb niemals gegen naturalWidth/naturalHeight der Preview normieren.
+  const analysisWidth = orientedDimensions.width;
+  const analysisHeight = orientedDimensions.height;
 
   const identities: PreviewOverlayIdentity[] = [
     ...details.faces.map((face) => ({
@@ -2504,6 +2591,7 @@ function renderImagePreviewOverlay(details: MediaDetails): void {
       confirmed: Boolean(
         face.personId && face.assignmentSource === "CONFIRMED"
       ),
+      // YuNet wird bereits auf EXIF-orientierten Pixeln ausgeführt.
       x: face.x,
       y: face.y,
       width: face.width,
@@ -2521,36 +2609,58 @@ function renderImagePreviewOverlay(details: MediaDetails): void {
         ]);
       }
     })),
-    ...details.pets.map((pet) => ({
-      kind: "pet" as const,
-      id: pet.id,
-      name: pet.petName,
-      suggestionName: pet.suggestedPets[0]?.petName ?? null,
-      confirmed: Boolean(
-        pet.petId && pet.assignmentSource === "CONFIRMED"
-      ),
-      x: pet.x,
-      y: pet.y,
-      width: pet.width,
-      height: pet.height,
-      petClass: pet.petClass,
-      onAssign: async (name: string) => {
-        await window.imageSorter.pets.assignDetectionName(pet.id, name);
-        progressText.textContent =
-          "Haustierfundstelle wurde „" + name +
-          "“ zugeordnet und bestätigt.";
-        if (imagePreviewDialog.open) {
-          await loadImagePreviewDetails(details.mediaId);
+    ...details.pets.map((pet) => {
+      // NanoDet/YOLOX lesen aktuell die Rohpixel ohne EXIF-Transpose.
+      // Die Preview wird dagegen von Sharp auto-orientiert. Für die Anzeige
+      // müssen Haustierboxen deshalb in dasselbe Koordinatensystem gedreht
+      // bzw. gespiegelt werden.
+      const box = orientRawPreviewBox(
+        {
+          x: pet.x,
+          y: pet.y,
+          width: pet.width,
+          height: pet.height
+        },
+        rawWidth,
+        rawHeight,
+        orientation
+      );
+
+      return {
+        kind: "pet" as const,
+        id: pet.id,
+        name: pet.petName,
+        suggestionName: pet.suggestedPets[0]?.petName ?? null,
+        confirmed: Boolean(
+          pet.petId && pet.assignmentSource === "CONFIRMED"
+        ),
+        x: box.x,
+        y: box.y,
+        width: box.width,
+        height: box.height,
+        petClass: pet.petClass,
+        onAssign: async (name: string) => {
+          await window.imageSorter.pets.assignDetectionName(pet.id, name);
+          progressText.textContent =
+            "Haustierfundstelle wurde „" + name +
+            "“ zugeordnet und bestätigt.";
+          if (imagePreviewDialog.open) {
+            await loadImagePreviewDetails(details.mediaId);
+          }
+          await Promise.all([
+            refreshIdentityTabStats(),
+            refreshCatalog()
+          ]);
         }
-        await Promise.all([
-          refreshIdentityTabStats(),
-          refreshCatalog()
-        ]);
-      }
-    }))
+      };
+    })
   ];
 
-  renderPreviewIdentityOverlay(identities, naturalWidth, naturalHeight);
+  renderPreviewIdentityOverlay(
+    identities,
+    analysisWidth,
+    analysisHeight
+  );
 }
 
 async function refreshCurrentVideoFrameAfterAssignment(
