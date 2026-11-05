@@ -4480,7 +4480,7 @@ function renderRows(rows: MediaRecord[], emptyText = "Noch keine Medien katalogi
   if (rows.length === 0) {
     const tr = document.createElement("tr");
     const td = document.createElement("td");
-    td.colSpan = 7;
+    td.colSpan = 8;
     td.className = "empty";
     td.textContent = emptyText;
     tr.appendChild(td);
@@ -4498,7 +4498,7 @@ function renderRows(rows: MediaRecord[], emptyText = "Noch keine Medien katalogi
         const groupRow = document.createElement("tr");
         groupRow.className = "media-group-row";
         const groupCell = document.createElement("td");
-        groupCell.colSpan = 7;
+        groupCell.colSpan = 8;
         groupCell.textContent = group;
         groupRow.appendChild(groupCell);
         fragment.appendChild(groupRow);
@@ -4856,6 +4856,16 @@ function renderRows(rows: MediaRecord[], emptyText = "Noch keine Medien katalogi
       analysisCell.appendChild(summary);
     }
 
+    const analyzedCell = document.createElement("td");
+    analyzedCell.className = "analysis-time-cell";
+    const lastTime = lastAnalyzedTimestamp(row);
+    analyzedCell.textContent = lastTime
+      ? new Date(lastTime).toLocaleString("de-DE")
+      : "—";
+    analyzedCell.title = row.lastAnalyzedAt
+      ? "Neuester erfolgreich abgeschlossener Analysejob für die aktuelle Dateiversion."
+      : "Für diese Dateiversion wurde noch kein Analysejob erfolgreich abgeschlossen.";
+
     const actionCell = document.createElement("td");
     if (row.availability === "MISSING" && row.recycleState === "RESTORABLE") {
       const restoreButton = document.createElement("button");
@@ -4886,7 +4896,7 @@ function renderRows(rows: MediaRecord[], emptyText = "Noch keine Medien katalogi
       actionCell.className = "muted";
     }
 
-    tr.append(previewCell, pathCell, typeCell, sizeCell, stateCell, analysisCell, actionCell);
+    tr.append(previewCell, pathCell, typeCell, sizeCell, stateCell, analysisCell, analyzedCell, actionCell);
     fragment.appendChild(tr);
   }
 
