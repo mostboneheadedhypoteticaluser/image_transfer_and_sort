@@ -761,6 +761,8 @@ export type MediaRecord = {
   thumbnailReady: boolean;
   thumbnailVersion: string | null;
   capturedAt: string | null;
+  /** Neuester erfolgreicher Analysejob für den aktuellen Datei-SHA. */
+  lastAnalyzedAt: string | null;
   faceCount: number;
   faceEmbeddingCount: number;
   petCount: number;
