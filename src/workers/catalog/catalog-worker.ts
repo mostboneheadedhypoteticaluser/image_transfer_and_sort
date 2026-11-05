@@ -7218,6 +7218,8 @@ function completeVideoAnalysisJob(jobId: number, result: unknown) {
 
   type FrameMatch = {
     timestampMs: number;
+    frameIndex: number | null;
+    frameHash: string | null;
     sceneChange: boolean;
     width: number;
     height: number;
@@ -7242,6 +7244,14 @@ function completeVideoAnalysisJob(jobId: number, result: unknown) {
     );
     const frameWidth = Math.max(1, Math.trunc(Number(frame.width) || width || 1));
     const frameHeight = Math.max(1, Math.trunc(Number(frame.height) || height || 1));
+    const rawFrameIndex = frame.frameIndex;
+    const parsedFrameIndex = Number(rawFrameIndex);
+    const frameIndex = rawFrameIndex !== null && rawFrameIndex !== undefined &&
+      Number.isSafeInteger(parsedFrameIndex) && parsedFrameIndex >= 0
+      ? parsedFrameIndex : null;
+    const frameHash = typeof frame.frameHash === "string" &&
+      /^[0-9a-f]{32}$/i.test(frame.frameHash)
+      ? frame.frameHash.toLowerCase() : null;
 
     const persons: FramePerson[] = [];
     const rawFaces = Array.isArray(frame.faces) ? frame.faces : [];
@@ -7359,6 +7369,8 @@ function completeVideoAnalysisJob(jobId: number, result: unknown) {
 
     compactFrames.push({
       timestampMs,
+      frameIndex,
+      frameHash: frameIndex === null ? null : frameHash,
       sceneChange: Boolean(frame.sceneChange),
       width: frameWidth,
       height: frameHeight,
@@ -11740,6 +11752,13 @@ function getMediaDetails(mediaId: number) {
           if (!rawFrame || typeof rawFrame !== "object") return null;
           const frame = rawFrame as Record<string, unknown>;
           const timestampMs = Math.max(0, Math.trunc(Number(frame.timestampMs) || 0));
+          const rawFrameIndex = frame.frameIndex;
+          const frameIndex = rawFrameIndex !== null && rawFrameIndex !== undefined &&
+            Number.isSafeInteger(Number(rawFrameIndex)) && Number(rawFrameIndex) >= 0
+            ? Number(rawFrameIndex) : null;
+          const frameHash = typeof frame.frameHash === "string" &&
+            /^[0-9a-f]{32}$/i.test(frame.frameHash)
+            ? frame.frameHash.toLowerCase() : null;
           const frameWidth = Math.max(1, Math.trunc(Number(frame.width) || Number(videoAnalysis.width) || 1));
           const frameHeight = Math.max(1, Math.trunc(Number(frame.height) || Number(videoAnalysis.height) || 1));
           const detections: Array<Record<string, unknown>> = [];
@@ -11796,6 +11815,8 @@ function getMediaDetails(mediaId: number) {
 
           return {
             timestampMs,
+            frameIndex,
+            frameHash: frameIndex === null ? null : frameHash,
             sceneChange: Boolean(frame.sceneChange),
             width: frameWidth,
             height: frameHeight,
