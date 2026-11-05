@@ -12299,6 +12299,148 @@ function assignVideoFrameIdentityName(
   }
 }
 
+
+function assignVideoFrameIdentityNames(
+  mediaId: number,
+  rawAssignments: unknown
+) {
+  const assignments = Array.isArray(rawAssignments) ? rawAssignments : [];
+  if (assignments.length === 0) return { mediaId, affected: 0 };
+
+  const media = db.prepare(
+    "SELECT m.id,m.sha256,va.frames_json " +
+    "FROM media_items m " +
+    "JOIN media_video_analysis va ON va.media_id=m.id AND va.input_sha256=m.sha256 " +
+    "WHERE m.id=? AND m.availability='AVAILABLE'"
+  ).get(mediaId);
+  if (!media) throw new Error("Das Video oder seine Frameanalyse wurde nicht gefunden.");
+
+  let frames: any[] = [];
+  try {
+    const parsed = JSON.parse(String(media.frames_json ?? "[]"));
+    frames = Array.isArray(parsed) ? parsed : [];
+  } catch {
+    frames = [];
+  }
+
+  const frameMap = new Map<number, Record<string, unknown>>();
+  for (const entry of frames) {
+    if (!entry || typeof entry !== "object") continue;
+    const frame = entry as Record<string, unknown>;
+    frameMap.set(
+      Math.max(0, Math.trunc(Number(frame.timestampMs) || 0)),
+      frame
+    );
+  }
+
+  const findIdentity = db.prepare(
+    "SELECT id FROM persons WHERE name=? COLLATE NOCASE ORDER BY id LIMIT 1"
+  );
+  const insertPerson = db.prepare("INSERT INTO persons(name) VALUES(?)");
+  const touchPerson = db.prepare(
+    "UPDATE persons SET updated_at=CURRENT_TIMESTAMP WHERE id=?"
+  );
+  const findPet = db.prepare(
+    "SELECT id FROM pets WHERE name=? COLLATE NOCASE AND pet_class=? ORDER BY id LIMIT 1"
+  );
+  const insertPet = db.prepare(
+    "INSERT INTO pets(name,pet_class) VALUES(?,?)"
+  );
+  const touchPet = db.prepare(
+    "UPDATE pets SET updated_at=CURRENT_TIMESTAMP WHERE id=?"
+  );
+  const upsertOverride = db.prepare(
+    "INSERT INTO video_frame_identity_overrides(" +
+    "media_id,timestamp_ms,identity_kind,detection_index,pet_class,identity_id,updated_at" +
+    ") VALUES(?,?,?,?,?,?,CURRENT_TIMESTAMP) " +
+    "ON CONFLICT(media_id,timestamp_ms,identity_kind,detection_index) DO UPDATE SET " +
+    "pet_class=excluded.pet_class,identity_id=excluded.identity_id,updated_at=CURRENT_TIMESTAMP"
+  );
+
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    let affected = 0;
+
+    for (const rawAssignment of assignments) {
+      if (!rawAssignment || typeof rawAssignment !== "object") continue;
+      const assignment = rawAssignment as Record<string, unknown>;
+      const kind =
+        assignment.kind === "pet"
+          ? "pet"
+          : assignment.kind === "person"
+            ? "person"
+            : null;
+      if (!kind) continue;
+
+      const name =
+        typeof assignment.name === "string" ? assignment.name.trim() : "";
+      if (!name || name.length > 120) continue;
+
+      const timestampMs = Math.max(
+        0,
+        Math.trunc(Number(assignment.timestampMs) || 0)
+      );
+      const detectionIndex = Math.max(
+        0,
+        Math.trunc(Number(assignment.detectionIndex) || 0)
+      );
+      const petClass =
+        kind === "pet"
+          ? String(assignment.petClass) === "cat" ? "cat" : "dog"
+          : null;
+
+      const frame = frameMap.get(timestampMs);
+      const detections = frame
+        ? kind === "person"
+          ? Array.isArray(frame.persons) ? frame.persons : []
+          : Array.isArray(frame.pets) ? frame.pets : []
+        : [];
+      const exists = detections.some((entry, fallbackIndex) => {
+        if (!entry || typeof entry !== "object") return false;
+        const detection = entry as Record<string, unknown>;
+        const index = Math.max(
+          0,
+          Math.trunc(Number(detection.detectionIndex) || fallbackIndex)
+        );
+        return index === detectionIndex;
+      });
+      if (!exists) continue;
+
+      let identityId: number;
+      if (kind === "person") {
+        const existing = findIdentity.get(name);
+        identityId = existing
+          ? Number(existing.id)
+          : Number(insertPerson.run(name).lastInsertRowid);
+        touchPerson.run(identityId);
+      } else {
+        const existing = findPet.get(name, petClass);
+        identityId = existing
+          ? Number(existing.id)
+          : Number(insertPet.run(name, petClass).lastInsertRowid);
+        touchPet.run(identityId);
+      }
+
+      upsertOverride.run(
+        mediaId,
+        timestampMs,
+        kind,
+        detectionIndex,
+        petClass,
+        identityId
+      );
+      affected += 1;
+    }
+
+    if (affected > 0) rebuildVideoIdentityTracks(mediaId);
+    db.exec("COMMIT");
+    return { mediaId, affected };
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+}
+
 function reanalyzeMedia(mediaId: number) {
   const media = db.prepare(`
     SELECT id, source_id, sha256, availability, extension
@@ -13086,6 +13228,11 @@ async function dispatch(method: CatalogMethod, payload: Record<string, unknown> 
         asNumber(payload.detectionIndex, "detectionIndex"),
         payload.petClass,
         payload.name
+      );
+    case "assignVideoFrameIdentityNames":
+      return assignVideoFrameIdentityNames(
+        asNumber(payload.mediaId, "mediaId"),
+        payload.assignments
       );
     case "reanalyzeMedia":
       return reanalyzeMedia(asNumber(payload.mediaId, "mediaId"));
