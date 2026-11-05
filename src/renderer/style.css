@@ -352,12 +352,18 @@ th {
   letter-spacing: .04em;
 }
 
+.table-wrap > table { min-width: 1100px; }
 th:first-child { width: 82px; }
-th:nth-child(2) { width: 43%; }
-th:nth-child(3) { width: 8%; }
-th:nth-child(4) { width: 10%; }
-th:nth-child(5) { width: 23%; }
-th:nth-child(6) { width: 13%; }
+th:nth-child(2) { width: 31%; }
+th:nth-child(3) { width: 6%; }
+th:nth-child(4) { width: 7%; }
+th:nth-child(5) { width: 20%; }
+th:nth-child(6) { width: 14%; }
+th:nth-child(7) { width: 13%; }
+.analysis-time-cell {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
 
 .path-cell {
   overflow: hidden;
