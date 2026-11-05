@@ -2860,7 +2860,10 @@ function renderImagePreviewDetails(details: MediaDetails): void {
             kind: detection.kind,
             detectionIndex: detection.detectionIndex,
             petClass: detection.petClass,
-            name: detection.name.trim()
+            name:
+              typeof detection.name === "string"
+                ? detection.name.trim()
+                : ""
           }))
       );
 
