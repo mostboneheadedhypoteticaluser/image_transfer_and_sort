@@ -1105,37 +1105,44 @@ function registerIpc(): void {
   ipcMain.handle(
     "catalog:reanalyzeMedia",
     async (_event, mediaId: number): Promise<ReanalyzeMediaResult> => {
-      // Nur laufende Arbeit am betroffenen Medium muss abgeschlossen werden.
-      // Andere Videos/KI-Jobs laufen weiter. Ein Reset löscht deren Daten nie.
       const requeueStartedAt = Date.now();
       analysis?.logDiagnostic("REANALYZE_REQUEST_BEGIN", { mediaId });
-      await analysisCoordinator?.pauseForMaintenance(mediaId);
+      // For video, rebuilding tracks does not touch image identity groups.
+      // Avoid waiting for a potentially lengthy global clustering refresh.
+      const info = await catalog!.request<MediaPreviewInfo | null>(
+        "getMediaPreviewInfo", { mediaId }
+      );
+      if (!info) throw new Error("Medium wurde nicht gefunden.");
+      const isVideo = VIDEO_EXTENSIONS.has(path.extname(info.absolutePath).toLowerCase());
+
+      // Old in-flight jobs keep their own IDs and are rejected if their result
+      // arrives after requeue. Only outstanding job claims must settle first.
+      await analysisCoordinator?.pauseForMaintenance(mediaId, false);
       thumbnailCoordinator?.stop();
 
-      if (personRefreshTimer) {
+      if (!isVideo && personRefreshTimer) {
         clearTimeout(personRefreshTimer);
         personRefreshTimer = null;
       }
 
       try {
         await Promise.all([
-          thumbnailCoordinator?.waitForMediaIdle(mediaId) ?? Promise.resolve(),
-          waitForIdentityRefreshIdle()
+          thumbnailCoordinator?.waitUntilClaimsSettled() ?? Promise.resolve(),
+          isVideo ? Promise.resolve() : waitForIdentityRefreshIdle()
         ]);
         const result = await catalog!.request<ReanalyzeMediaResult>(
-          "reanalyzeMedia",
-          { mediaId }
+          "reanalyzeMedia", { mediaId }
         );
 
-        // Die gespeicherten Vergleichszähler dürfen den Neuaufbau nicht
-        // überspringen, falls nach der Neuanalyse wieder gleich viele Treffer
-        // entstehen wie zuvor.
-        groupedFaceEmbeddingCounts.delete(result.sourceId);
-        groupedPetEmbeddingCounts.delete(result.sourceId);
-        schedulePersonRefresh();
+        if (!isVideo) {
+          groupedFaceEmbeddingCounts.delete(result.sourceId);
+          groupedPetEmbeddingCounts.delete(result.sourceId);
+          schedulePersonRefresh();
+        }
         scheduleLifeAreaRuleRefresh();
         analysis?.logDiagnostic("REANALYZE_QUEUED", {
           mediaId,
+          isVideo,
           stages: result.requeued,
           elapsedMs: Date.now() - requeueStartedAt
         });
@@ -1143,7 +1150,13 @@ function registerIpc(): void {
         return result;
       } finally {
         analysisCoordinator?.resumeAfterMaintenance();
-        await thumbnailCoordinator?.start();
+        // Thumbnail restart can enqueue catalog backfill work; do not make the
+        // user's requeue response wait for these unrelated UI updates.
+        void thumbnailCoordinator?.start().catch((error) => {
+          analysis?.logDiagnostic("THUMBNAIL_RESTART_ERROR", {
+            mediaId, error: error instanceof Error ? error.message : String(error)
+          });
+        });
       }
     }
   );
