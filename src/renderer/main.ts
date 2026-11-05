@@ -1516,9 +1516,9 @@ candidateReviewAssign.addEventListener("click", () => {
     const sourceId = selectedSourceId();
     if (sourceId !== null) {
       if (state.kind === "person") {
-        await loadPersonOverview(sourceId);
+        await reloadPersonOverviewPreservingPosition(sourceId);
       } else {
-        await loadPetOverview(sourceId);
+        await reloadPetOverviewPreservingPosition(sourceId);
       }
     }
 
@@ -2840,6 +2840,97 @@ function renderImagePreviewDetails(details: MediaDetails): void {
           }
         });
       });
+      panel.append(description, confirmAll);
+      imagePreviewDetails.appendChild(panel);
+    }
+  }
+
+  if (isVideoExtension(details.extension)) {
+    const pendingVideoAssignments = (details.videoAnalysis?.frames ?? [])
+      .flatMap((frame) =>
+        frame.detections
+          .filter(
+            (detection) =>
+              !detection.confirmed &&
+              typeof detection.name === "string" &&
+              detection.name.trim().length > 0
+          )
+          .map((detection) => ({
+            timestampMs: frame.timestampMs,
+            kind: detection.kind,
+            detectionIndex: detection.detectionIndex,
+            petClass: detection.petClass,
+            name: detection.name.trim()
+          }))
+      );
+
+    if (pendingVideoAssignments.length > 0) {
+      const personCount = pendingVideoAssignments.filter(
+        (assignment) => assignment.kind === "person"
+      ).length;
+      const petCount = pendingVideoAssignments.length - personCount;
+
+      const panel = document.createElement("div");
+      panel.className = "image-detail-reanalyze";
+
+      const description = document.createElement("div");
+      const title = document.createElement("strong");
+      title.textContent = "Personen- und Haustiertreffer im Video";
+
+      const hint = document.createElement("small");
+      const parts: string[] = [];
+      if (personCount > 0) {
+        parts.push(
+          personCount.toLocaleString("de-DE") +
+          (personCount === 1 ? " Personentreffer" : " Personentreffer")
+        );
+      }
+      if (petCount > 0) {
+        parts.push(
+          petCount.toLocaleString("de-DE") +
+          (petCount === 1 ? " Haustiertreffer" : " Haustiertreffer")
+        );
+      }
+      hint.textContent =
+        parts.join(" · ") +
+        " mit Namensvorschlag sind noch unbestätigt. Treffer ohne Namen bleiben unverändert.";
+      description.append(title, hint);
+
+      const confirmAll = document.createElement("button");
+      confirmAll.type = "button";
+      confirmAll.className = "secondary";
+      confirmAll.textContent =
+        "Alle bestätigen (" +
+        pendingVideoAssignments.length.toLocaleString("de-DE") +
+        ")";
+      confirmAll.addEventListener("click", () => {
+        void runSafely(async () => {
+          confirmAll.disabled = true;
+          confirmAll.textContent = "Wird bestätigt …";
+          try {
+            const result =
+              await window.imageSorter.catalog.assignVideoFrameIdentityNames(
+                details.mediaId,
+                pendingVideoAssignments
+              );
+
+            progressText.textContent =
+              result.affected.toLocaleString("de-DE") +
+              (result.affected === 1
+                ? " Video-Treffer bestätigt."
+                : " Video-Treffer bestätigt.");
+
+            await Promise.all([
+              loadImagePreviewDetails(details.mediaId),
+              refreshIdentityTabStats(),
+              refreshCatalog()
+            ]);
+          } finally {
+            confirmAll.disabled = false;
+          }
+        });
+      });
+
       panel.append(description, confirmAll);
       imagePreviewDetails.appendChild(panel);
     }
@@ -5401,7 +5492,7 @@ function renderPersonOverview(overview: PersonOverview): void {
           if (sourceId !== null) {
             // Nur die Personenansicht neu laden. Das ist bewusst read-only und
             // löst kein komplettes Re-Clustering tausender Gesichter aus.
-            await loadPersonOverview(sourceId);
+            await reloadPersonOverviewPreservingPosition(sourceId);
           } else {
             card.remove();
             await refreshIdentityTabStats();
@@ -5458,7 +5549,7 @@ function renderPersonOverview(overview: PersonOverview): void {
             " Gesichter dauerhaft ignoriert. Eindeutige zukünftige Treffer werden automatisch ausgeblendet.";
 
           const sourceId = selectedSourceId();
-          if (sourceId !== null) await loadPersonOverview(sourceId);
+          if (sourceId !== null) await reloadPersonOverviewPreservingPosition(sourceId);
           await refreshIdentityTabStats();
         });
       });
@@ -5638,7 +5729,7 @@ function renderPersonOverview(overview: PersonOverview): void {
           renameButton.disabled = true;
           await window.imageSorter.people.renamePerson(person.id, newName);
           const sourceId = selectedSourceId();
-          if (sourceId !== null) await loadPersonOverview(sourceId);
+          if (sourceId !== null) await reloadPersonOverviewPreservingPosition(sourceId);
           progressText.textContent = "Person wurde in „" + newName + "“ umbenannt.";
         });
       });
@@ -6083,7 +6174,7 @@ function renderPetOverview(overview: PetOverview): void {
             );
 
           const sourceId = selectedSourceId();
-          if (sourceId !== null) await loadPetOverview(sourceId);
+          if (sourceId !== null) await reloadPetOverviewPreservingPosition(sourceId);
           progressText.textContent =
             result.detectionCount.toLocaleString("de-DE") +
             (result.detectionCount === 1
@@ -6116,7 +6207,7 @@ function renderPetOverview(overview: PetOverview): void {
           );
 
           const sourceId = selectedSourceId();
-          if (sourceId !== null) await loadPetOverview(sourceId);
+          if (sourceId !== null) await reloadPetOverviewPreservingPosition(sourceId);
           progressText.textContent =
             "Gruppe dauerhaft geteilt: " +
             result.selectedCount.toLocaleString("de-DE") +
@@ -6244,7 +6335,7 @@ function renderPetOverview(overview: PetOverview): void {
 
           const sourceId = selectedSourceId();
           if (sourceId !== null) {
-            await loadPetOverview(sourceId);
+            await reloadPetOverviewPreservingPosition(sourceId);
           } else {
             card.remove();
             await refreshIdentityTabStats();
@@ -6301,7 +6392,7 @@ function renderPetOverview(overview: PetOverview): void {
             " Hundefundstellen dauerhaft ignoriert. Eindeutige zukünftige Treffer werden automatisch ausgeblendet.";
 
           const sourceId = selectedSourceId();
-          if (sourceId !== null) await loadPetOverview(sourceId);
+          if (sourceId !== null) await reloadPetOverviewPreservingPosition(sourceId);
           await refreshIdentityTabStats();
         });
       });
@@ -6456,7 +6547,7 @@ function renderPetOverview(overview: PetOverview): void {
                 detection.petDetectionId
               );
               const sourceId = selectedSourceId();
-              if (sourceId !== null) await loadPetOverview(sourceId);
+              if (sourceId !== null) await reloadPetOverviewPreservingPosition(sourceId);
               progressText.textContent =
                 result.affectedPets > 0
                   ? "Automatische Zuordnung zu „" + pet.name +
@@ -6529,7 +6620,7 @@ function renderPetOverview(overview: PetOverview): void {
           renameButton.disabled = true;
           await window.imageSorter.pets.renamePet(pet.id, newName);
           const sourceId = selectedSourceId();
-          if (sourceId !== null) await loadPetOverview(sourceId);
+          if (sourceId !== null) await reloadPetOverviewPreservingPosition(sourceId);
           progressText.textContent =
             "Haustier wurde in „" + newName + "“ umbenannt.";
         });
@@ -6622,6 +6713,24 @@ async function loadPetOverview(
   } finally {
     refreshPetsButton.disabled = false;
   }
+}
+
+async function reloadPersonOverviewPreservingPosition(
+  sourceId: number
+): Promise<void> {
+  const scrollX = window.scrollX;
+  const scrollY = window.scrollY;
+  await reloadPersonOverviewPreservingPosition(sourceId);
+  window.scrollTo({ left: scrollX, top: scrollY, behavior: "auto" });
+}
+
+async function reloadPetOverviewPreservingPosition(
+  sourceId: number
+): Promise<void> {
+  const scrollX = window.scrollX;
+  const scrollY = window.scrollY;
+  await reloadPetOverviewPreservingPosition(sourceId);
+  window.scrollTo({ left: scrollX, top: scrollY, behavior: "auto" });
 }
 
 function setPersonConfirmationMediaFilter(filter: ConfirmationMediaFilter): void {
