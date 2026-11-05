@@ -285,6 +285,10 @@ export type VideoFrameIdentityDetection = {
 
 export type VideoAnalysisFrame = {
   timestampMs: number;
+  /** Null for videos analyzed before frame-index capture was introduced. */
+  frameIndex: number | null;
+  /** BLAKE2b-128 of the exact decoded BGR pixels, when available. */
+  frameHash: string | null;
   sceneChange: boolean;
   width: number;
   height: number;
