@@ -85,7 +85,7 @@ export class PersonService {
             verificationThreshold: VERIFICATION_THRESHOLD,
             minClusterSize: 2
           },
-          120000
+          600000
         );
 
         const replaced =
