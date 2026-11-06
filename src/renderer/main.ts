@@ -339,6 +339,8 @@ let lastPipelineIssueTotal = -1;
 let analysisRefreshTimer: number | null = null;
 let sourcePipelineRefreshTimer: number | null = null;
 let identityStatsRefreshTimer: number | null = null;
+let personSerialRefreshTimer: number | null = null;
+let petSerialRefreshTimer: number | null = null;
 let watchCatalogRefreshTimer: number | null = null;
 let rendererShuttingDown = false;
 let searchFacetsScopeKey: string | null = null;
@@ -8044,6 +8046,8 @@ window.imageSorter.lifecycle.onShutdownStatus((status) => {
     analysisRefreshTimer,
     sourcePipelineRefreshTimer,
     identityStatsRefreshTimer,
+    personSerialRefreshTimer,
+    petSerialRefreshTimer,
     watchCatalogRefreshTimer
   ]) {
     if (timer !== null) window.clearTimeout(timer);
@@ -8051,6 +8055,8 @@ window.imageSorter.lifecycle.onShutdownStatus((status) => {
   analysisRefreshTimer = null;
   sourcePipelineRefreshTimer = null;
   identityStatsRefreshTimer = null;
+  personSerialRefreshTimer = null;
+  petSerialRefreshTimer = null;
   watchCatalogRefreshTimer = null;
 
   shutdownMessage.textContent = status.message;
@@ -8084,28 +8090,60 @@ window.imageSorter.analysis.onPipelineStatus((status) => {
   scheduleIdentityTabStatsRefresh();
 });
 
+function scheduleSerialConfirmationRefresh(
+  kind: "person" | "pet"
+): void {
+  const currentTimer =
+    kind === "person" ? personSerialRefreshTimer : petSerialRefreshTimer;
+  if (currentTimer !== null) {
+    window.clearTimeout(currentTimer);
+  }
+
+  const timer = window.setTimeout(() => {
+    if (kind === "person") personSerialRefreshTimer = null;
+    else petSerialRefreshTimer = null;
+
+    if (rendererShuttingDown) return;
+    const sourceId = selectedSourceId();
+    if (sourceId === null) return;
+
+    void runSafely(async () => {
+      if (kind === "person") {
+        await loadPersonOverview(sourceId);
+      } else {
+        await loadPetOverview(sourceId);
+      }
+      await refreshIdentityTabStats();
+    });
+  }, 700);
+
+  if (kind === "person") personSerialRefreshTimer = timer;
+  else petSerialRefreshTimer = timer;
+}
+
 window.addEventListener("serial-confirmation:changed", (event) => {
   if (rendererShuttingDown) return;
   const detail = (event as CustomEvent<{ kind: "person" | "pet" }>).detail;
   if (!detail) return;
 
-  const sourceId = selectedSourceId();
-  if (sourceId === null) return;
-
-  void runSafely(async () => {
-    if (detail.kind === "person") {
-      await loadPersonOverview(sourceId);
-    } else {
-      await loadPetOverview(sourceId);
-    }
-    await refreshIdentityTabStats();
-  });
+  // Mehrere schnelle Ja-Klicks erzeugen nur einen gebündelten DB-Refresh.
+  // Die serielle UI selbst läuft bereits optimistisch mit den vorgeladenen
+  // Bildern weiter und darf nicht auf Overview-/Statistikabfragen warten.
+  scheduleSerialConfirmationRefresh(detail.kind);
 });
 
 window.imageSorter.people.onUpdated(() => {
   if (rendererShuttingDown) return;
   const sourceId = selectedSourceId();
   if (sourceId === null) return;
+
+  const serialView = document.querySelector<HTMLElement>("#personSerialView");
+  if (currentView === "people" && serialView && !serialView.hidden) {
+    // Während der schnellen seriellen Runde keine komplette Overview-Abfrage
+    // nach jedem einzelnen Hintergrund-Commit starten.
+    scheduleIdentityTabStatsRefresh();
+    return;
+  }
 
   void runSafely(async () => {
     await refreshIdentityTabStats();
@@ -8122,6 +8160,12 @@ window.imageSorter.pets.onUpdated(() => {
   if (rendererShuttingDown) return;
   const sourceId = selectedSourceId();
   if (sourceId === null) return;
+
+  const serialView = document.querySelector<HTMLElement>("#petSerialView");
+  if (currentView === "pets" && serialView && !serialView.hidden) {
+    scheduleIdentityTabStatsRefresh();
+    return;
+  }
 
   void runSafely(async () => {
     await refreshIdentityTabStats();
