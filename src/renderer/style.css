@@ -5198,6 +5198,12 @@ body {
   min-height: 42px;
 }
 
+.serial-unknown-actions .serial-skip {
+  grid-column: 1 / -1;
+  width: 100%;
+  min-height: 38px;
+}
+
 .serial-alternative {
   display: grid;
   grid-template-columns: 46px minmax(0, 1fr);
