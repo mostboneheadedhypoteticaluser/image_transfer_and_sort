@@ -719,54 +719,73 @@ function createNameField(
   return input;
 }
 
-async function assignName(
+function assignName(
   state: SerialState,
   item: SerialItem,
   name: string
-): Promise<void> {
+): void {
   const cleanName = name.trim();
-  if (!cleanName || state.busy) return;
-
-  state.busy = true;
-  renderState(state);
-  progressText.textContent = "Fundstelle wird „" + cleanName + "“ zugewiesen …";
-
-  try {
-    if (state.kind === "person") {
-      if (item.candidateId === null) {
-        await window.imageSorter.people.assignDetectionName(item.detectionId, cleanName);
-      } else {
-        await window.imageSorter.people.assignCandidateSelection(
-          item.candidateId,
-          [item.detectionId],
-          cleanName
-        );
-      }
-    } else {
-      if (item.candidateId === null) {
-        await window.imageSorter.pets.assignDetectionName(item.detectionId, cleanName);
-      } else {
-        await window.imageSorter.pets.assignCandidateSelection(
-          item.candidateId,
-          [item.detectionId],
-          cleanName
-        );
-      }
-    }
-
-    state.completed.add(item.detectionId);
-    progressText.textContent = "Fundstelle wurde „" + cleanName + "“ zugewiesen.";
-    window.dispatchEvent(new CustomEvent("serial-confirmation:changed", {
-      detail: { kind: state.kind }
-    }));
-  } catch (error) {
-    progressText.textContent =
-      "Serielle Zuordnung fehlgeschlagen: " +
-      (error instanceof Error ? error.message : String(error));
-  } finally {
-    state.busy = false;
-    renderState(state);
+  if (
+    !cleanName ||
+    state.busy ||
+    state.completed.has(item.detectionId)
+  ) {
+    return;
   }
+
+  // Optimistische UI: Die Entscheidung ist lokal sofort abgeschlossen.
+  // Dadurch kann das bereits vorgeladene nächste Bild ohne Wartezeit
+  // erscheinen, während die DB-/IPC-Zuordnung im Hintergrund gespeichert wird.
+  state.completed.add(item.detectionId);
+  progressText.textContent =
+    "„" + cleanName + "“ bestätigt · wird im Hintergrund gespeichert …";
+  renderState(state);
+
+  void (async () => {
+    try {
+      if (state.kind === "person") {
+        if (item.candidateId === null) {
+          await window.imageSorter.people.assignDetectionName(
+            item.detectionId,
+            cleanName
+          );
+        } else {
+          await window.imageSorter.people.assignCandidateSelection(
+            item.candidateId,
+            [item.detectionId],
+            cleanName
+          );
+        }
+      } else {
+        if (item.candidateId === null) {
+          await window.imageSorter.pets.assignDetectionName(
+            item.detectionId,
+            cleanName
+          );
+        } else {
+          await window.imageSorter.pets.assignCandidateSelection(
+            item.candidateId,
+            [item.detectionId],
+            cleanName
+          );
+        }
+      }
+
+      progressText.textContent =
+        "Fundstelle wurde „" + cleanName + "“ gespeichert.";
+      window.dispatchEvent(new CustomEvent("serial-confirmation:changed", {
+        detail: { kind: state.kind }
+      }));
+    } catch (error) {
+      // Wenn die Hintergrundspeicherung scheitert, die optimistische
+      // Bestätigung zurücknehmen. Der Treffer erscheint wieder in der Runde.
+      state.completed.delete(item.detectionId);
+      progressText.textContent =
+        "Serielle Zuordnung konnte nicht gespeichert werden: " +
+        (error instanceof Error ? error.message : String(error));
+      renderState(state);
+    }
+  })();
 }
 
 async function rejectPrimary(state: SerialState, item: SerialItem): Promise<void> {
