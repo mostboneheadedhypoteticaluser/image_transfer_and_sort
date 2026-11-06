@@ -35,6 +35,7 @@ type SerialState = {
   busy: boolean;
   completed: Set<number>;
   rejected: Set<string>;
+  skippedUnknown: Set<string>;
   personOverview: PersonOverview | null;
   petOverview: PetOverview | null;
 };
@@ -59,6 +60,7 @@ type SerialDom = {
   unknownActions: HTMLElement;
   nameMount: HTMLElement;
   assign: HTMLButtonElement;
+  skip: HTMLButtonElement;
   empty: HTMLElement;
 };
 
@@ -188,6 +190,7 @@ function domFor(kind: IdentityKind): SerialDom {
     unknownActions: required<HTMLElement>("#" + prefix + "SerialUnknownActions"),
     nameMount: required<HTMLElement>("#" + prefix + "SerialNameMount"),
     assign: required<HTMLButtonElement>("#" + prefix + "SerialAssign"),
+    skip: required<HTMLButtonElement>("#" + prefix + "SerialSkip"),
     empty: required<HTMLElement>("#" + prefix + "SerialEmpty")
   };
 }
@@ -203,6 +206,7 @@ const personState: SerialState = {
   busy: false,
   completed: new Set<number>(),
   rejected: new Set<string>(),
+  skippedUnknown: new Set<string>(),
   personOverview: null,
   petOverview: null
 };
@@ -213,6 +217,7 @@ const petState: SerialState = {
   busy: false,
   completed: new Set<number>(),
   rejected: new Set<string>(),
+  skippedUnknown: new Set<string>(),
   personOverview: null,
   petOverview: null
 };
@@ -389,15 +394,53 @@ function allItems(state: SerialState): SerialItem[] {
   return state.kind === "person" ? personItems(state) : petItems(state);
 }
 
+function unknownSkipKey(item: SerialItem): string {
+  return item.candidateId === null
+    ? "detection:" + item.detectionId
+    : "candidate:" + item.candidateId;
+}
+
 function itemsForQueue(state: SerialState): SerialItem[] {
   const wantSuggested = state.queue === "suggested";
   return allItems(state)
-    .filter((item) => wantSuggested ? item.suggestions.length > 0 : item.suggestions.length === 0)
+    .filter((item) =>
+      wantSuggested
+        ? item.suggestions.length > 0
+        : item.suggestions.length === 0 &&
+          !state.skippedUnknown.has(unknownSkipKey(item))
+    )
     .sort((left, right) => {
       const leftScore = left.suggestions[0]?.similarity ?? 0;
       const rightScore = right.suggestions[0]?.similarity ?? 0;
       return rightScore - leftScore || right.detectionId - left.detectionId;
     });
+}
+
+function skipUnknownGroup(state: SerialState, item: SerialItem): void {
+  if (state.queue !== "unknown" || state.busy) return;
+
+  const key = unknownSkipKey(item);
+  const skippedCount = itemsForQueue(state).filter(
+    (entry) => unknownSkipKey(entry) === key
+  ).length;
+
+  state.skippedUnknown.add(key);
+  progressText.textContent =
+    item.kind === "person"
+      ? item.candidateId === null
+        ? "Dieses unbekannte Gesicht wurde für die aktuelle Runde übersprungen."
+        : "Diese unbekannte Gesichtergruppe mit " +
+          skippedCount.toLocaleString("de-DE") +
+          (skippedCount === 1 ? " Fundstelle wurde " : " Fundstellen wurde ") +
+          "für die aktuelle Runde übersprungen."
+      : item.candidateId === null
+        ? "Diese unbekannte Haustierfundstelle wurde für die aktuelle Runde übersprungen."
+        : "Diese unbekannte Haustiergruppe mit " +
+          skippedCount.toLocaleString("de-DE") +
+          (skippedCount === 1 ? " Fundstelle wurde " : " Fundstellen wurde ") +
+          "für die aktuelle Runde übersprungen.";
+
+  renderState(state);
 }
 
 type GroupEntry = {
@@ -872,6 +915,7 @@ function renderState(state: SerialState): void {
   dom.yes.disabled = state.busy;
   dom.no.disabled = state.busy;
   dom.assign.disabled = state.busy;
+  dom.skip.disabled = state.busy;
   dom.alternatives.replaceChildren();
 
   if (state.queue === "suggested") {
@@ -911,6 +955,16 @@ function renderState(state: SerialState): void {
     dom.primary.append(label, name);
 
     const input = createNameField(state, current);
+    dom.skip.textContent =
+      state.kind === "person"
+        ? current.candidateId === null
+          ? "Dieses Gesicht überspringen"
+          : "Diese Gesichtergruppe überspringen"
+        : current.candidateId === null
+          ? "Diese Haustierfundstelle überspringen"
+          : "Diese Haustiergruppe überspringen";
+    dom.skip.onclick = () => skipUnknownGroup(state, current);
+
     dom.assign.onclick = () => {
       const nameValue = input.value.trim();
       if (!nameValue) {
