@@ -49,8 +49,11 @@ type SerialDom = {
   unknownButton: HTMLButtonElement;
   summary: HTMLElement;
   groups: HTMLElement;
+  stage: HTMLElement;
   image: HTMLImageElement;
   box: HTMLElement;
+  pip: HTMLElement | null;
+  pipImage: HTMLImageElement | null;
   path: HTMLElement;
   primary: HTMLElement;
   yes: HTMLButtonElement;
@@ -66,6 +69,7 @@ type SerialDom = {
 
 const CACHE_VERSION = "2026-11-06-serial-v2";
 const preloadCache = new Map<string, HTMLImageElement>();
+const pipPreloadCache = new Map<string, HTMLImageElement>();
 const mediaDetailsCache = new Map<number, Promise<MediaDetails | null>>();
 const boxRenderRevision: Record<IdentityKind, number> = {
   person: 0,
@@ -162,6 +166,46 @@ function resetBox(dom: SerialDom): void {
   dom.box.style.height = "0%";
 }
 
+function resetPip(dom: SerialDom): void {
+  dom.stage.classList.remove("has-face-pip");
+  if (dom.pip) dom.pip.hidden = true;
+  if (dom.pipImage) dom.pipImage.removeAttribute("src");
+}
+
+function updateFacePip(
+  state: SerialState,
+  item: SerialItem,
+  box: SerialBox,
+  imageWidth: number,
+  imageHeight: number
+): void {
+  const dom = currentDom(state);
+  resetPip(dom);
+
+  if (
+    state.kind !== "person" ||
+    !dom.pip ||
+    !dom.pipImage ||
+    imageWidth <= 0 ||
+    imageHeight <= 0
+  ) {
+    return;
+  }
+
+  const faceScale = Math.max(
+    box.width / imageWidth,
+    box.height / imageHeight
+  );
+  if (faceScale >= 0.25) {
+    return;
+  }
+
+  dom.pipImage.src = faceCropUrl(item.detectionId);
+  dom.pipImage.alt = "Vergrößerter Gesichtsausschnitt";
+  dom.pip.hidden = false;
+  dom.stage.classList.add("has-face-pip");
+}
+
 function required<T extends Element>(selector: string): T {
   const element = document.querySelector<T>(selector);
   if (!element) throw new Error("Serielle Bestätigung: Element fehlt: " + selector);
@@ -179,8 +223,11 @@ function domFor(kind: IdentityKind): SerialDom {
     unknownButton: required<HTMLButtonElement>("#" + prefix + "SerialUnknown"),
     summary: required<HTMLElement>("#" + prefix + "SerialSummary"),
     groups: required<HTMLElement>("#" + prefix + "SerialGroups"),
+    stage: required<HTMLElement>("#" + prefix + "SerialStage"),
     image: required<HTMLImageElement>("#" + prefix + "SerialImage"),
     box: required<HTMLElement>("#" + prefix + "SerialBox"),
+    pip: document.querySelector<HTMLElement>("#" + prefix + "SerialPip"),
+    pipImage: document.querySelector<HTMLImageElement>("#" + prefix + "SerialPipImage"),
     path: required<HTMLElement>("#" + prefix + "SerialPath"),
     primary: required<HTMLElement>("#" + prefix + "SerialPrimary"),
     yes: required<HTMLButtonElement>("#" + prefix + "SerialYes"),
@@ -495,6 +542,7 @@ function renderBox(state: SerialState, item: SerialItem | null): void {
   const dom = currentDom(state);
   const revision = ++boxRenderRevision[state.kind];
   resetBox(dom);
+  resetPip(dom);
 
   if (!item || !dom.image.naturalWidth || !dom.image.naturalHeight) {
     return;
@@ -549,6 +597,8 @@ function renderBox(state: SerialState, item: SerialItem | null): void {
       return;
     }
 
+    updateFacePip(state, item, box, imageWidth, imageHeight);
+
     const leftPx = Math.max(0, Math.min(imageWidth, box.x));
     const topPx = Math.max(0, Math.min(imageHeight, box.y));
     const rightPx = Math.max(
@@ -583,6 +633,11 @@ function trimPreloadCache(): void {
     if (!first) break;
     preloadCache.delete(first);
   }
+  while (pipPreloadCache.size > 40) {
+    const first = pipPreloadCache.keys().next().value as string | undefined;
+    if (!first) break;
+    pipPreloadCache.delete(first);
+  }
 }
 
 function preload(items: SerialItem[]): void {
@@ -590,6 +645,16 @@ function preload(items: SerialItem[]): void {
     // Nicht nur das nächste Vollbild, sondern auch dessen Originalmaße/EXIF
     // vorladen. Damit steht die korrekte Box beim Umschalten sofort bereit.
     void mediaDetails(item.mediaId);
+
+    if (item.kind === "person") {
+      const pipUrl = faceCropUrl(item.detectionId);
+      if (!pipPreloadCache.has(pipUrl)) {
+        const pipImage = new Image();
+        pipImage.decoding = "async";
+        pipImage.src = pipUrl;
+        pipPreloadCache.set(pipUrl, pipImage);
+      }
+    }
 
     const url = previewUrl(item.mediaId);
     if (preloadCache.has(url)) continue;
@@ -917,6 +982,7 @@ function renderState(state: SerialState): void {
     dom.image.removeAttribute("src");
     boxRenderRevision[state.kind] += 1;
     resetBox(dom);
+    resetPip(dom);
     dom.path.textContent = "";
     dom.primary.textContent =
       state.queue === "suggested"
@@ -935,6 +1001,7 @@ function renderState(state: SerialState): void {
     // dessen Rechteck auf das bereits nächste Bild zeichnen.
     boxRenderRevision[state.kind] += 1;
     resetBox(dom);
+    resetPip(dom);
     dom.image.src = url;
   } else {
     renderBox(state, current);
