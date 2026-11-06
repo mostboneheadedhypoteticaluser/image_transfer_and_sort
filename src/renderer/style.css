@@ -5085,13 +5085,20 @@ body {
 
 .serial-review-main {
   min-width: 0;
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-rows:
+    clamp(420px, 48vh, 520px)
+    18px
+    72px
+    auto
+    auto;
   gap: 10px;
+  align-content: start;
 }
 
 .serial-review-stage {
-  min-height: 430px;
+  height: 100%;
+  min-height: 0;
   display: grid;
   place-items: center;
   overflow: hidden;
@@ -5111,7 +5118,7 @@ body {
   width: auto;
   height: auto;
   max-width: 100%;
-  max-height: 520px;
+  max-height: clamp(420px, 48vh, 520px);
   object-fit: contain;
 }
 
@@ -5125,7 +5132,9 @@ body {
 
 .serial-review-path {
   margin: 0;
+  height: 18px;
   min-height: 18px;
+  line-height: 18px;
   color: #737d88;
   font-size: 11px;
   overflow: hidden;
@@ -5134,7 +5143,9 @@ body {
 }
 
 .serial-primary {
+  height: 72px;
   min-height: 72px;
+  max-height: 72px;
   display: grid;
   justify-items: center;
   align-content: center;
@@ -5153,8 +5164,12 @@ body {
 }
 
 .serial-primary strong {
+  max-width: 100%;
+  overflow: hidden;
   font-size: 25px;
   line-height: 1.1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .serial-decision-actions {
@@ -5270,12 +5285,17 @@ body {
     grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
   }
 
+  .serial-review-main {
+    display: flex;
+  }
+
   .serial-review-stage {
-    min-height: 280px;
+    height: 320px;
+    min-height: 320px;
   }
 
   .serial-image-wrap img {
-    max-height: 420px;
+    max-height: 320px;
   }
 
   .serial-review-toolbar {
