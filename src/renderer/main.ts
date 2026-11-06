@@ -7266,6 +7266,7 @@ async function refreshCatalog(): Promise<void> {
     renderPersonOverview({
       candidates: [],
       persons: [],
+      ungroupedFaces: [],
       clusteringPending: false,
       candidateTotal: 0,
       candidateFaceTotal: 0,
@@ -7274,6 +7275,7 @@ async function refreshCatalog(): Promise<void> {
     renderPetOverview({
       candidates: [],
       pets: [],
+      ungroupedPets: [],
       clusteringPending: false,
       candidateTotal: 0,
       candidateDetectionTotal: 0,
