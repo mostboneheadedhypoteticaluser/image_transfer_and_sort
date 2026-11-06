@@ -5106,6 +5106,47 @@ body {
   background: #111;
 }
 
+.serial-review-stage.has-face-pip {
+  grid-template-columns: minmax(0, 1fr) clamp(140px, 18vw, 190px);
+  gap: 12px;
+  padding: 12px;
+  place-items: center stretch;
+}
+
+.serial-face-pip {
+  align-self: center;
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid rgb(255 255 255 / 24%);
+  border-radius: 12px;
+  background: #202428;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 28%);
+}
+
+.serial-face-pip[hidden] {
+  display: none;
+}
+
+.serial-face-pip > span {
+  color: rgb(255 255 255 / 74%);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .04em;
+  text-align: center;
+  text-transform: uppercase;
+}
+
+.serial-face-pip img {
+  display: block;
+  width: 100%;
+  aspect-ratio: 1;
+  border-radius: 9px;
+  object-fit: cover;
+  background: #111;
+}
+
 .serial-image-wrap {
   position: relative;
   display: inline-flex;
@@ -5292,6 +5333,20 @@ body {
   .serial-review-stage {
     height: 320px;
     min-height: 320px;
+  }
+
+  .serial-review-stage.has-face-pip {
+    grid-template-columns: minmax(0, 1fr) 112px;
+    gap: 8px;
+    padding: 8px;
+  }
+
+  .serial-face-pip {
+    padding: 6px;
+  }
+
+  .serial-face-pip > span {
+    font-size: 8px;
   }
 
   .serial-image-wrap img {
