@@ -808,32 +808,23 @@ function assignName(
 
   void (async () => {
     try {
+      // Serielle Einzelbestätigungen dürfen nicht an die flüchtige
+      // candidateId gekoppelt sein. Nach der ersten Bestätigung wird die
+      // Kandidatengruppe bereits verändert; weitere vorgeladene Treffer tragen
+      // dann absichtlich noch den alten Snapshot. Die direkte Detection-
+      // Zuordnung arbeitet dagegen mit der stabilen Detection-ID, entfernt den
+      // Treffer aus seiner aktuell gültigen Gruppe und setzt Cannot-Links zu
+      // den verbleibenden Gruppenmitgliedern selbst.
       if (state.kind === "person") {
-        if (item.candidateId === null) {
-          await window.imageSorter.people.assignDetectionName(
-            item.detectionId,
-            cleanName
-          );
-        } else {
-          await window.imageSorter.people.assignCandidateSelection(
-            item.candidateId,
-            [item.detectionId],
-            cleanName
-          );
-        }
+        await window.imageSorter.people.assignDetectionName(
+          item.detectionId,
+          cleanName
+        );
       } else {
-        if (item.candidateId === null) {
-          await window.imageSorter.pets.assignDetectionName(
-            item.detectionId,
-            cleanName
-          );
-        } else {
-          await window.imageSorter.pets.assignCandidateSelection(
-            item.candidateId,
-            [item.detectionId],
-            cleanName
-          );
-        }
+        await window.imageSorter.pets.assignDetectionName(
+          item.detectionId,
+          cleanName
+        );
       }
 
       progressText.textContent =
