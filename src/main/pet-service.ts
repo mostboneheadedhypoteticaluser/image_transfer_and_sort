@@ -86,7 +86,7 @@ export class PetService {
             verificationThreshold: VERIFICATION_THRESHOLD,
             minClusterSize: 2
           },
-          120000
+          600000
         );
 
         const replaced =
