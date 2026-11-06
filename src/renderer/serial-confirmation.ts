@@ -431,13 +431,13 @@ function skipUnknownGroup(state: SerialState, item: SerialItem): void {
         ? "Dieses unbekannte Gesicht wurde für die aktuelle Runde übersprungen."
         : "Diese unbekannte Gesichtergruppe mit " +
           skippedCount.toLocaleString("de-DE") +
-          (skippedCount === 1 ? " Fundstelle wurde " : " Fundstellen wurde ") +
+          (skippedCount === 1 ? " Fundstelle wurde " : " Fundstellen wurden ") +
           "für die aktuelle Runde übersprungen."
       : item.candidateId === null
         ? "Diese unbekannte Haustierfundstelle wurde für die aktuelle Runde übersprungen."
         : "Diese unbekannte Haustiergruppe mit " +
           skippedCount.toLocaleString("de-DE") +
-          (skippedCount === 1 ? " Fundstelle wurde " : " Fundstellen wurde ") +
+          (skippedCount === 1 ? " Fundstelle wurde " : " Fundstellen wurden ") +
           "für die aktuelle Runde übersprungen.";
 
   renderState(state);
@@ -875,8 +875,15 @@ function renderState(state: SerialState): void {
 
   const selected = groups.find((group) => group.key === state.selectedGroup) ?? null;
   const current = selected?.items[0] ?? null;
-  const totalSuggested = allItems(state).filter((item) => item.suggestions.length > 0).length;
-  const totalUnknown = allItems(state).filter((item) => item.suggestions.length === 0).length;
+  const currentItems = allItems(state);
+  const totalSuggested = currentItems.filter(
+    (item) => item.suggestions.length > 0
+  ).length;
+  const totalUnknown = currentItems.filter(
+    (item) =>
+      item.suggestions.length === 0 &&
+      !state.skippedUnknown.has(unknownSkipKey(item))
+  ).length;
 
   dom.summary.textContent =
     totalSuggested.toLocaleString("de-DE") + " Vorschläge · " +
@@ -889,6 +896,7 @@ function renderState(state: SerialState): void {
 
   if (!current) {
     dom.image.removeAttribute("src");
+    boxRenderRevision[state.kind] += 1;
     resetBox(dom);
     dom.path.textContent = "";
     dom.primary.textContent =
@@ -904,6 +912,9 @@ function renderState(state: SerialState): void {
 
   const url = previewUrl(current.mediaId);
   if (dom.image.src !== url) {
+    // Eine noch laufende Metadatenantwort des vorherigen Bildes darf niemals
+    // dessen Rechteck auf das bereits nächste Bild zeichnen.
+    boxRenderRevision[state.kind] += 1;
     resetBox(dom);
     dom.image.src = url;
   } else {
