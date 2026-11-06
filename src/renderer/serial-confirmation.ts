@@ -1,0 +1,797 @@
+import type {
+  PersonOverview,
+  PetOverview
+} from "../shared/protocol";
+
+type IdentityKind = "person" | "pet";
+type SerialQueueMode = "suggested" | "unknown";
+
+type SerialSuggestion = {
+  id: number;
+  name: string;
+  similarity: number;
+  previewUrl: string | null;
+};
+
+type SerialItem = {
+  kind: IdentityKind;
+  candidateId: number | null;
+  detectionId: number;
+  mediaId: number;
+  relativePath: string;
+  petClass: "dog" | "cat" | null;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  suggestions: SerialSuggestion[];
+};
+
+type SerialState = {
+  kind: IdentityKind;
+  queue: SerialQueueMode;
+  selectedGroup: string | null;
+  busy: boolean;
+  completed: Set<number>;
+  rejected: Set<string>;
+  personOverview: PersonOverview | null;
+  petOverview: PetOverview | null;
+};
+
+type SerialDom = {
+  groupedView: HTMLElement;
+  serialView: HTMLElement;
+  groupedButton: HTMLButtonElement;
+  serialButton: HTMLButtonElement;
+  suggestedButton: HTMLButtonElement;
+  unknownButton: HTMLButtonElement;
+  summary: HTMLElement;
+  groups: HTMLElement;
+  image: HTMLImageElement;
+  box: HTMLElement;
+  path: HTMLElement;
+  primary: HTMLElement;
+  yes: HTMLButtonElement;
+  no: HTMLButtonElement;
+  alternatives: HTMLElement;
+  knownActions: HTMLElement;
+  unknownActions: HTMLElement;
+  nameMount: HTMLElement;
+  assign: HTMLButtonElement;
+  empty: HTMLElement;
+};
+
+const CACHE_VERSION = "2026-11-06-serial-v1";
+const preloadCache = new Map<string, HTMLImageElement>();
+
+function required<T extends Element>(selector: string): T {
+  const element = document.querySelector<T>(selector);
+  if (!element) throw new Error("Serielle Bestätigung: Element fehlt: " + selector);
+  return element;
+}
+
+function domFor(kind: IdentityKind): SerialDom {
+  const prefix = kind === "person" ? "person" : "pet";
+  return {
+    groupedView: required<HTMLElement>("#" + prefix + "GroupedView"),
+    serialView: required<HTMLElement>("#" + prefix + "SerialView"),
+    groupedButton: required<HTMLButtonElement>("#" + prefix + "ViewGrouped"),
+    serialButton: required<HTMLButtonElement>("#" + prefix + "ViewSerial"),
+    suggestedButton: required<HTMLButtonElement>("#" + prefix + "SerialSuggested"),
+    unknownButton: required<HTMLButtonElement>("#" + prefix + "SerialUnknown"),
+    summary: required<HTMLElement>("#" + prefix + "SerialSummary"),
+    groups: required<HTMLElement>("#" + prefix + "SerialGroups"),
+    image: required<HTMLImageElement>("#" + prefix + "SerialImage"),
+    box: required<HTMLElement>("#" + prefix + "SerialBox"),
+    path: required<HTMLElement>("#" + prefix + "SerialPath"),
+    primary: required<HTMLElement>("#" + prefix + "SerialPrimary"),
+    yes: required<HTMLButtonElement>("#" + prefix + "SerialYes"),
+    no: required<HTMLButtonElement>("#" + prefix + "SerialNo"),
+    alternatives: required<HTMLElement>("#" + prefix + "SerialAlternatives"),
+    knownActions: required<HTMLElement>("#" + prefix + "SerialKnownActions"),
+    unknownActions: required<HTMLElement>("#" + prefix + "SerialUnknownActions"),
+    nameMount: required<HTMLElement>("#" + prefix + "SerialNameMount"),
+    assign: required<HTMLButtonElement>("#" + prefix + "SerialAssign"),
+    empty: required<HTMLElement>("#" + prefix + "SerialEmpty")
+  };
+}
+
+const personDom = domFor("person");
+const petDom = domFor("pet");
+const progressText = required<HTMLElement>("#progressText");
+
+const personState: SerialState = {
+  kind: "person",
+  queue: "suggested",
+  selectedGroup: null,
+  busy: false,
+  completed: new Set<number>(),
+  rejected: new Set<string>(),
+  personOverview: null,
+  petOverview: null
+};
+const petState: SerialState = {
+  kind: "pet",
+  queue: "suggested",
+  selectedGroup: null,
+  busy: false,
+  completed: new Set<number>(),
+  rejected: new Set<string>(),
+  personOverview: null,
+  petOverview: null
+};
+
+function stateFor(kind: IdentityKind): SerialState {
+  return kind === "person" ? personState : petState;
+}
+
+function currentDom(state: SerialState): SerialDom {
+  return state.kind === "person" ? personDom : petDom;
+}
+
+function previewUrl(mediaId: number): string {
+  return "image-sorter-preview://media/" + mediaId + "?v=" + CACHE_VERSION;
+}
+
+function faceCropUrl(faceDetectionId: number): string {
+  return "image-sorter-face://face/" + faceDetectionId + "?v=" + CACHE_VERSION;
+}
+
+function petCropUrl(petDetectionId: number): string {
+  return "image-sorter-pet://pet/" + petDetectionId + "?v=" + CACHE_VERSION;
+}
+
+function percent(value: number): string {
+  return Math.max(0, Math.min(100, value * 100)).toFixed(1) + " %";
+}
+
+function rejectionKey(item: SerialItem, suggestionId: number): string {
+  return item.detectionId + ":" + suggestionId;
+}
+
+function personItems(state: SerialState): SerialItem[] {
+  const overview = state.personOverview;
+  if (!overview) return [];
+
+  const items: SerialItem[] = [];
+  for (const candidate of overview.candidates) {
+    for (const face of candidate.faces) {
+      if (state.completed.has(face.faceDetectionId)) continue;
+      items.push({
+        kind: "person",
+        candidateId: candidate.id,
+        detectionId: face.faceDetectionId,
+        mediaId: face.mediaId,
+        relativePath: face.relativePath,
+        petClass: null,
+        x: face.x,
+        y: face.y,
+        width: face.width,
+        height: face.height,
+        suggestions: face.suggestedPersons
+          .filter((suggestion) =>
+            !state.rejected.has(rejectionKey({
+              kind: "person",
+              candidateId: candidate.id,
+              detectionId: face.faceDetectionId,
+              mediaId: face.mediaId,
+              relativePath: face.relativePath,
+              petClass: null,
+              x: face.x,
+              y: face.y,
+              width: face.width,
+              height: face.height,
+              suggestions: []
+            }, suggestion.personId))
+          )
+          .map((suggestion) => ({
+            id: suggestion.personId,
+            name: suggestion.personName,
+            similarity: suggestion.similarity,
+            previewUrl: suggestion.representativeFaceId === null
+              ? null
+              : faceCropUrl(suggestion.representativeFaceId)
+          }))
+      });
+    }
+  }
+
+  for (const face of overview.ungroupedFaces) {
+    if (state.completed.has(face.faceDetectionId)) continue;
+    const stub: SerialItem = {
+      kind: "person",
+      candidateId: null,
+      detectionId: face.faceDetectionId,
+      mediaId: face.mediaId,
+      relativePath: face.relativePath,
+      petClass: null,
+      x: face.x,
+      y: face.y,
+      width: face.width,
+      height: face.height,
+      suggestions: []
+    };
+    stub.suggestions = face.suggestedPersons
+      .filter((suggestion) =>
+        !state.rejected.has(rejectionKey(stub, suggestion.personId))
+      )
+      .map((suggestion) => ({
+        id: suggestion.personId,
+        name: suggestion.personName,
+        similarity: suggestion.similarity,
+        previewUrl: suggestion.representativeFaceId === null
+          ? null
+          : faceCropUrl(suggestion.representativeFaceId)
+      }));
+    items.push(stub);
+  }
+
+  return items;
+}
+
+function petItems(state: SerialState): SerialItem[] {
+  const overview = state.petOverview;
+  if (!overview) return [];
+
+  const items: SerialItem[] = [];
+  for (const candidate of overview.candidates) {
+    for (const pet of candidate.pets) {
+      if (state.completed.has(pet.petDetectionId)) continue;
+      const stub: SerialItem = {
+        kind: "pet",
+        candidateId: candidate.id,
+        detectionId: pet.petDetectionId,
+        mediaId: pet.mediaId,
+        relativePath: pet.relativePath,
+        petClass: candidate.petClass,
+        x: pet.x,
+        y: pet.y,
+        width: pet.width,
+        height: pet.height,
+        suggestions: []
+      };
+      stub.suggestions = pet.suggestedPets
+        .filter((suggestion) =>
+          !state.rejected.has(rejectionKey(stub, suggestion.petId))
+        )
+        .map((suggestion) => ({
+          id: suggestion.petId,
+          name: suggestion.petName,
+          similarity: suggestion.similarity,
+          previewUrl: suggestion.representativePetId === null
+            ? null
+            : petCropUrl(suggestion.representativePetId)
+        }));
+      items.push(stub);
+    }
+  }
+
+  for (const pet of overview.ungroupedPets) {
+    if (state.completed.has(pet.petDetectionId)) continue;
+    const stub: SerialItem = {
+      kind: "pet",
+      candidateId: null,
+      detectionId: pet.petDetectionId,
+      mediaId: pet.mediaId,
+      relativePath: pet.relativePath,
+      petClass: pet.petClass,
+      x: pet.x,
+      y: pet.y,
+      width: pet.width,
+      height: pet.height,
+      suggestions: []
+    };
+    stub.suggestions = pet.suggestedPets
+      .filter((suggestion) =>
+        !state.rejected.has(rejectionKey(stub, suggestion.petId))
+      )
+      .map((suggestion) => ({
+        id: suggestion.petId,
+        name: suggestion.petName,
+        similarity: suggestion.similarity,
+        previewUrl: suggestion.representativePetId === null
+          ? null
+          : petCropUrl(suggestion.representativePetId)
+      }));
+    items.push(stub);
+  }
+
+  return items;
+}
+
+function allItems(state: SerialState): SerialItem[] {
+  return state.kind === "person" ? personItems(state) : petItems(state);
+}
+
+function itemsForQueue(state: SerialState): SerialItem[] {
+  const wantSuggested = state.queue === "suggested";
+  return allItems(state)
+    .filter((item) => wantSuggested ? item.suggestions.length > 0 : item.suggestions.length === 0)
+    .sort((left, right) => {
+      const leftScore = left.suggestions[0]?.similarity ?? 0;
+      const rightScore = right.suggestions[0]?.similarity ?? 0;
+      return rightScore - leftScore || right.detectionId - left.detectionId;
+    });
+}
+
+type GroupEntry = {
+  key: string;
+  name: string;
+  items: SerialItem[];
+};
+
+function groupItems(state: SerialState, items: SerialItem[]): GroupEntry[] {
+  if (state.queue === "unknown") {
+    return items.length === 0
+      ? []
+      : [{ key: "unknown", name: "Ohne Vorschlag", items }];
+  }
+
+  const groups = new Map<string, GroupEntry>();
+  for (const item of items) {
+    const primary = item.suggestions[0];
+    if (!primary) continue;
+    const key = String(primary.id);
+    const existing = groups.get(key);
+    if (existing) {
+      existing.items.push(item);
+    } else {
+      groups.set(key, { key, name: primary.name, items: [item] });
+    }
+  }
+
+  return [...groups.values()].sort((left, right) =>
+    right.items.length - left.items.length ||
+    left.name.localeCompare(right.name, "de", { sensitivity: "base" })
+  );
+}
+
+function setViewMode(kind: IdentityKind, serial: boolean): void {
+  const dom = kind === "person" ? personDom : petDom;
+  dom.groupedView.hidden = serial;
+  dom.serialView.hidden = !serial;
+  dom.groupedButton.classList.toggle("active", !serial);
+  dom.serialButton.classList.toggle("active", serial);
+  if (serial) renderState(stateFor(kind));
+}
+
+function setQueue(state: SerialState, queue: SerialQueueMode): void {
+  if (state.queue === queue) return;
+  state.queue = queue;
+  state.selectedGroup = null;
+  renderState(state);
+}
+
+function renderBox(state: SerialState, item: SerialItem | null): void {
+  const dom = currentDom(state);
+  if (!item || !dom.image.naturalWidth || !dom.image.naturalHeight) {
+    dom.box.hidden = true;
+    return;
+  }
+
+  const imageWidth = dom.image.naturalWidth;
+  const imageHeight = dom.image.naturalHeight;
+  const left = Math.max(0, Math.min(100, item.x / imageWidth * 100));
+  const top = Math.max(0, Math.min(100, item.y / imageHeight * 100));
+  const width = Math.max(0, Math.min(100 - left, item.width / imageWidth * 100));
+  const height = Math.max(0, Math.min(100 - top, item.height / imageHeight * 100));
+
+  dom.box.hidden = !(width > 0 && height > 0);
+  dom.box.style.left = left + "%";
+  dom.box.style.top = top + "%";
+  dom.box.style.width = width + "%";
+  dom.box.style.height = height + "%";
+}
+
+function trimPreloadCache(): void {
+  while (preloadCache.size > 40) {
+    const first = preloadCache.keys().next().value as string | undefined;
+    if (!first) break;
+    preloadCache.delete(first);
+  }
+}
+
+function preload(items: SerialItem[]): void {
+  for (const item of items.slice(0, 8)) {
+    const url = previewUrl(item.mediaId);
+    if (preloadCache.has(url)) continue;
+    const image = new Image();
+    image.decoding = "async";
+    image.src = url;
+    preloadCache.set(url, image);
+  }
+  trimPreloadCache();
+}
+
+function nameOptions(state: SerialState, item: SerialItem): Array<{
+  name: string;
+  count: number;
+  previewUrl: string | null;
+}> {
+  if (state.kind === "person" && state.personOverview) {
+    return state.personOverview.persons.map((person) => ({
+      name: person.name,
+      count: person.faceCount,
+      previewUrl: person.representativeFaceId === null
+        ? null
+        : faceCropUrl(person.representativeFaceId)
+    }));
+  }
+  if (state.kind === "pet" && state.petOverview) {
+    return state.petOverview.pets
+      .filter((pet) => !item.petClass || pet.petClass === item.petClass)
+      .map((pet) => ({
+        name: pet.name,
+        count: pet.detectionCount,
+        previewUrl: pet.representativePetId === null
+          ? null
+          : petCropUrl(pet.representativePetId)
+      }));
+  }
+  return [];
+}
+
+function createNameField(
+  state: SerialState,
+  item: SerialItem
+): HTMLInputElement {
+  const dom = currentDom(state);
+  const field = document.createElement("div");
+  field.className = "identity-name-field serial-name-field";
+
+  const input = document.createElement("input");
+  input.type = "text";
+  input.placeholder = state.kind === "person"
+    ? "Person eingeben oder neu anlegen"
+    : "Haustier eingeben oder neu anlegen";
+  input.autocomplete = "off";
+
+  const menu = document.createElement("div");
+  menu.className = "identity-name-menu";
+  menu.hidden = true;
+
+  const options = nameOptions(state, item);
+
+  const renderMenu = () => {
+    const query = input.value.trim().toLocaleLowerCase("de-DE");
+    menu.replaceChildren();
+    if (!query) {
+      menu.hidden = true;
+      return;
+    }
+
+    const matches = options
+      .filter((option) =>
+        option.name.toLocaleLowerCase("de-DE").includes(query)
+      )
+      .sort((left, right) => {
+        const lp = left.name.toLocaleLowerCase("de-DE").startsWith(query) ? 0 : 1;
+        const rp = right.name.toLocaleLowerCase("de-DE").startsWith(query) ? 0 : 1;
+        return lp - rp || left.name.localeCompare(right.name, "de");
+      })
+      .slice(0, 8);
+
+    for (const option of matches) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "identity-name-option";
+
+      if (option.previewUrl) {
+        const image = document.createElement("img");
+        image.src = option.previewUrl;
+        image.alt = "";
+        button.appendChild(image);
+      }
+
+      const text = document.createElement("span");
+      const strong = document.createElement("strong");
+      strong.textContent = option.name;
+      const small = document.createElement("small");
+      small.textContent = option.count.toLocaleString("de-DE") + " bestätigt";
+      text.append(strong, small);
+      button.appendChild(text);
+
+      button.addEventListener("mousedown", (event) => event.preventDefault());
+      button.addEventListener("click", () => {
+        input.value = option.name;
+        menu.hidden = true;
+        input.focus();
+      });
+      menu.appendChild(button);
+    }
+
+    menu.hidden = matches.length === 0;
+  };
+
+  input.addEventListener("input", renderMenu);
+  input.addEventListener("focus", renderMenu);
+  input.addEventListener("blur", () => {
+    window.setTimeout(() => {
+      menu.hidden = true;
+    }, 120);
+  });
+  input.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter") return;
+    event.preventDefault();
+    dom.assign.click();
+  });
+
+  field.append(input, menu);
+  dom.nameMount.replaceChildren(field);
+  return input;
+}
+
+async function assignName(
+  state: SerialState,
+  item: SerialItem,
+  name: string
+): Promise<void> {
+  const cleanName = name.trim();
+  if (!cleanName || state.busy) return;
+
+  state.busy = true;
+  renderState(state);
+  progressText.textContent = "Fundstelle wird „" + cleanName + "“ zugewiesen …";
+
+  try {
+    if (state.kind === "person") {
+      if (item.candidateId === null) {
+        await window.imageSorter.people.assignDetectionName(item.detectionId, cleanName);
+      } else {
+        await window.imageSorter.people.assignCandidateSelection(
+          item.candidateId,
+          [item.detectionId],
+          cleanName
+        );
+      }
+    } else {
+      if (item.candidateId === null) {
+        await window.imageSorter.pets.assignDetectionName(item.detectionId, cleanName);
+      } else {
+        await window.imageSorter.pets.assignCandidateSelection(
+          item.candidateId,
+          [item.detectionId],
+          cleanName
+        );
+      }
+    }
+
+    state.completed.add(item.detectionId);
+    progressText.textContent = "Fundstelle wurde „" + cleanName + "“ zugewiesen.";
+    window.dispatchEvent(new CustomEvent("serial-confirmation:changed", {
+      detail: { kind: state.kind }
+    }));
+  } catch (error) {
+    progressText.textContent =
+      "Serielle Zuordnung fehlgeschlagen: " +
+      (error instanceof Error ? error.message : String(error));
+  } finally {
+    state.busy = false;
+    renderState(state);
+  }
+}
+
+async function rejectPrimary(state: SerialState, item: SerialItem): Promise<void> {
+  const primary = item.suggestions[0];
+  if (!primary || state.busy) return;
+
+  state.busy = true;
+  renderState(state);
+  progressText.textContent =
+    "Vorschlag „" + primary.name + "“ wird für diese Fundstelle ausgeschlossen …";
+
+  try {
+    if (state.kind === "person") {
+      await window.imageSorter.people.rejectDetectionSuggestion(
+        item.detectionId,
+        primary.id
+      );
+    } else {
+      await window.imageSorter.pets.rejectDetectionSuggestion(
+        item.detectionId,
+        primary.id
+      );
+    }
+
+    state.rejected.add(rejectionKey(item, primary.id));
+    progressText.textContent =
+      "„" + primary.name + "“ wurde für diese Fundstelle ausgeschlossen.";
+    window.dispatchEvent(new CustomEvent("serial-confirmation:changed", {
+      detail: { kind: state.kind }
+    }));
+  } catch (error) {
+    progressText.textContent =
+      "Ablehnung fehlgeschlagen: " +
+      (error instanceof Error ? error.message : String(error));
+  } finally {
+    state.busy = false;
+    renderState(state);
+  }
+}
+
+function renderAlternative(
+  state: SerialState,
+  item: SerialItem,
+  suggestion: SerialSuggestion
+): HTMLElement {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "serial-alternative";
+  button.disabled = state.busy;
+
+  if (suggestion.previewUrl) {
+    const image = document.createElement("img");
+    image.src = suggestion.previewUrl;
+    image.alt = "";
+    button.appendChild(image);
+  }
+
+  const text = document.createElement("span");
+  const strong = document.createElement("strong");
+  strong.textContent = suggestion.name;
+  const small = document.createElement("small");
+  small.textContent = "Ähnlichkeit " + percent(suggestion.similarity);
+  text.append(strong, small);
+  button.appendChild(text);
+
+  button.addEventListener("click", () => {
+    void assignName(state, item, suggestion.name);
+  });
+  return button;
+}
+
+function renderState(state: SerialState): void {
+  const dom = currentDom(state);
+  const items = itemsForQueue(state);
+  const groups = groupItems(state, items);
+
+  dom.suggestedButton.classList.toggle("active", state.queue === "suggested");
+  dom.unknownButton.classList.toggle("active", state.queue === "unknown");
+  dom.suggestedButton.disabled = state.busy;
+  dom.unknownButton.disabled = state.busy;
+
+  if (!groups.some((group) => group.key === state.selectedGroup)) {
+    state.selectedGroup = groups[0]?.key ?? null;
+  }
+
+  dom.groups.replaceChildren();
+  for (const group of groups) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "serial-group-button";
+    button.classList.toggle("active", group.key === state.selectedGroup);
+    button.disabled = state.busy;
+
+    const name = document.createElement("strong");
+    name.textContent = group.name;
+    const count = document.createElement("span");
+    count.textContent = group.items.length.toLocaleString("de-DE") + " offen";
+    button.append(name, count);
+
+    button.addEventListener("click", () => {
+      state.selectedGroup = group.key;
+      renderState(state);
+    });
+    dom.groups.appendChild(button);
+  }
+
+  const selected = groups.find((group) => group.key === state.selectedGroup) ?? null;
+  const current = selected?.items[0] ?? null;
+  const totalSuggested = allItems(state).filter((item) => item.suggestions.length > 0).length;
+  const totalUnknown = allItems(state).filter((item) => item.suggestions.length === 0).length;
+
+  dom.summary.textContent =
+    totalSuggested.toLocaleString("de-DE") + " Vorschläge · " +
+    totalUnknown.toLocaleString("de-DE") + " unbekannt";
+
+  dom.empty.hidden = current !== null;
+  dom.knownActions.hidden = current === null || state.queue !== "suggested";
+  dom.unknownActions.hidden = current === null || state.queue !== "unknown";
+  dom.alternatives.parentElement!.hidden = current === null || state.queue !== "suggested";
+
+  if (!current) {
+    dom.image.removeAttribute("src");
+    dom.box.hidden = true;
+    dom.path.textContent = "";
+    dom.primary.textContent =
+      state.queue === "suggested"
+        ? "Keine Vorschläge in dieser Runde."
+        : "Keine unbekannten Fundstellen in dieser Runde.";
+    dom.alternatives.replaceChildren();
+    dom.nameMount.replaceChildren();
+    return;
+  }
+
+  preload(selected?.items ?? []);
+
+  const url = previewUrl(current.mediaId);
+  if (dom.image.src !== url) {
+    dom.box.hidden = true;
+    dom.image.src = url;
+  } else {
+    renderBox(state, current);
+  }
+  dom.image.alt = current.relativePath;
+  dom.path.textContent = current.relativePath;
+
+  dom.yes.disabled = state.busy;
+  dom.no.disabled = state.busy;
+  dom.assign.disabled = state.busy;
+  dom.alternatives.replaceChildren();
+
+  if (state.queue === "suggested") {
+    const primary = current.suggestions[0];
+    dom.primary.replaceChildren();
+    const label = document.createElement("small");
+    label.textContent = "Hauptvorschlag";
+    const name = document.createElement("strong");
+    name.textContent = primary.name;
+    const similarity = document.createElement("span");
+    similarity.textContent = "Ähnlichkeit " + percent(primary.similarity);
+    dom.primary.append(label, name, similarity);
+
+    for (const suggestion of current.suggestions.slice(1)) {
+      dom.alternatives.appendChild(
+        renderAlternative(state, current, suggestion)
+      );
+    }
+    if (current.suggestions.length === 1) {
+      const empty = document.createElement("p");
+      empty.className = "serial-side-empty";
+      empty.textContent = "Keine weiteren passenden Namen.";
+      dom.alternatives.appendChild(empty);
+    }
+
+    dom.yes.onclick = () => void assignName(state, current, primary.name);
+    dom.no.onclick = () => void rejectPrimary(state, current);
+    dom.nameMount.replaceChildren();
+  } else {
+    dom.primary.replaceChildren();
+    const label = document.createElement("small");
+    label.textContent = state.kind === "person"
+      ? "Unbekannte Person"
+      : "Unbekanntes Haustier";
+    const name = document.createElement("strong");
+    name.textContent = "Name zuordnen";
+    dom.primary.append(label, name);
+
+    const input = createNameField(state, current);
+    dom.assign.onclick = () => {
+      const nameValue = input.value.trim();
+      if (!nameValue) {
+        input.focus();
+        return;
+      }
+      void assignName(state, current, nameValue);
+    };
+  }
+}
+
+function wire(kind: IdentityKind): void {
+  const state = stateFor(kind);
+  const dom = currentDom(state);
+
+  dom.groupedButton.addEventListener("click", () => setViewMode(kind, false));
+  dom.serialButton.addEventListener("click", () => setViewMode(kind, true));
+  dom.suggestedButton.addEventListener("click", () => setQueue(state, "suggested"));
+  dom.unknownButton.addEventListener("click", () => setQueue(state, "unknown"));
+  dom.image.addEventListener("load", () => {
+    const items = itemsForQueue(state);
+    const groups = groupItems(state, items);
+    const selected = groups.find((group) => group.key === state.selectedGroup);
+    renderBox(state, selected?.items[0] ?? null);
+  });
+}
+
+wire("person");
+wire("pet");
+
+export function renderPersonSerialOverview(overview: PersonOverview): void {
+  personState.personOverview = overview;
+  renderState(personState);
+}
+
+export function renderPetSerialOverview(overview: PetOverview): void {
+  petState.petOverview = overview;
+  renderState(petState);
+}

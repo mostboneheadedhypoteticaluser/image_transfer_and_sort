@@ -4966,3 +4966,314 @@ body {
   overflow-wrap: anywhere;
 }
 
+
+
+/* Serielle Personen-/Haustierbestätigung */
+.confirmation-view-switch,
+.serial-queue-tabs {
+  display: inline-flex;
+  gap: 4px;
+  padding: 3px;
+  margin-top: 10px;
+  border: 1px solid #dfe4e8;
+  border-radius: 10px;
+  background: #f5f7f8;
+}
+
+.confirmation-view-switch button,
+.serial-queue-tabs button {
+  border: 0;
+  background: transparent;
+  padding: 7px 11px;
+  border-radius: 7px;
+  color: #5d6773;
+  font-weight: 600;
+}
+
+.confirmation-view-switch button.active,
+.serial-queue-tabs button.active {
+  background: #fff;
+  color: #15191e;
+  box-shadow: 0 1px 3px rgb(0 0 0 / 10%);
+}
+
+.serial-review-view {
+  padding-top: 16px;
+}
+
+.serial-review-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 12px;
+}
+
+.serial-review-toolbar > span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.serial-review-layout {
+  display: grid;
+  grid-template-columns: minmax(170px, 220px) minmax(0, 1fr) minmax(190px, 250px);
+  gap: 14px;
+  align-items: stretch;
+  min-height: 620px;
+}
+
+.serial-review-groups,
+.serial-review-alternatives {
+  min-width: 0;
+  border: 1px solid #e4e8eb;
+  border-radius: 12px;
+  background: #fafbfc;
+  padding: 12px;
+}
+
+.serial-review-groups h4,
+.serial-review-alternatives h4 {
+  margin: 0 0 10px;
+  font-size: 12px;
+  color: #606a75;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.serial-group-list,
+.serial-alternative-list {
+  display: grid;
+  gap: 7px;
+}
+
+.serial-group-button,
+.serial-alternative {
+  width: 100%;
+  border: 1px solid #dfe4e8;
+  border-radius: 9px;
+  background: #fff;
+  color: #1d232a;
+  text-align: left;
+}
+
+.serial-group-button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 9px 10px;
+}
+
+.serial-group-button strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.serial-group-button span {
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: #77808b;
+}
+
+.serial-group-button.active {
+  border-color: #7b8795;
+  background: #eef2f5;
+  box-shadow: inset 3px 0 0 #303943;
+}
+
+.serial-review-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.serial-review-stage {
+  min-height: 430px;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border-radius: 12px;
+  background: #111;
+}
+
+.serial-image-wrap {
+  position: relative;
+  display: inline-flex;
+  max-width: 100%;
+  max-height: 100%;
+}
+
+.serial-image-wrap img {
+  display: block;
+  width: auto;
+  height: auto;
+  max-width: 100%;
+  max-height: 520px;
+  object-fit: contain;
+}
+
+.serial-detection-box {
+  position: absolute;
+  pointer-events: none;
+  border: 3px solid #ff3b30;
+  border-radius: 4px;
+  box-shadow: 0 0 0 2px rgb(255 255 255 / 82%), 0 0 0 9999px rgb(0 0 0 / 8%);
+}
+
+.serial-review-path {
+  margin: 0;
+  min-height: 18px;
+  color: #737d88;
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.serial-primary {
+  min-height: 72px;
+  display: grid;
+  justify-items: center;
+  align-content: center;
+  gap: 2px;
+  border: 1px solid #e2e6e9;
+  border-radius: 12px;
+  background: #fff;
+  padding: 10px;
+  text-align: center;
+}
+
+.serial-primary small,
+.serial-primary span {
+  color: #78818b;
+  font-size: 11px;
+}
+
+.serial-primary strong {
+  font-size: 25px;
+  line-height: 1.1;
+}
+
+.serial-decision-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.serial-decision-actions button {
+  min-height: 56px;
+  border-radius: 11px;
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.serial-yes {
+  background: #ecf8ef;
+  border: 1px solid #9ed2aa;
+  color: #176c2d;
+}
+
+.serial-no {
+  background: #fff2f1;
+  border: 1px solid #e4a6a1;
+  color: #a12d26;
+}
+
+.serial-unknown-actions {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 9px;
+  align-items: start;
+}
+
+.serial-name-field input {
+  width: 100%;
+  min-height: 42px;
+}
+
+.serial-unknown-actions > button {
+  min-height: 42px;
+}
+
+.serial-alternative {
+  display: grid;
+  grid-template-columns: 46px minmax(0, 1fr);
+  gap: 9px;
+  align-items: center;
+  padding: 7px;
+}
+
+.serial-alternative img {
+  width: 46px;
+  height: 46px;
+  border-radius: 7px;
+  object-fit: cover;
+  background: #eceff1;
+}
+
+.serial-alternative span {
+  display: grid;
+  min-width: 0;
+}
+
+.serial-alternative strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.serial-alternative small,
+.serial-side-empty {
+  color: #78818b;
+  font-size: 11px;
+}
+
+.serial-empty {
+  padding: 18px;
+  border: 1px dashed #cfd5da;
+  border-radius: 10px;
+  color: #707984;
+  text-align: center;
+}
+
+@media (max-width: 1050px) {
+  .serial-review-layout {
+    grid-template-columns: minmax(150px, 190px) minmax(0, 1fr);
+  }
+
+  .serial-review-alternatives {
+    grid-column: 1 / -1;
+  }
+
+  .serial-alternative-list {
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  }
+}
+
+@media (max-width: 720px) {
+  .serial-review-layout {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+  }
+
+  .serial-group-list {
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  }
+
+  .serial-review-stage {
+    min-height: 280px;
+  }
+
+  .serial-image-wrap img {
+    max-height: 420px;
+  }
+
+  .serial-review-toolbar {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}

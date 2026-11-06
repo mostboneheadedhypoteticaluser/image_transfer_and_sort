@@ -551,6 +551,10 @@
                 <p id="personStatus">
                   Ähnliche Gesichter werden vorsichtig gruppiert. Erst deine Bestätigung macht daraus eine Person.
                 </p>
+                <div class="confirmation-view-switch" role="group" aria-label="Ansicht für Personenbestätigung">
+                  <button id="personViewGrouped" class="active" type="button">Gruppiert</button>
+                  <button id="personViewSerial" type="button">Seriell</button>
+                </div>
                 <div class="confirmation-media-filter" role="group" aria-label="Personen nach Medientyp filtern">
                   <span>Vorkommen</span>
                   <div>
@@ -563,20 +567,61 @@
               <button id="refreshPeople" class="ghost" type="button">Vorschläge neu berechnen</button>
             </div>
 
-            <section class="person-section">
-              <div class="person-section-heading">
-                <h3>Zu bestätigen</h3>
-                <p>Ein falsches Zusammenführen ist problematischer als zwei getrennte Vorschläge – deshalb gruppieren wir konservativ.</p>
-              </div>
-              <div id="personCandidates" class="person-candidates"></div>
-            </section>
+            <div id="personGroupedView">
+              <section class="person-section">
+                <div class="person-section-heading">
+                  <h3>Zu bestätigen</h3>
+                  <p>Ein falsches Zusammenführen ist problematischer als zwei getrennte Vorschläge – deshalb gruppieren wir konservativ.</p>
+                </div>
+                <div id="personCandidates" class="person-candidates"></div>
+              </section>
 
-            <section class="person-section confirmed-section">
-              <div class="person-section-heading">
-                <h3>Bestätigte Personen</h3>
-                <p>Diese Zuordnungen bleiben erhalten und werden bei späteren Neuberechnungen nicht überschrieben.</p>
+              <section class="person-section confirmed-section">
+                <div class="person-section-heading">
+                  <h3>Bestätigte Personen</h3>
+                  <p>Diese Zuordnungen bleiben erhalten und werden bei späteren Neuberechnungen nicht überschrieben.</p>
+                </div>
+                <div id="confirmedPersons" class="confirmed-persons"></div>
+              </section>
+            </div>
+
+            <section id="personSerialView" class="serial-review-view" hidden>
+              <div class="serial-review-toolbar">
+                <div class="serial-queue-tabs" role="group" aria-label="Serielle Personenrunde">
+                  <button id="personSerialSuggested" class="active" type="button">Vorschläge bestätigen</button>
+                  <button id="personSerialUnknown" type="button">Unbekannte zuordnen</button>
+                </div>
+                <span id="personSerialSummary">—</span>
               </div>
-              <div id="confirmedPersons" class="confirmed-persons"></div>
+              <div class="serial-review-layout">
+                <aside class="serial-review-groups">
+                  <h4>Gruppen</h4>
+                  <div id="personSerialGroups" class="serial-group-list"></div>
+                </aside>
+                <main class="serial-review-main">
+                  <div class="serial-review-stage">
+                    <div class="serial-image-wrap">
+                      <img id="personSerialImage" alt="" />
+                      <div id="personSerialBox" class="serial-detection-box" hidden></div>
+                    </div>
+                  </div>
+                  <p id="personSerialPath" class="serial-review-path"></p>
+                  <div id="personSerialPrimary" class="serial-primary"></div>
+                  <div id="personSerialKnownActions" class="serial-decision-actions">
+                    <button id="personSerialYes" class="serial-yes" type="button">Ja</button>
+                    <button id="personSerialNo" class="serial-no" type="button">Nein</button>
+                  </div>
+                  <div id="personSerialUnknownActions" class="serial-unknown-actions" hidden>
+                    <div id="personSerialNameMount"></div>
+                    <button id="personSerialAssign" class="primary" type="button">Zuordnen</button>
+                  </div>
+                  <div id="personSerialEmpty" class="serial-empty" hidden>Keine offenen Fundstellen.</div>
+                </main>
+                <aside class="serial-review-alternatives">
+                  <h4>Weitere Vorschläge</h4>
+                  <div id="personSerialAlternatives" class="serial-alternative-list"></div>
+                </aside>
+              </div>
             </section>
           </div>
 
@@ -587,6 +632,10 @@
                 <p id="petStatus">
                   Fusionierte Hundefundstellen werden mit einem spezialisierten Dog-ReID-Modell gruppiert. Namen werden erst nach deiner Bestätigung gespeichert.
                 </p>
+                <div class="confirmation-view-switch" role="group" aria-label="Ansicht für Haustierbestätigung">
+                  <button id="petViewGrouped" class="active" type="button">Gruppiert</button>
+                  <button id="petViewSerial" type="button">Seriell</button>
+                </div>
                 <div class="confirmation-media-filter" role="group" aria-label="Haustiere nach Medientyp filtern">
                   <span>Vorkommen</span>
                   <div>
@@ -599,23 +648,67 @@
               <button id="refreshPets" class="ghost" type="button">Vorschläge neu berechnen</button>
             </div>
 
-            <section class="person-section">
-              <div class="person-section-heading">
-                <h3>Hunde zu bestätigen</h3>
-                <p>Die Gruppierung ist bewusst konservativ. Zwei getrennte Gruppen kannst du später mit demselben Namen bestätigen.</p>
-              </div>
-              <div id="petCandidates" class="person-candidates"></div>
-            </section>
+            <div id="petGroupedView">
+              <section class="person-section">
+                <div class="person-section-heading">
+                  <h3>Hunde zu bestätigen</h3>
+                  <p>Die Gruppierung ist bewusst konservativ. Zwei getrennte Gruppen kannst du später mit demselben Namen bestätigen.</p>
+                </div>
+                <div id="petCandidates" class="person-candidates"></div>
+              </section>
 
-            <section class="person-section confirmed-section">
-              <div class="person-section-heading">
-                <h3>Bestätigte Haustiere</h3>
-                <p>Aktuell unterstützt die individuelle Wiedererkennung Hunde. Katzen werden erkannt, aber noch nicht individuell gruppiert.</p>
+              <section class="person-section confirmed-section">
+                <div class="person-section-heading">
+                  <h3>Bestätigte Haustiere</h3>
+                  <p>Aktuell unterstützt die individuelle Wiedererkennung Hunde. Katzen werden erkannt, aber noch nicht individuell gruppiert.</p>
+                </div>
+                <div id="confirmedPets" class="confirmed-persons"></div>
+              </section>
+            </div>
+
+            <section id="petSerialView" class="serial-review-view" hidden>
+              <div class="serial-review-toolbar">
+                <div class="serial-queue-tabs" role="group" aria-label="Serielle Haustierrunde">
+                  <button id="petSerialSuggested" class="active" type="button">Vorschläge bestätigen</button>
+                  <button id="petSerialUnknown" type="button">Unbekannte zuordnen</button>
+                </div>
+                <span id="petSerialSummary">—</span>
               </div>
-              <div id="confirmedPets" class="confirmed-persons"></div>
+              <div class="serial-review-layout">
+                <aside class="serial-review-groups">
+                  <h4>Gruppen</h4>
+                  <div id="petSerialGroups" class="serial-group-list"></div>
+                </aside>
+                <main class="serial-review-main">
+                  <div class="serial-review-stage">
+                    <div class="serial-image-wrap">
+                      <img id="petSerialImage" alt="" />
+                      <div id="petSerialBox" class="serial-detection-box" hidden></div>
+                    </div>
+                  </div>
+                  <p id="petSerialPath" class="serial-review-path"></p>
+                  <div id="petSerialPrimary" class="serial-primary"></div>
+                  <div id="petSerialKnownActions" class="serial-decision-actions">
+                    <button id="petSerialYes" class="serial-yes" type="button">Ja</button>
+                    <button id="petSerialNo" class="serial-no" type="button">Nein</button>
+                  </div>
+                  <div id="petSerialUnknownActions" class="serial-unknown-actions" hidden>
+                    <div id="petSerialNameMount"></div>
+                    <button id="petSerialAssign" class="primary" type="button">Zuordnen</button>
+                  </div>
+                  <div id="petSerialEmpty" class="serial-empty" hidden>Keine offenen Fundstellen.</div>
+                </main>
+                <aside class="serial-review-alternatives">
+                  <h4>Weitere Vorschläge</h4>
+                  <div id="petSerialAlternatives" class="serial-alternative-list"></div>
+                </aside>
+              </div>
             </section>
           </div>
         </section>
+        </section>
+
+        <section class="workspace-page identity-browser-page"</section>
         </section>
 
         <section class="workspace-page identity-browser-page" data-workspace-page="identities" hidden>

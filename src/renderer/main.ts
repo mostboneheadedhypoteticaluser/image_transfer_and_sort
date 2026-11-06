@@ -1,6 +1,10 @@
 import { initEmbeddedSourceExplorer } from "./source-explorer";
 import { activateMapView, invalidateMapData } from "./map-view";
 import { activateLifeAreasView, invalidateLifeAreas } from "./life-areas";
+import {
+  renderPersonSerialOverview,
+  renderPetSerialOverview
+} from "./serial-confirmation";
 import type {
   AnalysisErrorRecord,
   AnalysisWorkerStatus,
@@ -5958,6 +5962,8 @@ function renderPersonOverview(overview: PersonOverview): void {
 
     confirmedPersons.appendChild(fragment);
   }
+
+  renderPersonSerialOverview(overview);
 }
 
 async function loadPersonOverview(
@@ -6872,6 +6878,8 @@ function renderPetOverview(overview: PetOverview): void {
 
     confirmedPets.appendChild(fragment);
   }
+
+  renderPetSerialOverview(overview);
 }
 
 async function loadPetOverview(
@@ -8072,6 +8080,24 @@ window.imageSorter.analysis.onPipelineStatus((status) => {
   // sichtbar gemacht.
   renderPipelineStatus(status);
   scheduleIdentityTabStatsRefresh();
+});
+
+window.addEventListener("serial-confirmation:changed", (event) => {
+  if (rendererShuttingDown) return;
+  const detail = (event as CustomEvent<{ kind: "person" | "pet" }>).detail;
+  if (!detail) return;
+
+  const sourceId = selectedSourceId();
+  if (sourceId === null) return;
+
+  void runSafely(async () => {
+    if (detail.kind === "person") {
+      await loadPersonOverview(sourceId);
+    } else {
+      await loadPetOverview(sourceId);
+    }
+    await refreshIdentityTabStats();
+  });
 });
 
 window.imageSorter.people.onUpdated(() => {
