@@ -78,6 +78,7 @@ let catalogWatchService: CatalogWatchService | null = null;
 let thumbnailCacheRoot = "";
 let personRefreshTimer: NodeJS.Timeout | null = null;
 let personRefreshRunning = false;
+let personRefreshRescheduleRequested = false;
 let lifeAreaRuleRefreshTimer: NodeJS.Timeout | null = null;
 const groupedFaceEmbeddingCounts = new Map<number, number>();
 const groupedPetEmbeddingCounts = new Map<number, number>();
@@ -267,9 +268,15 @@ function schedulePersonRefresh(): void {
     shutdownInProgress ||
     backgroundPaused ||
     (!personService && !petService) ||
-    personRefreshRunning ||
     personRefreshTimer
   ) {
+    return;
+  }
+
+  if (personRefreshRunning) {
+    // Do not start another global clustering request in parallel. Remember the
+    // invalidation instead and run one fresh pass after the active pass ends.
+    personRefreshRescheduleRequested = true;
     return;
   }
 
@@ -282,9 +289,14 @@ function schedulePersonRefresh(): void {
     if (
       (!personService && !petService) ||
       isQuitting ||
-      backgroundPaused ||
-      personRefreshRunning
+      shutdownInProgress ||
+      backgroundPaused
     ) {
+      return;
+    }
+
+    if (personRefreshRunning) {
+      personRefreshRescheduleRequested = true;
       return;
     }
 
@@ -397,13 +409,20 @@ function schedulePersonRefresh(): void {
     })()
       .catch((error) => {
         // Bei einem temporären Clusterfehler bleiben die Embedding-Zähler
-        // unverändert; der nächste Sammellauf versucht denselben Stand erneut.
+        // unverändert. Ein Retry wird explizit vorgemerkt, statt darauf zu
+        // hoffen, dass zufällig noch ein weiterer Pipeline-Statuswechsel kommt.
+        personRefreshRescheduleRequested = true;
         analysis?.logDiagnostic("IDENTITY_REFRESH_ERROR", {
           error: error instanceof Error ? error.message : String(error)
         });
       })
       .finally(() => {
         personRefreshRunning = false;
+
+        if (personRefreshRescheduleRequested) {
+          personRefreshRescheduleRequested = false;
+          schedulePersonRefresh();
+        }
       });
   }, 30000);
   personRefreshTimer.unref();
@@ -1145,10 +1164,20 @@ function registerIpc(): void {
       }
 
       try {
-        await Promise.all([
-          thumbnailCoordinator?.waitUntilClaimsSettled() ?? Promise.resolve(),
-          isVideo ? Promise.resolve() : waitForIdentityRefreshIdle()
-        ]);
+        // A single-media reset no longer waits for global identity clustering.
+        // The clustering snapshot is independent of this maintenance action;
+        // after requeue the source counters are invalidated and a fresh pass is
+        // guaranteed via personRefreshRescheduleRequested.
+        if (!isVideo && personRefreshRunning) {
+          personRefreshRescheduleRequested = true;
+          analysis?.logDiagnostic("REANALYZE_IDENTITY_REFRESH_DEFERRED", {
+            mediaId
+          });
+        }
+
+        await (
+          thumbnailCoordinator?.waitUntilClaimsSettled() ?? Promise.resolve()
+        );
         const result = await catalog!.request<ReanalyzeMediaResult>(
           "reanalyzeMedia", { mediaId }
         );
@@ -1224,6 +1253,7 @@ function registerIpc(): void {
       clearTimeout(personRefreshTimer);
       personRefreshTimer = null;
     }
+    personRefreshRescheduleRequested = false;
 
     // Harter Stopp beendet auch einen eventuell laufenden Qwen/llama.cpp-
     // Prozessbaum und verwirft alle offenen Python-Requests sofort.
