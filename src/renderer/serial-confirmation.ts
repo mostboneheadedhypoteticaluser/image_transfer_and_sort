@@ -1,4 +1,5 @@
 import type {
+  MediaDetails,
   PersonOverview,
   PetOverview
 } from "../shared/protocol";
@@ -61,8 +62,103 @@ type SerialDom = {
   empty: HTMLElement;
 };
 
-const CACHE_VERSION = "2026-11-06-serial-v1";
+const CACHE_VERSION = "2026-11-06-serial-v2";
 const preloadCache = new Map<string, HTMLImageElement>();
+const mediaDetailsCache = new Map<number, Promise<MediaDetails | null>>();
+const boxRenderRevision: Record<IdentityKind, number> = {
+  person: 0,
+  pet: 0
+};
+
+type SerialBox = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+};
+
+function previewOrientedDimensions(
+  width: number,
+  height: number,
+  orientation: number
+): { width: number; height: number } {
+  return [5, 6, 7, 8].includes(orientation)
+    ? { width: height, height: width }
+    : { width, height };
+}
+
+function orientRawPreviewBox(
+  box: SerialBox,
+  rawWidth: number,
+  rawHeight: number,
+  orientation: number
+): SerialBox {
+  if (orientation === 1 || rawWidth <= 0 || rawHeight <= 0) {
+    return box;
+  }
+
+  const points = [
+    [box.x, box.y],
+    [box.x + box.width, box.y],
+    [box.x, box.y + box.height],
+    [box.x + box.width, box.y + box.height]
+  ] as const;
+
+  const orientPoint = (x: number, y: number): [number, number] => {
+    switch (orientation) {
+      case 2:
+        return [rawWidth - x, y];
+      case 3:
+        return [rawWidth - x, rawHeight - y];
+      case 4:
+        return [x, rawHeight - y];
+      case 5:
+        return [y, x];
+      case 6:
+        return [rawHeight - y, x];
+      case 7:
+        return [rawHeight - y, rawWidth - x];
+      case 8:
+        return [y, rawWidth - x];
+      default:
+        return [x, y];
+    }
+  };
+
+  const oriented = points.map(([x, y]) => orientPoint(x, y));
+  const xs = oriented.map(([x]) => x);
+  const ys = oriented.map(([, y]) => y);
+  const left = Math.min(...xs);
+  const top = Math.min(...ys);
+  const right = Math.max(...xs);
+  const bottom = Math.max(...ys);
+
+  return {
+    x: left,
+    y: top,
+    width: Math.max(0, right - left),
+    height: Math.max(0, bottom - top)
+  };
+}
+
+function mediaDetails(mediaId: number): Promise<MediaDetails | null> {
+  let pending = mediaDetailsCache.get(mediaId);
+  if (!pending) {
+    pending = window.imageSorter.catalog
+      .getMediaDetails(mediaId)
+      .catch(() => null);
+    mediaDetailsCache.set(mediaId, pending);
+  }
+  return pending;
+}
+
+function resetBox(dom: SerialDom): void {
+  dom.box.hidden = true;
+  dom.box.style.left = "0%";
+  dom.box.style.top = "0%";
+  dom.box.style.width = "0%";
+  dom.box.style.height = "0%";
+}
 
 function required<T extends Element>(selector: string): T {
   const element = document.querySelector<T>(selector);
@@ -354,23 +450,88 @@ function setQueue(state: SerialState, queue: SerialQueueMode): void {
 
 function renderBox(state: SerialState, item: SerialItem | null): void {
   const dom = currentDom(state);
+  const revision = ++boxRenderRevision[state.kind];
+  resetBox(dom);
+
   if (!item || !dom.image.naturalWidth || !dom.image.naturalHeight) {
-    dom.box.hidden = true;
     return;
   }
 
-  const imageWidth = dom.image.naturalWidth;
-  const imageHeight = dom.image.naturalHeight;
-  const left = Math.max(0, Math.min(100, item.x / imageWidth * 100));
-  const top = Math.max(0, Math.min(100, item.y / imageHeight * 100));
-  const width = Math.max(0, Math.min(100 - left, item.width / imageWidth * 100));
-  const height = Math.max(0, Math.min(100 - top, item.height / imageHeight * 100));
+  void mediaDetails(item.mediaId).then((details) => {
+    if (
+      revision !== boxRenderRevision[state.kind] ||
+      !item ||
+      !dom.image.naturalWidth ||
+      !dom.image.naturalHeight
+    ) {
+      return;
+    }
 
-  dom.box.hidden = !(width > 0 && height > 0);
-  dom.box.style.left = left + "%";
-  dom.box.style.top = top + "%";
-  dom.box.style.width = width + "%";
-  dom.box.style.height = height + "%";
+    // Die Vollbild-Vorschau wird vom Preview-Handler auf maximal 1920×1440
+    // verkleinert und von Sharp EXIF-orientiert. Die Detektionskoordinaten
+    // liegen dagegen im Koordinatensystem der Analyse. Deshalb dürfen sie
+    // NICHT gegen naturalWidth/naturalHeight der verkleinerten Vorschau
+    // normiert werden.
+    const rawWidth = details?.imageMetadata?.width ?? dom.image.naturalWidth;
+    const rawHeight = details?.imageMetadata?.height ?? dom.image.naturalHeight;
+    const orientation = details?.imageMetadata?.orientation ?? 1;
+    const orientedDimensions = previewOrientedDimensions(
+      rawWidth,
+      rawHeight,
+      orientation
+    );
+
+    let box: SerialBox = {
+      x: item.x,
+      y: item.y,
+      width: item.width,
+      height: item.height
+    };
+
+    // YuNet/Gesichter werden bereits auf EXIF-orientierten Pixeln analysiert.
+    // NanoDet/YOLOX-Haustiere liegen dagegen in Rohpixel-Koordinaten und
+    // müssen für dieselbe auto-orientierte Vorschau gedreht/gespiegelt werden.
+    if (item.kind === "pet") {
+      box = orientRawPreviewBox(box, rawWidth, rawHeight, orientation);
+    }
+
+    const imageWidth = orientedDimensions.width;
+    const imageHeight = orientedDimensions.height;
+    if (
+      imageWidth <= 0 ||
+      imageHeight <= 0 ||
+      box.width <= 0 ||
+      box.height <= 0
+    ) {
+      return;
+    }
+
+    const leftPx = Math.max(0, Math.min(imageWidth, box.x));
+    const topPx = Math.max(0, Math.min(imageHeight, box.y));
+    const rightPx = Math.max(
+      leftPx,
+      Math.min(imageWidth, box.x + box.width)
+    );
+    const bottomPx = Math.max(
+      topPx,
+      Math.min(imageHeight, box.y + box.height)
+    );
+
+    const left = leftPx / imageWidth * 100;
+    const top = topPx / imageHeight * 100;
+    const width = (rightPx - leftPx) / imageWidth * 100;
+    const height = (bottomPx - topPx) / imageHeight * 100;
+
+    if (!(width > 0 && height > 0)) {
+      return;
+    }
+
+    dom.box.style.left = left + "%";
+    dom.box.style.top = top + "%";
+    dom.box.style.width = width + "%";
+    dom.box.style.height = height + "%";
+    dom.box.hidden = false;
+  });
 }
 
 function trimPreloadCache(): void {
@@ -383,6 +544,10 @@ function trimPreloadCache(): void {
 
 function preload(items: SerialItem[]): void {
   for (const item of items.slice(0, 8)) {
+    // Nicht nur das nächste Vollbild, sondern auch dessen Originalmaße/EXIF
+    // vorladen. Damit steht die korrekte Box beim Umschalten sofort bereit.
+    void mediaDetails(item.mediaId);
+
     const url = previewUrl(item.mediaId);
     if (preloadCache.has(url)) continue;
     const image = new Image();
@@ -681,7 +846,7 @@ function renderState(state: SerialState): void {
 
   if (!current) {
     dom.image.removeAttribute("src");
-    dom.box.hidden = true;
+    resetBox(dom);
     dom.path.textContent = "";
     dom.primary.textContent =
       state.queue === "suggested"
@@ -696,7 +861,7 @@ function renderState(state: SerialState): void {
 
   const url = previewUrl(current.mediaId);
   if (dom.image.src !== url) {
-    dom.box.hidden = true;
+    resetBox(dom);
     dom.image.src = url;
   } else {
     renderBox(state, current);
