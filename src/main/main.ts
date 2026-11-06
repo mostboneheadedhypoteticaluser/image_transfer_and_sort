@@ -1696,6 +1696,16 @@ function registerIpc(): void {
   );
 
   ipcMain.handle(
+    "people:rejectDetectionSuggestion",
+    (
+      _event,
+      faceDetectionId: number,
+      personId: number
+    ): Promise<PersonCorrectionResult> =>
+      personService!.rejectDetectionSuggestion(faceDetectionId, personId)
+  );
+
+  ipcMain.handle(
     "people:removeCandidateFace",
     (
       _event,
@@ -1789,6 +1799,16 @@ function registerIpc(): void {
         expectedMemberSignature,
         ignoredIdentityId
       )
+  );
+
+  ipcMain.handle(
+    "pets:rejectDetectionSuggestion",
+    (
+      _event,
+      petDetectionId: number,
+      petId: number
+    ): Promise<PetCorrectionResult> =>
+      petService!.rejectDetectionSuggestion(petDetectionId, petId)
   );
 
   ipcMain.handle(

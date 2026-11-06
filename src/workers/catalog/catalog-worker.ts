@@ -7855,6 +7855,94 @@ function autoAssignKnownPetCandidates(sourceId: number) {
   return { assignedCandidates, assignedPets };
 }
 
+function listUngroupedPetDetections(sourceId: number, requestedLimit: number) {
+  const limit = Math.max(1, Math.min(4000, Math.trunc(requestedLimit || 1000)));
+  const rows = db.prepare(`
+    SELECT
+      pd.id AS pet_detection_id,
+      pd.media_id,
+      pd.pet_class,
+      m.relative_path,
+      pd.x, pd.y, pd.width, pd.height,
+      pe.dimension,
+      pe.vector_blob
+    FROM pet_fused_detections pd
+    JOIN media_items m ON m.id=pd.media_id
+    JOIN pet_embeddings pe ON pe.pet_detection_id=pd.id
+    LEFT JOIN pet_assignments pa ON pa.pet_detection_id=pd.id
+    LEFT JOIN pet_candidate_items pci ON pci.pet_detection_id=pd.id
+    LEFT JOIN ignored_pet_matches ipm ON ipm.pet_detection_id=pd.id
+    WHERE m.source_id=?
+      AND m.availability='AVAILABLE'
+      AND pd.input_sha256=m.sha256
+      AND pe.input_sha256=m.sha256
+      AND pe.model_version='DogReID DINOv2-B14 0.2.0'
+      AND pa.pet_detection_id IS NULL
+      AND pci.pet_detection_id IS NULL
+      AND ipm.pet_detection_id IS NULL
+    ORDER BY pd.id DESC
+    LIMIT ?
+  `).all(sourceId, limit);
+
+  const knownPets = knownPetCentroids();
+  const exclusion = db.prepare(
+    "SELECT 1 FROM pet_assignment_exclusions " +
+    "WHERE pet_detection_id=? AND pet_id=? LIMIT 1"
+  );
+
+  return rows.map((row) => {
+    const petDetectionId = Number(row.pet_detection_id);
+    const petClass = String(row.pet_class) === "cat" ? "cat" : "dog";
+    const vector = vectorFromBlob(row.vector_blob, Number(row.dimension));
+    const suggestedPets = knownPets
+      .filter((known) =>
+        known.petClass === petClass && !exclusion.get(petDetectionId, known.id)
+      )
+      .map((known) => ({
+        petId: known.id,
+        petName: known.name,
+        similarity: cosineSimilarity(vector, known.vector),
+        representativePetId: known.representativePetId
+      }))
+      .filter((match) => Number.isFinite(match.similarity) && match.similarity >= 0.52)
+      .sort((left, right) => right.similarity - left.similarity)
+      .slice(0, 5);
+
+    return {
+      petDetectionId,
+      mediaId: Number(row.media_id),
+      relativePath: String(row.relative_path),
+      petClass,
+      x: Number(row.x),
+      y: Number(row.y),
+      width: Number(row.width),
+      height: Number(row.height),
+      suggestedPets
+    };
+  });
+}
+
+function rejectPetDetectionSuggestion(petDetectionId: number, petId: number) {
+  const detection = db.prepare(`
+    SELECT pd.id
+    FROM pet_fused_detections pd
+    LEFT JOIN pet_assignments pa ON pa.pet_detection_id=pd.id
+    WHERE pd.id=? AND pa.pet_detection_id IS NULL
+  `).get(petDetectionId);
+  if (!detection) throw new Error("Die Haustierfundstelle ist nicht mehr unbestätigt verfügbar.");
+
+  const pet = db.prepare("SELECT id FROM pets WHERE id=?").get(petId);
+  if (!pet) throw new Error("Das vorgeschlagene Haustier existiert nicht mehr.");
+
+  db.prepare(`
+    INSERT INTO pet_assignment_exclusions(pet_id, pet_detection_id, reason)
+    VALUES(?,?,'USER_REJECTED_SUGGESTION')
+    ON CONFLICT(pet_id, pet_detection_id) DO UPDATE SET
+      reason='USER_REJECTED_SUGGESTION'
+  `).run(petId, petDetectionId);
+
+  return { changed: true, affectedPets: 1 };
+}
 function listPetCandidates(
   sourceId: number,
   requestedLimit: number,
@@ -7939,6 +8027,10 @@ function listPetCandidates(
       AND pae.pet_id=?
     LIMIT 1
   `);
+  const petExclusionQuery = db.prepare(
+    "SELECT 1 FROM pet_assignment_exclusions " +
+    "WHERE pet_detection_id=? AND pet_id=? LIMIT 1"
+  );
 
   const knownPets = knownPetCentroids();
   const ignoredIdentities = ignoredPetVectorIdentities();
@@ -8050,7 +8142,11 @@ function listPetCandidates(
           const vector = vectorByPetId.get(Number(row.pet_detection_id));
           if (!vector) return [];
           return knownPets
-            .filter((known) => known.petClass === String(candidate.pet_class))
+            .filter(
+              (known) =>
+                known.petClass === String(candidate.pet_class) &&
+                !petExclusionQuery.get(Number(row.pet_detection_id), known.id)
+            )
             .map((known) => ({
               petId: known.id,
               petName: known.name,
@@ -9967,6 +10063,89 @@ function replacePersonCandidates(
   }
 }
 
+function listUngroupedPersonDetections(sourceId: number, requestedLimit: number) {
+  const limit = Math.max(1, Math.min(4000, Math.trunc(requestedLimit || 1000)));
+  const rows = db.prepare(`
+    SELECT
+      fd.id AS face_detection_id,
+      fd.media_id,
+      m.relative_path,
+      fd.x, fd.y, fd.width, fd.height,
+      fe.dimension,
+      fe.vector_blob
+    FROM face_detections fd
+    JOIN media_items m ON m.id=fd.media_id
+    JOIN face_embeddings fe ON fe.face_detection_id=fd.id
+    LEFT JOIN person_face_assignments pfa ON pfa.face_detection_id=fd.id
+    LEFT JOIN person_candidate_faces pcf ON pcf.face_detection_id=fd.id
+    LEFT JOIN ignored_person_matches ipm ON ipm.face_detection_id=fd.id
+    WHERE m.source_id=?
+      AND m.availability='AVAILABLE'
+      AND fd.input_sha256=m.sha256
+      AND fe.input_sha256=m.sha256
+      AND fe.model_version='SFace 2021dec'
+      AND pfa.face_detection_id IS NULL
+      AND pcf.face_detection_id IS NULL
+      AND ipm.face_detection_id IS NULL
+    ORDER BY fd.id DESC
+    LIMIT ?
+  `).all(sourceId, limit);
+
+  const knownPersons = knownPersonCentroids();
+  const exclusion = db.prepare(
+    "SELECT 1 FROM person_face_exclusions " +
+    "WHERE face_detection_id=? AND person_id=? LIMIT 1"
+  );
+
+  return rows.map((row) => {
+    const faceDetectionId = Number(row.face_detection_id);
+    const vector = vectorFromBlob(row.vector_blob, Number(row.dimension));
+    const suggestedPersons = knownPersons
+      .filter((known) => !exclusion.get(faceDetectionId, known.id))
+      .map((known) => ({
+        personId: known.id,
+        personName: known.name,
+        similarity: cosineSimilarity(vector, known.vector),
+        representativeFaceId: known.representativeFaceId
+      }))
+      .filter((match) => Number.isFinite(match.similarity) && match.similarity >= 0.48)
+      .sort((left, right) => right.similarity - left.similarity)
+      .slice(0, 5);
+
+    return {
+      faceDetectionId,
+      mediaId: Number(row.media_id),
+      relativePath: String(row.relative_path),
+      x: Number(row.x),
+      y: Number(row.y),
+      width: Number(row.width),
+      height: Number(row.height),
+      suggestedPersons
+    };
+  });
+}
+
+function rejectPersonDetectionSuggestion(faceDetectionId: number, personId: number) {
+  const face = db.prepare(`
+    SELECT fd.id
+    FROM face_detections fd
+    LEFT JOIN person_face_assignments pfa ON pfa.face_detection_id=fd.id
+    WHERE fd.id=? AND pfa.face_detection_id IS NULL
+  `).get(faceDetectionId);
+  if (!face) throw new Error("Das Gesicht ist nicht mehr unbestätigt verfügbar.");
+
+  const person = db.prepare("SELECT id FROM persons WHERE id=?").get(personId);
+  if (!person) throw new Error("Die vorgeschlagene Person existiert nicht mehr.");
+
+  db.prepare(`
+    INSERT INTO person_face_exclusions(person_id, face_detection_id, reason)
+    VALUES(?,?,'USER_REJECTED_SUGGESTION')
+    ON CONFLICT(person_id, face_detection_id) DO UPDATE SET
+      reason='USER_REJECTED_SUGGESTION'
+  `).run(personId, faceDetectionId);
+
+  return { changed: true, affectedFaces: 1 };
+}
 function listPersonCandidates(
   sourceId: number,
   requestedLimit: number,
@@ -10042,6 +10221,10 @@ function listPersonCandidates(
       AND pfe.person_id=?
     LIMIT 1
   `);
+  const faceExclusionQuery = db.prepare(
+    "SELECT 1 FROM person_face_exclusions " +
+    "WHERE face_detection_id=? AND person_id=? LIMIT 1"
+  );
 
   const knownPersons = knownPersonCentroids();
   const ignoredIdentities = ignoredPersonVectorIdentities();
@@ -10142,6 +10325,9 @@ function listPersonCandidates(
           const vector = vectorByFaceId.get(Number(row.face_detection_id));
           if (!vector) return [];
           return knownPersons
+            .filter((known) =>
+              !faceExclusionQuery.get(Number(row.face_detection_id), known.id)
+            )
             .map((known) => ({
               personId: known.id,
               personName: known.name,
@@ -13017,6 +13203,16 @@ async function dispatch(method: CatalogMethod, payload: Record<string, unknown> 
       return autoAssignKnownPetCandidates(
         asNumber(payload.sourceId, "sourceId")
       );
+    case "listUngroupedPetDetections":
+      return listUngroupedPetDetections(
+        asNumber(payload.sourceId, "sourceId"),
+        payload.limit === undefined ? 1000 : asNumber(payload.limit, "limit")
+      );
+    case "rejectPetDetectionSuggestion":
+      return rejectPetDetectionSuggestion(
+        asNumber(payload.petDetectionId, "petDetectionId"),
+        asNumber(payload.petId, "petId")
+      );
     case "listPetCandidates":
       return listPetCandidates(
         asNumber(payload.sourceId, "sourceId"),
@@ -13137,6 +13333,16 @@ async function dispatch(method: CatalogMethod, payload: Record<string, unknown> 
           ? payload.algorithmVersion
           : "person-complete-link-v6-ignore",
         payload.clusters
+      );
+    case "listUngroupedPersonDetections":
+      return listUngroupedPersonDetections(
+        asNumber(payload.sourceId, "sourceId"),
+        payload.limit === undefined ? 1000 : asNumber(payload.limit, "limit")
+      );
+    case "rejectPersonDetectionSuggestion":
+      return rejectPersonDetectionSuggestion(
+        asNumber(payload.faceDetectionId, "faceDetectionId"),
+        asNumber(payload.personId, "personId")
       );
     case "listPersonCandidates":
       return listPersonCandidates(

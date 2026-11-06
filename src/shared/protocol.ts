@@ -423,6 +423,18 @@ export type PetCandidateItem = {
   suggestedPets: PetMatchSuggestion[];
 };
 
+export type PetUngroupedItem = {
+  petDetectionId: number;
+  mediaId: number;
+  relativePath: string;
+  petClass: "dog" | "cat";
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  suggestedPets: PetMatchSuggestion[];
+};
+
 export type PetMatchSuggestion = {
   petId: number;
   petName: string;
@@ -476,6 +488,7 @@ export type PetRecord = {
 export type PetOverview = {
   candidates: PetCandidate[];
   pets: PetRecord[];
+  ungroupedPets: PetUngroupedItem[];
   clusteringPending: boolean;
   candidateTotal: number;
   candidateDetectionTotal: number;
@@ -578,6 +591,17 @@ export type PersonCandidateFace = {
   suggestedPersons: PersonMatchSuggestion[];
 };
 
+export type PersonUngroupedFace = {
+  faceDetectionId: number;
+  mediaId: number;
+  relativePath: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  suggestedPersons: PersonMatchSuggestion[];
+};
+
 export type PersonMatchSuggestion = {
   personId: number;
   personName: string;
@@ -625,6 +649,7 @@ export type PersonRecord = {
 export type PersonOverview = {
   candidates: PersonCandidate[];
   persons: PersonRecord[];
+  ungroupedFaces: PersonUngroupedFace[];
   clusteringPending: boolean;
   candidateTotal: number;
   candidateFaceTotal: number;

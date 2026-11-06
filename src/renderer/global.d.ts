@@ -113,6 +113,10 @@ declare global {
           expectedMemberSignature?: string,
           ignoredIdentityId?: number
         ): Promise<IgnorePersonResult>;
+        rejectDetectionSuggestion(
+          faceDetectionId: number,
+          personId: number
+        ): Promise<PersonCorrectionResult>;
         removeCandidateFace(
           candidateId: number,
           faceDetectionId: number
@@ -152,6 +156,10 @@ declare global {
           expectedMemberSignature?: string,
           ignoredIdentityId?: number
         ): Promise<IgnorePetResult>;
+        rejectDetectionSuggestion(
+          petDetectionId: number,
+          petId: number
+        ): Promise<PetCorrectionResult>;
         removeCandidatePet(
           candidateId: number,
           petDetectionId: number

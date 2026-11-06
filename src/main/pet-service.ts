@@ -137,14 +137,19 @@ export class PetService {
         ignoreDoubtThreshold: VERIFICATION_THRESHOLD
       }
     );
-    const [pets, stats] = await Promise.all([
+    const [pets, stats, ungroupedPets] = await Promise.all([
       this.catalog.request<PetRecord[]>("listPets", { sourceId }),
-      this.catalog.request<CatalogStats>("getStats", { sourceId })
+      this.catalog.request<CatalogStats>("getStats", { sourceId }),
+      this.catalog.request<PetOverview["ungroupedPets"]>(
+        "listUngroupedPetDetections",
+        { sourceId, limit: 1000 }
+      )
     ]);
 
     return {
       candidates,
       pets,
+      ungroupedPets,
       clusteringPending,
       candidateTotal: stats.petCandidates,
       candidateDetectionTotal: stats.petCandidateDetections,
@@ -228,6 +233,10 @@ export class PetService {
       pets: [...petMap.values()].sort(
         (a, b) => a.name.localeCompare(b.name, "de", { sensitivity: "base" })
       ),
+      ungroupedPets: overviews
+        .flatMap((overview) => overview.ungroupedPets)
+        .sort((a, b) => b.petDetectionId - a.petDetectionId)
+        .slice(0, 4000),
       clusteringPending: overviews.some((overview) => overview.clusteringPending),
       candidateTotal: overviews.reduce(
         (sum, overview) => sum + overview.candidateTotal,
@@ -290,6 +299,16 @@ export class PetService {
         expectedMemberSignature,
         ignoredIdentityId
       }
+    );
+  }
+
+  async rejectDetectionSuggestion(
+    petDetectionId: number,
+    petId: number
+  ): Promise<PetCorrectionResult> {
+    return this.catalog.request<PetCorrectionResult>(
+      "rejectPetDetectionSuggestion",
+      { petDetectionId, petId }
     );
   }
 
