@@ -5334,6 +5334,361 @@ function scheduleIdentityTabStatsRefresh(): void {
   }, 750);
 }
 
+type PersonSuggestionBucketEntry = {
+  candidate: PersonOverview["candidates"][number];
+  similarity: number;
+};
+
+type PersonSuggestionBucket = {
+  personId: number;
+  personName: string;
+  representativeFaceId: number | null;
+  entries: PersonSuggestionBucketEntry[];
+};
+
+function groupedPersonSuggestionBuckets(
+  candidates: PersonOverview["candidates"]
+): PersonSuggestionBucket[] {
+  const buckets = new Map<number, PersonSuggestionBucket>();
+
+  for (const candidate of candidates) {
+    const primary = [...candidate.suggestedPersons].sort(
+      (left, right) => right.similarity - left.similarity
+    )[0];
+    if (!primary) continue;
+
+    const existing = buckets.get(primary.personId);
+    if (existing) {
+      existing.entries.push({
+        candidate,
+        similarity: primary.similarity
+      });
+      if (existing.representativeFaceId === null) {
+        existing.representativeFaceId = primary.representativeFaceId;
+      }
+    } else {
+      buckets.set(primary.personId, {
+        personId: primary.personId,
+        personName: primary.personName,
+        representativeFaceId: primary.representativeFaceId,
+        entries: [{
+          candidate,
+          similarity: primary.similarity
+        }]
+      });
+    }
+  }
+
+  return [...buckets.values()]
+    .map((bucket) => ({
+      ...bucket,
+      entries: [...bucket.entries].sort(
+        (left, right) =>
+          right.similarity - left.similarity ||
+          right.candidate.faceCount - left.candidate.faceCount
+      )
+    }))
+    .sort((left, right) => {
+      const leftCount = left.entries.reduce(
+        (sum, entry) => sum + entry.candidate.faceCount,
+        0
+      );
+      const rightCount = right.entries.reduce(
+        (sum, entry) => sum + entry.candidate.faceCount,
+        0
+      );
+      return (
+        rightCount - leftCount ||
+        left.personName.localeCompare(right.personName, "de", {
+          sensitivity: "base"
+        })
+      );
+    });
+}
+
+function renderGroupedPersonSuggestionBucket(
+  bucket: PersonSuggestionBucket,
+  overview: PersonOverview
+): HTMLElement {
+  const card = document.createElement("article");
+  card.className = "person-suggestion-summary-card";
+
+  const header = document.createElement("header");
+  header.className = "person-suggestion-summary-header";
+
+  if (bucket.representativeFaceId !== null) {
+    const image = document.createElement("img");
+    image.src = faceCropUrl(bucket.representativeFaceId);
+    image.alt = "";
+    image.loading = "lazy";
+    header.appendChild(image);
+  }
+
+  const heading = document.createElement("div");
+  heading.className = "person-suggestion-summary-title";
+
+  const title = document.createElement("h4");
+  title.textContent = bucket.personName;
+
+  const totalFaces = bucket.entries.reduce(
+    (sum, entry) => sum + entry.candidate.faceCount,
+    0
+  );
+  const maxSimilarity = bucket.entries[0]?.similarity ?? 0;
+  const minSimilarity =
+    bucket.entries[bucket.entries.length - 1]?.similarity ?? 0;
+
+  const meta = document.createElement("p");
+  meta.textContent =
+    bucket.entries.length.toLocaleString("de-DE") +
+    (bucket.entries.length === 1 ? " Gruppe" : " Gruppen") +
+    " · " +
+    totalFaces.toLocaleString("de-DE") +
+    (totalFaces === 1 ? " Fundstelle" : " Fundstellen") +
+    " · Ähnlichkeit " +
+    maxSimilarity.toFixed(3) +
+    " bis " +
+    minSimilarity.toFixed(3);
+
+  heading.append(title, meta);
+  header.appendChild(heading);
+
+  const selectionSummary = document.createElement("span");
+  selectionSummary.className = "person-suggestion-selection-summary";
+  header.appendChild(selectionSummary);
+
+  const list = document.createElement("div");
+  list.className = "person-suggestion-group-list";
+
+  const selectedCandidateIds = new Set(
+    bucket.entries.map((entry) => entry.candidate.id)
+  );
+  const rowCheckboxes: HTMLInputElement[] = [];
+
+  const confirmButton = document.createElement("button");
+  confirmButton.type = "button";
+  confirmButton.className = "primary person-suggestion-confirm";
+
+  const updateSelection = () => {
+    let selectedGroups = 0;
+    let selectedFaces = 0;
+
+    for (const entry of bucket.entries) {
+      if (!selectedCandidateIds.has(entry.candidate.id)) continue;
+      selectedGroups += 1;
+      selectedFaces += entry.candidate.faceCount;
+    }
+
+    selectionSummary.textContent =
+      selectedGroups.toLocaleString("de-DE") +
+      "/" +
+      bucket.entries.length.toLocaleString("de-DE") +
+      " Gruppen ausgewählt";
+
+    confirmButton.disabled = selectedGroups === 0;
+    confirmButton.textContent =
+      selectedGroups === 0
+        ? "Keine Gruppe ausgewählt"
+        : selectedFaces.toLocaleString("de-DE") +
+          (selectedFaces === 1 ? " Fundstelle" : " Fundstellen") +
+          " als " +
+          bucket.personName +
+          " bestätigen";
+  };
+
+  for (const entry of bucket.entries) {
+    const candidate = entry.candidate;
+    const row = document.createElement("section");
+    row.className = "person-suggestion-group-row";
+
+    const selector = document.createElement("label");
+    selector.className = "person-suggestion-group-selector";
+
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.checked = true;
+    checkbox.setAttribute(
+      "aria-label",
+      "Gruppe mit Ähnlichkeit " +
+      entry.similarity.toFixed(3) +
+      " auswählen"
+    );
+    rowCheckboxes.push(checkbox);
+
+    checkbox.addEventListener("change", () => {
+      if (checkbox.checked) {
+        selectedCandidateIds.add(candidate.id);
+      } else {
+        selectedCandidateIds.delete(candidate.id);
+      }
+      row.classList.toggle("excluded", !checkbox.checked);
+      updateSelection();
+    });
+
+    const similarity = document.createElement("strong");
+    similarity.textContent = entry.similarity.toFixed(3);
+
+    const count = document.createElement("small");
+    count.textContent =
+      candidate.faceCount.toLocaleString("de-DE") +
+      (candidate.faceCount === 1 ? " Fundstelle" : " Fundstellen");
+
+    selector.append(checkbox, similarity, count);
+
+    const faces = document.createElement("div");
+    faces.className = "person-suggestion-face-strip";
+
+    for (const face of candidate.faces.slice(0, 8)) {
+      const image = document.createElement("img");
+      image.src = faceCropUrl(face.faceDetectionId);
+      image.alt = "";
+      image.loading = "lazy";
+      image.title =
+        face.relativePath +
+        "\nÄhnlichkeit zur Kandidatengruppe: " +
+        face.similarity.toFixed(3);
+      makePreviewable(image, face.mediaId, face.relativePath);
+      faces.appendChild(image);
+    }
+
+    if (candidate.faceCount > candidate.faces.length) {
+      const more = document.createElement("span");
+      more.className = "person-suggestion-more";
+      more.textContent =
+        "+" +
+        (candidate.faceCount - candidate.faces.length).toLocaleString("de-DE");
+      faces.appendChild(more);
+    }
+
+    const openButton = document.createElement("button");
+    openButton.type = "button";
+    openButton.className = "ghost person-suggestion-open";
+    openButton.textContent = "Prüfen";
+    openButton.title = "Diese Kandidatengruppe groß und einzeln prüfen";
+    openButton.addEventListener("click", () => {
+      openPersonCandidateReview(candidate, overview);
+    });
+
+    row.append(selector, faces, openButton);
+    list.appendChild(row);
+  }
+
+  const actions = document.createElement("div");
+  actions.className = "person-suggestion-summary-actions";
+
+  const selectAll = document.createElement("button");
+  selectAll.type = "button";
+  selectAll.className = "ghost";
+  selectAll.textContent = "Alle auswählen";
+  selectAll.addEventListener("click", () => {
+    for (const entry of bucket.entries) {
+      selectedCandidateIds.add(entry.candidate.id);
+    }
+    rowCheckboxes.forEach((checkbox) => {
+      checkbox.checked = true;
+      checkbox
+        .closest(".person-suggestion-group-row")
+        ?.classList.remove("excluded");
+    });
+    updateSelection();
+  });
+
+  const clearAll = document.createElement("button");
+  clearAll.type = "button";
+  clearAll.className = "ghost";
+  clearAll.textContent = "Alle abwählen";
+  clearAll.addEventListener("click", () => {
+    selectedCandidateIds.clear();
+    rowCheckboxes.forEach((checkbox) => {
+      checkbox.checked = false;
+      checkbox
+        .closest(".person-suggestion-group-row")
+        ?.classList.add("excluded");
+    });
+    updateSelection();
+  });
+
+  confirmButton.addEventListener("click", () => {
+    const selected = bucket.entries.filter((entry) =>
+      selectedCandidateIds.has(entry.candidate.id)
+    );
+    if (selected.length === 0) return;
+
+    void runSafely(async () => {
+      confirmButton.disabled = true;
+      selectAll.disabled = true;
+      clearAll.disabled = true;
+      rowCheckboxes.forEach((checkbox) => {
+        checkbox.disabled = true;
+      });
+
+      const totalSelectedFaces = selected.reduce(
+        (sum, entry) => sum + entry.candidate.faceCount,
+        0
+      );
+      progressText.textContent =
+        totalSelectedFaces.toLocaleString("de-DE") +
+        " Fundstellen werden gesammelt als „" +
+        bucket.personName +
+        "“ bestätigt …";
+
+      let confirmedGroups = 0;
+      let confirmedFaces = 0;
+      const errors: string[] = [];
+
+      for (const entry of selected) {
+        const candidate = entry.candidate;
+        const fallbackFaceDetectionId =
+          candidate.representativeFaceId ??
+          candidate.faces[0]?.faceDetectionId;
+
+        try {
+          const result = await window.imageSorter.people.confirmCandidate(
+            candidate.id,
+            bucket.personName,
+            fallbackFaceDetectionId,
+            candidate.faceCount,
+            candidate.memberSignature
+          );
+          confirmedGroups += 1;
+          confirmedFaces += result.faceCount;
+        } catch (error) {
+          errors.push(
+            "Gruppe " +
+            candidate.id +
+            ": " +
+            (error instanceof Error ? error.message : String(error))
+          );
+        }
+      }
+
+      const sourceId = selectedSourceId();
+      if (sourceId !== null) {
+        await reloadPersonOverviewPreservingPosition(sourceId);
+      }
+      await refreshIdentityTabStats();
+
+      progressText.textContent =
+        bucket.personName +
+        ": " +
+        confirmedFaces.toLocaleString("de-DE") +
+        " Fundstellen aus " +
+        confirmedGroups.toLocaleString("de-DE") +
+        (confirmedGroups === 1 ? " Gruppe bestätigt." : " Gruppen bestätigt.") +
+        (errors.length > 0
+          ? " " +
+            errors.length.toLocaleString("de-DE") +
+            " Gruppe(n) konnten wegen zwischenzeitlicher Änderungen nicht übernommen werden."
+          : "");
+    });
+  });
+
+  actions.append(selectAll, clearAll, confirmButton);
+  card.append(header, list, actions);
+  updateSelection();
+  return card;
+}
+
 function renderPersonOverview(overview: PersonOverview): void {
   personCandidates.replaceChildren();
   confirmedPersons.replaceChildren();
@@ -5419,7 +5774,24 @@ function renderPersonOverview(overview: PersonOverview): void {
   } else {
     const fragment = document.createDocumentFragment();
 
+    // Kandidatengruppen, die dieselbe bereits bekannte Person als besten
+    // Treffer haben, werden nicht mehr als verstreute Einzelkarten gerendert.
+    // Stattdessen kann man die komplette Ähnlichkeitsspanne einer Person in
+    // einer Sammelkarte von hoch nach niedrig prüfen und gemeinsam bestätigen.
+    const suggestionBuckets = groupedPersonSuggestionBuckets(visibleCandidates);
+    const summarizedCandidateIds = new Set<number>();
+
+    for (const bucket of suggestionBuckets) {
+      for (const entry of bucket.entries) {
+        summarizedCandidateIds.add(entry.candidate.id);
+      }
+      fragment.appendChild(
+        renderGroupedPersonSuggestionBucket(bucket, overview)
+      );
+    }
+
     for (const candidate of visibleCandidates) {
+      if (summarizedCandidateIds.has(candidate.id)) continue;
       const card = document.createElement("article");
       card.className = "person-candidate-card";
 
