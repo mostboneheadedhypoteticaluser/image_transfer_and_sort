@@ -145,8 +145,8 @@ function percent(value: number): string {
   return Math.max(0, Math.min(100, value * 100)).toFixed(1) + " %";
 }
 
-function rejectionKey(item: SerialItem, suggestionId: number): string {
-  return item.detectionId + ":" + suggestionId;
+function rejectionKey(detectionId: number, suggestionId: number): string {
+  return detectionId + ":" + suggestionId;
 }
 
 function personItems(state: SerialState): SerialItem[] {
@@ -170,19 +170,9 @@ function personItems(state: SerialState): SerialItem[] {
         height: face.height,
         suggestions: face.suggestedPersons
           .filter((suggestion) =>
-            !state.rejected.has(rejectionKey({
-              kind: "person",
-              candidateId: candidate.id,
-              detectionId: face.faceDetectionId,
-              mediaId: face.mediaId,
-              relativePath: face.relativePath,
-              petClass: null,
-              x: face.x,
-              y: face.y,
-              width: face.width,
-              height: face.height,
-              suggestions: []
-            }, suggestion.personId))
+            !state.rejected.has(
+              rejectionKey(face.faceDetectionId, suggestion.personId)
+            )
           )
           .map((suggestion) => ({
             id: suggestion.personId,
@@ -213,7 +203,7 @@ function personItems(state: SerialState): SerialItem[] {
     };
     stub.suggestions = face.suggestedPersons
       .filter((suggestion) =>
-        !state.rejected.has(rejectionKey(stub, suggestion.personId))
+        !state.rejected.has(rejectionKey(stub.detectionId, suggestion.personId))
       )
       .map((suggestion) => ({
         id: suggestion.personId,
@@ -252,7 +242,7 @@ function petItems(state: SerialState): SerialItem[] {
       };
       stub.suggestions = pet.suggestedPets
         .filter((suggestion) =>
-          !state.rejected.has(rejectionKey(stub, suggestion.petId))
+          !state.rejected.has(rejectionKey(stub.detectionId, suggestion.petId))
         )
         .map((suggestion) => ({
           id: suggestion.petId,
@@ -283,7 +273,7 @@ function petItems(state: SerialState): SerialItem[] {
     };
     stub.suggestions = pet.suggestedPets
       .filter((suggestion) =>
-        !state.rejected.has(rejectionKey(stub, suggestion.petId))
+        !state.rejected.has(rejectionKey(stub.detectionId, suggestion.petId))
       )
       .map((suggestion) => ({
         id: suggestion.petId,
@@ -593,7 +583,7 @@ async function rejectPrimary(state: SerialState, item: SerialItem): Promise<void
       );
     }
 
-    state.rejected.add(rejectionKey(item, primary.id));
+    state.rejected.add(rejectionKey(item.detectionId, primary.id));
     progressText.textContent =
       "„" + primary.name + "“ wurde für diese Fundstelle ausgeschlossen.";
     window.dispatchEvent(new CustomEvent("serial-confirmation:changed", {
