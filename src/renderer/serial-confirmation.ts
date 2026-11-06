@@ -35,6 +35,7 @@ type SerialState = {
   busy: boolean;
   completed: Set<number>;
   rejected: Set<string>;
+  skippedSuggested: Set<number>;
   skippedUnknown: Set<string>;
   personOverview: PersonOverview | null;
   petOverview: PetOverview | null;
@@ -45,6 +46,7 @@ type SerialDom = {
   serialView: HTMLElement;
   groupedButton: HTMLButtonElement;
   serialButton: HTMLButtonElement;
+  exitButton: HTMLButtonElement;
   suggestedButton: HTMLButtonElement;
   unknownButton: HTMLButtonElement;
   summary: HTMLElement;
@@ -58,6 +60,7 @@ type SerialDom = {
   primary: HTMLElement;
   yes: HTMLButtonElement;
   no: HTMLButtonElement;
+  pass: HTMLButtonElement;
   alternatives: HTMLElement;
   knownActions: HTMLElement;
   unknownActions: HTMLElement;
@@ -160,14 +163,13 @@ function mediaDetails(mediaId: number): Promise<MediaDetails | null> {
 
 function resetBox(dom: SerialDom): void {
   dom.box.hidden = true;
-  dom.box.style.left = "0%";
-  dom.box.style.top = "0%";
-  dom.box.style.width = "0%";
-  dom.box.style.height = "0%";
+  dom.box.style.left = "0px";
+  dom.box.style.top = "0px";
+  dom.box.style.width = "0px";
+  dom.box.style.height = "0px";
 }
 
 function resetPip(dom: SerialDom): void {
-  dom.stage.classList.remove("has-face-pip");
   if (dom.pip) dom.pip.hidden = true;
   if (dom.pipImage) dom.pipImage.removeAttribute("src");
 }
@@ -203,7 +205,6 @@ function updateFacePip(
   dom.pipImage.src = faceCropUrl(item.detectionId);
   dom.pipImage.alt = "Vergrößerter Gesichtsausschnitt";
   dom.pip.hidden = false;
-  dom.stage.classList.add("has-face-pip");
 }
 
 function required<T extends Element>(selector: string): T {
@@ -219,6 +220,7 @@ function domFor(kind: IdentityKind): SerialDom {
     serialView: required<HTMLElement>("#" + prefix + "SerialView"),
     groupedButton: required<HTMLButtonElement>("#" + prefix + "ViewGrouped"),
     serialButton: required<HTMLButtonElement>("#" + prefix + "ViewSerial"),
+    exitButton: required<HTMLButtonElement>("#" + prefix + "SerialExit"),
     suggestedButton: required<HTMLButtonElement>("#" + prefix + "SerialSuggested"),
     unknownButton: required<HTMLButtonElement>("#" + prefix + "SerialUnknown"),
     summary: required<HTMLElement>("#" + prefix + "SerialSummary"),
@@ -232,6 +234,7 @@ function domFor(kind: IdentityKind): SerialDom {
     primary: required<HTMLElement>("#" + prefix + "SerialPrimary"),
     yes: required<HTMLButtonElement>("#" + prefix + "SerialYes"),
     no: required<HTMLButtonElement>("#" + prefix + "SerialNo"),
+    pass: required<HTMLButtonElement>("#" + prefix + "SerialPass"),
     alternatives: required<HTMLElement>("#" + prefix + "SerialAlternatives"),
     knownActions: required<HTMLElement>("#" + prefix + "SerialKnownActions"),
     unknownActions: required<HTMLElement>("#" + prefix + "SerialUnknownActions"),
@@ -253,6 +256,7 @@ const personState: SerialState = {
   busy: false,
   completed: new Set<number>(),
   rejected: new Set<string>(),
+  skippedSuggested: new Set<number>(),
   skippedUnknown: new Set<string>(),
   personOverview: null,
   petOverview: null
@@ -264,6 +268,7 @@ const petState: SerialState = {
   busy: false,
   completed: new Set<number>(),
   rejected: new Set<string>(),
+  skippedSuggested: new Set<number>(),
   skippedUnknown: new Set<string>(),
   personOverview: null,
   petOverview: null
@@ -452,7 +457,8 @@ function itemsForQueue(state: SerialState): SerialItem[] {
   return allItems(state)
     .filter((item) =>
       wantSuggested
-        ? item.suggestions.length > 0
+        ? item.suggestions.length > 0 &&
+          !state.skippedSuggested.has(item.detectionId)
         : item.suggestions.length === 0 &&
           !state.skippedUnknown.has(unknownSkipKey(item))
     )
@@ -461,6 +467,16 @@ function itemsForQueue(state: SerialState): SerialItem[] {
       const rightScore = right.suggestions[0]?.similarity ?? 0;
       return rightScore - leftScore || right.detectionId - left.detectionId;
     });
+}
+
+function skipSuggestedItem(state: SerialState, item: SerialItem): void {
+  if (state.queue !== "suggested" || state.busy) return;
+  state.skippedSuggested.add(item.detectionId);
+  progressText.textContent =
+    state.kind === "person"
+      ? "Dieses Gesicht wurde für die aktuelle Runde übersprungen."
+      : "Diese Haustierfundstelle wurde für die aktuelle Runde übersprungen.";
+  renderState(state);
 }
 
 function skipUnknownGroup(state: SerialState, item: SerialItem): void {
@@ -528,6 +544,7 @@ function setViewMode(kind: IdentityKind, serial: boolean): void {
   dom.serialView.hidden = !serial;
   dom.groupedButton.classList.toggle("active", !serial);
   dom.serialButton.classList.toggle("active", serial);
+  document.documentElement.classList.toggle("serial-review-open", serial);
   if (serial) renderState(stateFor(kind));
 }
 
@@ -610,19 +627,35 @@ function renderBox(state: SerialState, item: SerialItem | null): void {
       Math.min(imageHeight, box.y + box.height)
     );
 
-    const left = leftPx / imageWidth * 100;
-    const top = topPx / imageHeight * 100;
-    const width = (rightPx - leftPx) / imageWidth * 100;
-    const height = (bottomPx - topPx) / imageHeight * 100;
+    const imageRect = dom.image.getBoundingClientRect();
+    const stageRect = dom.stage.getBoundingClientRect();
+    if (
+      imageRect.width <= 0 ||
+      imageRect.height <= 0 ||
+      stageRect.width <= 0 ||
+      stageRect.height <= 0
+    ) {
+      return;
+    }
+
+    // Das Rechteck wird gegen die tatsächlich gerenderte Bildfläche
+    // projiziert, nicht gegen Wrapper-/Grid-Abmessungen. Das bleibt korrekt
+    // bei Hochformat, Querformat, Vollbild und der rechten Infoleiste.
+    const scaleX = imageRect.width / imageWidth;
+    const scaleY = imageRect.height / imageHeight;
+    const left = imageRect.left - stageRect.left + leftPx * scaleX;
+    const top = imageRect.top - stageRect.top + topPx * scaleY;
+    const width = (rightPx - leftPx) * scaleX;
+    const height = (bottomPx - topPx) * scaleY;
 
     if (!(width > 0 && height > 0)) {
       return;
     }
 
-    dom.box.style.left = left + "%";
-    dom.box.style.top = top + "%";
-    dom.box.style.width = width + "%";
-    dom.box.style.height = height + "%";
+    dom.box.style.left = left + "px";
+    dom.box.style.top = top + "px";
+    dom.box.style.width = width + "px";
+    dom.box.style.height = height + "px";
     dom.box.hidden = false;
   });
 }
@@ -952,7 +985,9 @@ function renderState(state: SerialState): void {
   const current = selected?.items[0] ?? null;
   const currentItems = allItems(state);
   const totalSuggested = currentItems.filter(
-    (item) => item.suggestions.length > 0
+    (item) =>
+      item.suggestions.length > 0 &&
+      !state.skippedSuggested.has(item.detectionId)
   ).length;
   const totalUnknown = currentItems.filter(
     (item) =>
@@ -1002,6 +1037,7 @@ function renderState(state: SerialState): void {
 
   dom.yes.disabled = state.busy;
   dom.no.disabled = state.busy;
+  dom.pass.disabled = state.busy;
   dom.assign.disabled = state.busy;
   dom.skip.disabled = state.busy;
   dom.alternatives.replaceChildren();
@@ -1031,6 +1067,7 @@ function renderState(state: SerialState): void {
 
     dom.yes.onclick = () => void assignName(state, current, primary.name);
     dom.no.onclick = () => void rejectPrimary(state, current);
+    dom.pass.onclick = () => skipSuggestedItem(state, current);
     dom.nameMount.replaceChildren();
   } else {
     dom.primary.replaceChildren();
@@ -1070,14 +1107,19 @@ function wire(kind: IdentityKind): void {
 
   dom.groupedButton.addEventListener("click", () => setViewMode(kind, false));
   dom.serialButton.addEventListener("click", () => setViewMode(kind, true));
+  dom.exitButton.addEventListener("click", () => setViewMode(kind, false));
   dom.suggestedButton.addEventListener("click", () => setQueue(state, "suggested"));
   dom.unknownButton.addEventListener("click", () => setQueue(state, "unknown"));
-  dom.image.addEventListener("load", () => {
+  const renderCurrentBox = () => {
+    if (dom.serialView.hidden) return;
     const items = itemsForQueue(state);
     const groups = groupItems(state, items);
     const selected = groups.find((group) => group.key === state.selectedGroup);
     renderBox(state, selected?.items[0] ?? null);
-  });
+  };
+
+  dom.image.addEventListener("load", renderCurrentBox);
+  window.addEventListener("resize", renderCurrentBox);
 }
 
 wire("person");
