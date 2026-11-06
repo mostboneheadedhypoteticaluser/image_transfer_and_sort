@@ -183,6 +183,15 @@ const api = {
         expectedMemberSignature,
         ignoredIdentityId
       ),
+    rejectDetectionSuggestion: (
+      faceDetectionId: number,
+      personId: number
+    ): Promise<PersonCorrectionResult> =>
+      ipcRenderer.invoke(
+        "people:rejectDetectionSuggestion",
+        faceDetectionId,
+        personId
+      ),
     removeCandidateFace: (
       candidateId: number,
       faceDetectionId: number
@@ -248,6 +257,15 @@ const api = {
         expectedDetectionCount,
         expectedMemberSignature,
         ignoredIdentityId
+      ),
+    rejectDetectionSuggestion: (
+      petDetectionId: number,
+      petId: number
+    ): Promise<PetCorrectionResult> =>
+      ipcRenderer.invoke(
+        "pets:rejectDetectionSuggestion",
+        petDetectionId,
+        petId
       ),
     removeCandidatePet: (
       candidateId: number,
@@ -400,6 +418,21 @@ const api = {
         detectionIndex,
         petClass,
         name
+      ),
+    assignVideoFrameIdentityNames: (
+      mediaId: number,
+      assignments: Array<{
+        timestampMs: number;
+        kind: "person" | "pet";
+        detectionIndex: number;
+        petClass: "dog" | "cat" | null;
+        name: string;
+      }>
+    ): Promise<{ mediaId: number; affected: number }> =>
+      ipcRenderer.invoke(
+        "catalog:assignVideoFrameIdentityNames",
+        mediaId,
+        assignments
       ),
     reanalyzeMedia: (
       mediaId: number

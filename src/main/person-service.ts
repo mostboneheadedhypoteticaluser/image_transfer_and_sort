@@ -85,7 +85,7 @@ export class PersonService {
             verificationThreshold: VERIFICATION_THRESHOLD,
             minClusterSize: 2
           },
-          120000
+          600000
         );
 
         const replaced =
@@ -137,14 +137,19 @@ export class PersonService {
         ignoreDoubtThreshold: VERIFICATION_THRESHOLD
       }
     );
-    const [persons, stats] = await Promise.all([
+    const [persons, stats, ungroupedFaces] = await Promise.all([
       this.catalog.request<PersonRecord[]>("listPersons", { sourceId }),
-      this.catalog.request<CatalogStats>("getStats", { sourceId })
+      this.catalog.request<CatalogStats>("getStats", { sourceId }),
+      this.catalog.request<PersonOverview["ungroupedFaces"]>(
+        "listUngroupedPersonDetections",
+        { sourceId, limit: 1000 }
+      )
     ]);
 
     return {
       candidates,
       persons,
+      ungroupedFaces,
       clusteringPending,
       candidateTotal: stats.personCandidates,
       candidateFaceTotal: stats.personCandidateFaces,
@@ -231,6 +236,10 @@ export class PersonService {
       persons: [...personMap.values()].sort(
         (a, b) => a.name.localeCompare(b.name, "de", { sensitivity: "base" })
       ),
+      ungroupedFaces: overviews
+        .flatMap((overview) => overview.ungroupedFaces)
+        .sort((a, b) => b.faceDetectionId - a.faceDetectionId)
+        .slice(0, 4000),
       clusteringPending: overviews.some((overview) => overview.clusteringPending),
       candidateTotal: overviews.reduce(
         (sum, overview) => sum + overview.candidateTotal,
@@ -306,6 +315,16 @@ export class PersonService {
         expectedMemberSignature,
         ignoredIdentityId
       }
+    );
+  }
+
+  async rejectDetectionSuggestion(
+    faceDetectionId: number,
+    personId: number
+  ): Promise<PersonCorrectionResult> {
+    return this.catalog.request<PersonCorrectionResult>(
+      "rejectPersonDetectionSuggestion",
+      { faceDetectionId, personId }
     );
   }
 

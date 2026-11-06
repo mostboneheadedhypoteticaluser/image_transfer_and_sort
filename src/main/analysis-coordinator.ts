@@ -206,6 +206,7 @@ export class AnalysisCoordinator {
   private readonly fastLaneBusy: boolean[] =
     Array.from({ length: MAX_FAST_CONCURRENCY }, () => false);
   private readonly activeTasks = new Set<Promise<void>>();
+  private readonly activeMediaTasks = new Map<number, number>();
   private readonly activeModuleCounts = new Map<string, number>();
   private statsRefreshPromise: Promise<PythonPipelineStats> | null = null;
   private heavyRunning = false;
@@ -310,14 +311,19 @@ export class AnalysisCoordinator {
     }
   }
 
-  async pauseForMaintenance(): Promise<void> {
+  async pauseForMaintenance(mediaId?: number, waitForActive = true): Promise<void> {
     this.maintenancePaused = true;
 
-    // Einen bereits laufenden schnellen Bildschritt sauber fertigstellen.
-    // Nicht abbrechen: danach kann die Gruppierung denselben Worker exklusiv
-    // nutzen und die Fast-Lane setzt exakt beim aktuellen Bild fort.
+    // A requeue invalidates old job IDs atomically. Completed results from
+    // invalidated jobs are rejected by the Catalog Worker, so expensive work
+    // does not have to finish before a new job can be queued. We still wait
+    // for claimAnalysisJob calls in pump() to finish before invalidation.
     while (
-      (this.pumping || this.activeTasks.size > 0) &&
+      (this.pumping ||
+        (waitForActive &&
+          (mediaId === undefined
+            ? this.activeTasks.size > 0
+            : (this.activeMediaTasks.get(mediaId) ?? 0) > 0))) &&
       !this.stopped
     ) {
       await new Promise<void>((resolve) => setTimeout(resolve, 50));
@@ -678,12 +684,17 @@ export class AnalysisCoordinator {
     if (laneIndex !== null) this.fastLaneBusy[laneIndex] = true;
     if (heavy) this.heavyRunning = true;
     this.markModuleActive(selection.spec.module, 1);
+    const mediaId = selection.job.mediaId;
+    this.activeMediaTasks.set(mediaId, (this.activeMediaTasks.get(mediaId) ?? 0) + 1);
 
     const task = this.runSelection(selection);
 
     this.activeTasks.add(task);
     void task.finally(() => {
       this.activeTasks.delete(task);
+      const remaining = (this.activeMediaTasks.get(mediaId) ?? 1) - 1;
+      if (remaining > 0) this.activeMediaTasks.set(mediaId, remaining);
+      else this.activeMediaTasks.delete(mediaId);
       if (laneIndex !== null) this.fastLaneBusy[laneIndex] = false;
       if (heavy) this.heavyRunning = false;
       this.markModuleActive(selection.spec.module, -1);

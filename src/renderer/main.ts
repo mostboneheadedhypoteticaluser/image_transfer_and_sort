@@ -1,6 +1,10 @@
 import { initEmbeddedSourceExplorer } from "./source-explorer";
 import { activateMapView, invalidateMapData } from "./map-view";
 import { activateLifeAreasView, invalidateLifeAreas } from "./life-areas";
+import {
+  renderPersonSerialOverview,
+  renderPetSerialOverview
+} from "./serial-confirmation";
 import type {
   AnalysisErrorRecord,
   AnalysisWorkerStatus,
@@ -64,6 +68,7 @@ const mediaView = document.querySelector<HTMLDivElement>("#mediaView")!;
 const duplicateView = document.querySelector<HTMLDivElement>("#duplicateView")!;
 const personView = document.querySelector<HTMLDivElement>("#personView")!;
 const petView = document.querySelector<HTMLDivElement>("#petView")!;
+const appWorkspace = document.querySelector<HTMLElement>(".app-workspace")!;
 const personCandidates = document.querySelector<HTMLDivElement>("#personCandidates")!;
 const petCandidates = document.querySelector<HTMLDivElement>("#petCandidates")!;
 const confirmedPets = document.querySelector<HTMLDivElement>("#confirmedPets")!;
@@ -334,6 +339,8 @@ let lastPipelineIssueTotal = -1;
 let analysisRefreshTimer: number | null = null;
 let sourcePipelineRefreshTimer: number | null = null;
 let identityStatsRefreshTimer: number | null = null;
+let personSerialRefreshTimer: number | null = null;
+let petSerialRefreshTimer: number | null = null;
 let watchCatalogRefreshTimer: number | null = null;
 let rendererShuttingDown = false;
 let searchFacetsScopeKey: string | null = null;
@@ -1516,9 +1523,9 @@ candidateReviewAssign.addEventListener("click", () => {
     const sourceId = selectedSourceId();
     if (sourceId !== null) {
       if (state.kind === "person") {
-        await loadPersonOverview(sourceId);
+        await reloadPersonOverviewPreservingPosition(sourceId);
       } else {
-        await loadPetOverview(sourceId);
+        await reloadPetOverviewPreservingPosition(sourceId);
       }
     }
 
@@ -2488,11 +2495,98 @@ function renderPreviewIdentityOverlay(
   }
 }
 
+type PreviewBox = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+};
+
+function previewOrientedDimensions(
+  width: number,
+  height: number,
+  orientation: number
+): { width: number; height: number } {
+  return [5, 6, 7, 8].includes(orientation)
+    ? { width: height, height: width }
+    : { width, height };
+}
+
+function orientRawPreviewBox(
+  box: PreviewBox,
+  rawWidth: number,
+  rawHeight: number,
+  orientation: number
+): PreviewBox {
+  if (
+    orientation === 1 ||
+    rawWidth <= 0 ||
+    rawHeight <= 0
+  ) {
+    return box;
+  }
+
+  const points = [
+    [box.x, box.y],
+    [box.x + box.width, box.y],
+    [box.x, box.y + box.height],
+    [box.x + box.width, box.y + box.height]
+  ] as const;
+
+  const orientPoint = (x: number, y: number): [number, number] => {
+    switch (orientation) {
+      case 2:
+        return [rawWidth - x, y];
+      case 3:
+        return [rawWidth - x, rawHeight - y];
+      case 4:
+        return [x, rawHeight - y];
+      case 5:
+        return [y, x];
+      case 6:
+        return [rawHeight - y, x];
+      case 7:
+        return [rawHeight - y, rawWidth - x];
+      case 8:
+        return [y, rawWidth - x];
+      default:
+        return [x, y];
+    }
+  };
+
+  const oriented = points.map(([x, y]) => orientPoint(x, y));
+  const xs = oriented.map(([x]) => x);
+  const ys = oriented.map(([, y]) => y);
+  const left = Math.min(...xs);
+  const top = Math.min(...ys);
+  const right = Math.max(...xs);
+  const bottom = Math.max(...ys);
+
+  return {
+    x: left,
+    y: top,
+    width: Math.max(0, right - left),
+    height: Math.max(0, bottom - top)
+  };
+}
+
 function renderImagePreviewOverlay(details: MediaDetails): void {
-  const naturalWidth =
-    imagePreviewImage.naturalWidth || details.imageMetadata?.width || 0;
-  const naturalHeight =
-    imagePreviewImage.naturalHeight || details.imageMetadata?.height || 0;
+  const rawWidth =
+    details.imageMetadata?.width || imagePreviewImage.naturalWidth || 0;
+  const rawHeight =
+    details.imageMetadata?.height || imagePreviewImage.naturalHeight || 0;
+  const orientation = details.imageMetadata?.orientation ?? 1;
+  const orientedDimensions = previewOrientedDimensions(
+    rawWidth,
+    rawHeight,
+    orientation
+  );
+
+  // Die große Vorschau wird auf maximal 1920×1440 verkleinert. Die
+  // Erkennungsboxen liegen dagegen in Pixelkoordinaten des Analysebilds.
+  // Deshalb niemals gegen naturalWidth/naturalHeight der Preview normieren.
+  const analysisWidth = orientedDimensions.width;
+  const analysisHeight = orientedDimensions.height;
 
   const identities: PreviewOverlayIdentity[] = [
     ...details.faces.map((face) => ({
@@ -2503,6 +2597,7 @@ function renderImagePreviewOverlay(details: MediaDetails): void {
       confirmed: Boolean(
         face.personId && face.assignmentSource === "CONFIRMED"
       ),
+      // YuNet wird bereits auf EXIF-orientierten Pixeln ausgeführt.
       x: face.x,
       y: face.y,
       width: face.width,
@@ -2520,36 +2615,58 @@ function renderImagePreviewOverlay(details: MediaDetails): void {
         ]);
       }
     })),
-    ...details.pets.map((pet) => ({
-      kind: "pet" as const,
-      id: pet.id,
-      name: pet.petName,
-      suggestionName: pet.suggestedPets[0]?.petName ?? null,
-      confirmed: Boolean(
-        pet.petId && pet.assignmentSource === "CONFIRMED"
-      ),
-      x: pet.x,
-      y: pet.y,
-      width: pet.width,
-      height: pet.height,
-      petClass: pet.petClass,
-      onAssign: async (name: string) => {
-        await window.imageSorter.pets.assignDetectionName(pet.id, name);
-        progressText.textContent =
-          "Haustierfundstelle wurde „" + name +
-          "“ zugeordnet und bestätigt.";
-        if (imagePreviewDialog.open) {
-          await loadImagePreviewDetails(details.mediaId);
+    ...details.pets.map((pet) => {
+      // NanoDet/YOLOX lesen aktuell die Rohpixel ohne EXIF-Transpose.
+      // Die Preview wird dagegen von Sharp auto-orientiert. Für die Anzeige
+      // müssen Haustierboxen deshalb in dasselbe Koordinatensystem gedreht
+      // bzw. gespiegelt werden.
+      const box = orientRawPreviewBox(
+        {
+          x: pet.x,
+          y: pet.y,
+          width: pet.width,
+          height: pet.height
+        },
+        rawWidth,
+        rawHeight,
+        orientation
+      );
+
+      return {
+        kind: "pet" as const,
+        id: pet.id,
+        name: pet.petName,
+        suggestionName: pet.suggestedPets[0]?.petName ?? null,
+        confirmed: Boolean(
+          pet.petId && pet.assignmentSource === "CONFIRMED"
+        ),
+        x: box.x,
+        y: box.y,
+        width: box.width,
+        height: box.height,
+        petClass: pet.petClass,
+        onAssign: async (name: string) => {
+          await window.imageSorter.pets.assignDetectionName(pet.id, name);
+          progressText.textContent =
+            "Haustierfundstelle wurde „" + name +
+            "“ zugeordnet und bestätigt.";
+          if (imagePreviewDialog.open) {
+            await loadImagePreviewDetails(details.mediaId);
+          }
+          await Promise.all([
+            refreshIdentityTabStats(),
+            refreshCatalog()
+          ]);
         }
-        await Promise.all([
-          refreshIdentityTabStats(),
-          refreshCatalog()
-        ]);
-      }
-    }))
+      };
+    })
   ];
 
-  renderPreviewIdentityOverlay(identities, naturalWidth, naturalHeight);
+  renderPreviewIdentityOverlay(
+    identities,
+    analysisWidth,
+    analysisHeight
+  );
 }
 
 async function refreshCurrentVideoFrameAfterAssignment(
@@ -2754,7 +2871,9 @@ function renderImagePreviewDetails(details: MediaDetails): void {
           "Medium bevorzugt neu eingereiht · " +
           result.requeued.toLocaleString("de-DE") + " Analyse-Stufen · " +
           result.cleared.toLocaleString("de-DE") + " alte Ergebnisse entfernt.";
-        await Promise.all([
+        // The queue operation is finished. Do not keep the button locked
+        // while the unrelated library/stats requests refresh in the background.
+        void Promise.allSettled([
           loadImagePreviewDetails(details.mediaId),
           refreshCatalog(),
           refreshSelectedPipelineStatus()
@@ -2843,8 +2962,148 @@ function renderImagePreviewDetails(details: MediaDetails): void {
     }
   }
 
+  if (isVideoExtension(details.extension)) {
+    const pendingVideoAssignments = (details.videoAnalysis?.frames ?? [])
+      .flatMap((frame) =>
+        frame.detections
+          .filter(
+            (detection) =>
+              !detection.confirmed &&
+              typeof detection.name === "string" &&
+              detection.name.trim().length > 0
+          )
+          .map((detection) => ({
+            timestampMs: frame.timestampMs,
+            kind: detection.kind,
+            detectionIndex: detection.detectionIndex,
+            petClass: detection.petClass,
+            name:
+              typeof detection.name === "string"
+                ? detection.name.trim()
+                : ""
+          }))
+      );
+
+    if (pendingVideoAssignments.length > 0) {
+      const personCount = pendingVideoAssignments.filter(
+        (assignment) => assignment.kind === "person"
+      ).length;
+      const petCount = pendingVideoAssignments.length - personCount;
+
+      const panel = document.createElement("div");
+      panel.className = "image-detail-reanalyze";
+
+      const description = document.createElement("div");
+      const title = document.createElement("strong");
+      title.textContent = "Personen- und Haustiertreffer im Video";
+
+      const hint = document.createElement("small");
+      const parts: string[] = [];
+      if (personCount > 0) {
+        parts.push(
+          personCount.toLocaleString("de-DE") +
+          (personCount === 1 ? " Personentreffer" : " Personentreffer")
+        );
+      }
+      if (petCount > 0) {
+        parts.push(
+          petCount.toLocaleString("de-DE") +
+          (petCount === 1 ? " Haustiertreffer" : " Haustiertreffer")
+        );
+      }
+      hint.textContent =
+        parts.join(" · ") +
+        " mit Namensvorschlag sind noch unbestätigt. Treffer ohne Namen bleiben unverändert.";
+
+      const groupedNames = new Map<
+        string,
+        { kind: "person" | "pet"; name: string; count: number }
+      >();
+      for (const assignment of pendingVideoAssignments) {
+        const key =
+          assignment.kind + ":" + normalizedIdentityName(assignment.name);
+        const current = groupedNames.get(key);
+        if (current) {
+          current.count += 1;
+        } else {
+          groupedNames.set(key, {
+            kind: assignment.kind,
+            name: assignment.name,
+            count: 1
+          });
+        }
+      }
+
+      const names = document.createElement("div");
+      names.className = "video-confirmation-names";
+      const sortedNames = [...groupedNames.values()].sort(
+        (left, right) =>
+          left.kind.localeCompare(right.kind) ||
+          right.count - left.count ||
+          left.name.localeCompare(right.name, "de-DE")
+      );
+      for (const entry of sortedNames) {
+        const item = document.createElement("span");
+        item.className =
+          "video-confirmation-name " +
+          (entry.kind === "person" ? "person" : "pet");
+        item.textContent =
+          (entry.kind === "person" ? "Person: " : "Haustier: ") +
+          entry.name +
+          " (" + entry.count.toLocaleString("de-DE") + ")";
+        names.appendChild(item);
+      }
+
+      description.append(title, hint, names);
+
+      const confirmAll = document.createElement("button");
+      confirmAll.type = "button";
+      confirmAll.className = "secondary";
+      confirmAll.textContent =
+        "Alle bestätigen (" +
+        pendingVideoAssignments.length.toLocaleString("de-DE") +
+        ")";
+      confirmAll.addEventListener("click", () => {
+        void runSafely(async () => {
+          confirmAll.disabled = true;
+          confirmAll.textContent = "Wird bestätigt …";
+          try {
+            const result =
+              await window.imageSorter.catalog.assignVideoFrameIdentityNames(
+                details.mediaId,
+                pendingVideoAssignments
+              );
+
+            progressText.textContent =
+              result.affected.toLocaleString("de-DE") +
+              (result.affected === 1
+                ? " Video-Treffer bestätigt."
+                : " Video-Treffer bestätigt.");
+
+            await Promise.all([
+              loadImagePreviewDetails(details.mediaId),
+              refreshIdentityTabStats(),
+              refreshCatalog()
+            ]);
+          } finally {
+            confirmAll.disabled = false;
+          }
+        });
+      });
+
+      panel.append(description, confirmAll);
+      imagePreviewDetails.appendChild(panel);
+    }
+  }
+
+  const lastSuccessfulAnalysis = details.analysisJobs
+    .filter((job) => job.status === "DONE" && job.finishedAt)
+    .map((job) => job.finishedAt as string)
+    .sort()
+    .at(-1) ?? null;
   const fileRows: Array<[string, unknown]> = [
     ["Datei", details.relativePath],
+    ["Letzte erfolgreiche Analyse", detailTimestamp(lastSuccessfulAnalysis)],
     ["Vollständiger Pfad", details.absolutePath],
     ["Dateityp", details.extension],
     ["Größe", formatBytes(details.sizeBytes)],
@@ -4280,6 +4539,16 @@ function libraryMarkerEntries(row: MediaRecord): string[] {
   return [...marks].sort((a, b) => a.localeCompare(b, "de"));
 }
 
+function lastAnalyzedTimestamp(row: MediaRecord): number {
+  if (!row.lastAnalyzedAt) return 0;
+  // SQLite CURRENT_TIMESTAMP ist UTC, aber ohne 'Z'.
+  const normalized = row.lastAnalyzedAt.includes("T")
+    ? row.lastAnalyzedAt
+    : row.lastAnalyzedAt.replace(" ", "T") + "Z";
+  const value = Date.parse(normalized);
+  return Number.isFinite(value) ? value : 0;
+}
+
 function libraryTimestamp(row: MediaRecord): number {
   const captured = row.capturedAt ? Date.parse(row.capturedAt) : Number.NaN;
   if (Number.isFinite(captured)) return captured;
@@ -4406,6 +4675,16 @@ function filteredLibraryRows(): MediaRecord[] {
       case "captured-asc":
         return libraryTimestamp(left) - libraryTimestamp(right) ||
           left.relativePath.localeCompare(right.relativePath, "de");
+      case "analyzed-desc":
+        return (lastAnalyzedTimestamp(right) ? 1 : 0) -
+          (lastAnalyzedTimestamp(left) ? 1 : 0) ||
+          lastAnalyzedTimestamp(right) - lastAnalyzedTimestamp(left) ||
+          left.relativePath.localeCompare(right.relativePath, "de");
+      case "analyzed-asc":
+        return (lastAnalyzedTimestamp(right) ? 1 : 0) -
+          (lastAnalyzedTimestamp(left) ? 1 : 0) ||
+          lastAnalyzedTimestamp(left) - lastAnalyzedTimestamp(right) ||
+          left.relativePath.localeCompare(right.relativePath, "de");
       case "path-desc":
         return right.relativePath.localeCompare(left.relativePath, "de");
       case "size-desc":
@@ -4428,7 +4707,13 @@ function filteredLibraryRows(): MediaRecord[] {
   if (libraryGroup.value !== "none") {
     rows.sort((left, right) =>
       libraryGroupLabel(left).localeCompare(libraryGroupLabel(right), "de") ||
-      (libraryTimestamp(right) - libraryTimestamp(left)) ||
+      (librarySort.value === "analyzed-desc" || librarySort.value === "analyzed-asc"
+        ? (lastAnalyzedTimestamp(right) ? 1 : 0) -
+            (lastAnalyzedTimestamp(left) ? 1 : 0) ||
+          (librarySort.value === "analyzed-desc"
+            ? lastAnalyzedTimestamp(right) - lastAnalyzedTimestamp(left)
+            : lastAnalyzedTimestamp(left) - lastAnalyzedTimestamp(right))
+        : libraryTimestamp(right) - libraryTimestamp(left)) ||
       left.relativePath.localeCompare(right.relativePath, "de")
     );
   }
@@ -4454,7 +4739,7 @@ function renderRows(rows: MediaRecord[], emptyText = "Noch keine Medien katalogi
   if (rows.length === 0) {
     const tr = document.createElement("tr");
     const td = document.createElement("td");
-    td.colSpan = 7;
+    td.colSpan = 8;
     td.className = "empty";
     td.textContent = emptyText;
     tr.appendChild(td);
@@ -4472,7 +4757,7 @@ function renderRows(rows: MediaRecord[], emptyText = "Noch keine Medien katalogi
         const groupRow = document.createElement("tr");
         groupRow.className = "media-group-row";
         const groupCell = document.createElement("td");
-        groupCell.colSpan = 7;
+        groupCell.colSpan = 8;
         groupCell.textContent = group;
         groupRow.appendChild(groupCell);
         fragment.appendChild(groupRow);
@@ -4585,6 +4870,16 @@ function renderRows(rows: MediaRecord[], emptyText = "Noch keine Medien katalogi
       source.textContent = "Quelle: " + sourceName;
       source.title = row.sourcePath;
       pathCell.appendChild(source);
+    }
+
+    if (row.lastAnalyzedAt) {
+      const analyzed = document.createElement("small");
+      analyzed.className = "path-meta";
+      const analyzedAt = lastAnalyzedTimestamp(row);
+      analyzed.textContent = "Letzte Analyse: " +
+        (analyzedAt ? new Date(analyzedAt).toLocaleString("de-DE") : row.lastAnalyzedAt);
+      analyzed.title = "Zuletzt erfolgreich abgeschlossener Analysejob für die aktuelle Dateiversion.";
+      pathCell.appendChild(analyzed);
     }
 
     if (row.capturedAt) {
@@ -4820,6 +5115,16 @@ function renderRows(rows: MediaRecord[], emptyText = "Noch keine Medien katalogi
       analysisCell.appendChild(summary);
     }
 
+    const analyzedCell = document.createElement("td");
+    analyzedCell.className = "analysis-time-cell";
+    const lastTime = lastAnalyzedTimestamp(row);
+    analyzedCell.textContent = lastTime
+      ? new Date(lastTime).toLocaleString("de-DE")
+      : "—";
+    analyzedCell.title = row.lastAnalyzedAt
+      ? "Neuester erfolgreich abgeschlossener Analysejob für die aktuelle Dateiversion."
+      : "Für diese Dateiversion wurde noch kein Analysejob erfolgreich abgeschlossen.";
+
     const actionCell = document.createElement("td");
     if (row.availability === "MISSING" && row.recycleState === "RESTORABLE") {
       const restoreButton = document.createElement("button");
@@ -4850,7 +5155,7 @@ function renderRows(rows: MediaRecord[], emptyText = "Noch keine Medien katalogi
       actionCell.className = "muted";
     }
 
-    tr.append(previewCell, pathCell, typeCell, sizeCell, stateCell, analysisCell, actionCell);
+    tr.append(previewCell, pathCell, typeCell, sizeCell, stateCell, analysisCell, analyzedCell, actionCell);
     fragment.appendChild(tr);
   }
 
@@ -5029,6 +5334,361 @@ function scheduleIdentityTabStatsRefresh(): void {
   }, 750);
 }
 
+type PersonSuggestionBucketEntry = {
+  candidate: PersonOverview["candidates"][number];
+  similarity: number;
+};
+
+type PersonSuggestionBucket = {
+  personId: number;
+  personName: string;
+  representativeFaceId: number | null;
+  entries: PersonSuggestionBucketEntry[];
+};
+
+function groupedPersonSuggestionBuckets(
+  candidates: PersonOverview["candidates"]
+): PersonSuggestionBucket[] {
+  const buckets = new Map<number, PersonSuggestionBucket>();
+
+  for (const candidate of candidates) {
+    const primary = [...candidate.suggestedPersons].sort(
+      (left, right) => right.similarity - left.similarity
+    )[0];
+    if (!primary) continue;
+
+    const existing = buckets.get(primary.personId);
+    if (existing) {
+      existing.entries.push({
+        candidate,
+        similarity: primary.similarity
+      });
+      if (existing.representativeFaceId === null) {
+        existing.representativeFaceId = primary.representativeFaceId;
+      }
+    } else {
+      buckets.set(primary.personId, {
+        personId: primary.personId,
+        personName: primary.personName,
+        representativeFaceId: primary.representativeFaceId,
+        entries: [{
+          candidate,
+          similarity: primary.similarity
+        }]
+      });
+    }
+  }
+
+  return [...buckets.values()]
+    .map((bucket) => ({
+      ...bucket,
+      entries: [...bucket.entries].sort(
+        (left, right) =>
+          right.similarity - left.similarity ||
+          right.candidate.faceCount - left.candidate.faceCount
+      )
+    }))
+    .sort((left, right) => {
+      const leftCount = left.entries.reduce(
+        (sum, entry) => sum + entry.candidate.faceCount,
+        0
+      );
+      const rightCount = right.entries.reduce(
+        (sum, entry) => sum + entry.candidate.faceCount,
+        0
+      );
+      return (
+        rightCount - leftCount ||
+        left.personName.localeCompare(right.personName, "de", {
+          sensitivity: "base"
+        })
+      );
+    });
+}
+
+function renderGroupedPersonSuggestionBucket(
+  bucket: PersonSuggestionBucket,
+  overview: PersonOverview
+): HTMLElement {
+  const card = document.createElement("article");
+  card.className = "person-suggestion-summary-card";
+
+  const header = document.createElement("header");
+  header.className = "person-suggestion-summary-header";
+
+  if (bucket.representativeFaceId !== null) {
+    const image = document.createElement("img");
+    image.src = faceCropUrl(bucket.representativeFaceId);
+    image.alt = "";
+    image.loading = "lazy";
+    header.appendChild(image);
+  }
+
+  const heading = document.createElement("div");
+  heading.className = "person-suggestion-summary-title";
+
+  const title = document.createElement("h4");
+  title.textContent = bucket.personName;
+
+  const totalFaces = bucket.entries.reduce(
+    (sum, entry) => sum + entry.candidate.faceCount,
+    0
+  );
+  const maxSimilarity = bucket.entries[0]?.similarity ?? 0;
+  const minSimilarity =
+    bucket.entries[bucket.entries.length - 1]?.similarity ?? 0;
+
+  const meta = document.createElement("p");
+  meta.textContent =
+    bucket.entries.length.toLocaleString("de-DE") +
+    (bucket.entries.length === 1 ? " Gruppe" : " Gruppen") +
+    " · " +
+    totalFaces.toLocaleString("de-DE") +
+    (totalFaces === 1 ? " Fundstelle" : " Fundstellen") +
+    " · Ähnlichkeit " +
+    maxSimilarity.toFixed(3) +
+    " bis " +
+    minSimilarity.toFixed(3);
+
+  heading.append(title, meta);
+  header.appendChild(heading);
+
+  const selectionSummary = document.createElement("span");
+  selectionSummary.className = "person-suggestion-selection-summary";
+  header.appendChild(selectionSummary);
+
+  const list = document.createElement("div");
+  list.className = "person-suggestion-group-list";
+
+  const selectedCandidateIds = new Set(
+    bucket.entries.map((entry) => entry.candidate.id)
+  );
+  const rowCheckboxes: HTMLInputElement[] = [];
+
+  const confirmButton = document.createElement("button");
+  confirmButton.type = "button";
+  confirmButton.className = "primary person-suggestion-confirm";
+
+  const updateSelection = () => {
+    let selectedGroups = 0;
+    let selectedFaces = 0;
+
+    for (const entry of bucket.entries) {
+      if (!selectedCandidateIds.has(entry.candidate.id)) continue;
+      selectedGroups += 1;
+      selectedFaces += entry.candidate.faceCount;
+    }
+
+    selectionSummary.textContent =
+      selectedGroups.toLocaleString("de-DE") +
+      "/" +
+      bucket.entries.length.toLocaleString("de-DE") +
+      " Gruppen ausgewählt";
+
+    confirmButton.disabled = selectedGroups === 0;
+    confirmButton.textContent =
+      selectedGroups === 0
+        ? "Keine Gruppe ausgewählt"
+        : selectedFaces.toLocaleString("de-DE") +
+          (selectedFaces === 1 ? " Fundstelle" : " Fundstellen") +
+          " als " +
+          bucket.personName +
+          " bestätigen";
+  };
+
+  for (const entry of bucket.entries) {
+    const candidate = entry.candidate;
+    const row = document.createElement("section");
+    row.className = "person-suggestion-group-row";
+
+    const selector = document.createElement("label");
+    selector.className = "person-suggestion-group-selector";
+
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.checked = true;
+    checkbox.setAttribute(
+      "aria-label",
+      "Gruppe mit Ähnlichkeit " +
+      entry.similarity.toFixed(3) +
+      " auswählen"
+    );
+    rowCheckboxes.push(checkbox);
+
+    checkbox.addEventListener("change", () => {
+      if (checkbox.checked) {
+        selectedCandidateIds.add(candidate.id);
+      } else {
+        selectedCandidateIds.delete(candidate.id);
+      }
+      row.classList.toggle("excluded", !checkbox.checked);
+      updateSelection();
+    });
+
+    const similarity = document.createElement("strong");
+    similarity.textContent = entry.similarity.toFixed(3);
+
+    const count = document.createElement("small");
+    count.textContent =
+      candidate.faceCount.toLocaleString("de-DE") +
+      (candidate.faceCount === 1 ? " Fundstelle" : " Fundstellen");
+
+    selector.append(checkbox, similarity, count);
+
+    const faces = document.createElement("div");
+    faces.className = "person-suggestion-face-strip";
+
+    for (const face of candidate.faces.slice(0, 8)) {
+      const image = document.createElement("img");
+      image.src = faceCropUrl(face.faceDetectionId);
+      image.alt = "";
+      image.loading = "lazy";
+      image.title =
+        face.relativePath +
+        "\nÄhnlichkeit zur Kandidatengruppe: " +
+        face.similarity.toFixed(3);
+      makePreviewable(image, face.mediaId, face.relativePath);
+      faces.appendChild(image);
+    }
+
+    if (candidate.faceCount > candidate.faces.length) {
+      const more = document.createElement("span");
+      more.className = "person-suggestion-more";
+      more.textContent =
+        "+" +
+        (candidate.faceCount - candidate.faces.length).toLocaleString("de-DE");
+      faces.appendChild(more);
+    }
+
+    const openButton = document.createElement("button");
+    openButton.type = "button";
+    openButton.className = "ghost person-suggestion-open";
+    openButton.textContent = "Prüfen";
+    openButton.title = "Diese Kandidatengruppe groß und einzeln prüfen";
+    openButton.addEventListener("click", () => {
+      openPersonCandidateReview(candidate, overview);
+    });
+
+    row.append(selector, faces, openButton);
+    list.appendChild(row);
+  }
+
+  const actions = document.createElement("div");
+  actions.className = "person-suggestion-summary-actions";
+
+  const selectAll = document.createElement("button");
+  selectAll.type = "button";
+  selectAll.className = "ghost";
+  selectAll.textContent = "Alle auswählen";
+  selectAll.addEventListener("click", () => {
+    for (const entry of bucket.entries) {
+      selectedCandidateIds.add(entry.candidate.id);
+    }
+    rowCheckboxes.forEach((checkbox) => {
+      checkbox.checked = true;
+      checkbox
+        .closest(".person-suggestion-group-row")
+        ?.classList.remove("excluded");
+    });
+    updateSelection();
+  });
+
+  const clearAll = document.createElement("button");
+  clearAll.type = "button";
+  clearAll.className = "ghost";
+  clearAll.textContent = "Alle abwählen";
+  clearAll.addEventListener("click", () => {
+    selectedCandidateIds.clear();
+    rowCheckboxes.forEach((checkbox) => {
+      checkbox.checked = false;
+      checkbox
+        .closest(".person-suggestion-group-row")
+        ?.classList.add("excluded");
+    });
+    updateSelection();
+  });
+
+  confirmButton.addEventListener("click", () => {
+    const selected = bucket.entries.filter((entry) =>
+      selectedCandidateIds.has(entry.candidate.id)
+    );
+    if (selected.length === 0) return;
+
+    void runSafely(async () => {
+      confirmButton.disabled = true;
+      selectAll.disabled = true;
+      clearAll.disabled = true;
+      rowCheckboxes.forEach((checkbox) => {
+        checkbox.disabled = true;
+      });
+
+      const totalSelectedFaces = selected.reduce(
+        (sum, entry) => sum + entry.candidate.faceCount,
+        0
+      );
+      progressText.textContent =
+        totalSelectedFaces.toLocaleString("de-DE") +
+        " Fundstellen werden gesammelt als „" +
+        bucket.personName +
+        "“ bestätigt …";
+
+      let confirmedGroups = 0;
+      let confirmedFaces = 0;
+      const errors: string[] = [];
+
+      for (const entry of selected) {
+        const candidate = entry.candidate;
+        const fallbackFaceDetectionId =
+          candidate.representativeFaceId ??
+          candidate.faces[0]?.faceDetectionId;
+
+        try {
+          const result = await window.imageSorter.people.confirmCandidate(
+            candidate.id,
+            bucket.personName,
+            fallbackFaceDetectionId,
+            candidate.faceCount,
+            candidate.memberSignature
+          );
+          confirmedGroups += 1;
+          confirmedFaces += result.faceCount;
+        } catch (error) {
+          errors.push(
+            "Gruppe " +
+            candidate.id +
+            ": " +
+            (error instanceof Error ? error.message : String(error))
+          );
+        }
+      }
+
+      const sourceId = selectedSourceId();
+      if (sourceId !== null) {
+        await reloadPersonOverviewPreservingPosition(sourceId);
+      }
+      await refreshIdentityTabStats();
+
+      progressText.textContent =
+        bucket.personName +
+        ": " +
+        confirmedFaces.toLocaleString("de-DE") +
+        " Fundstellen aus " +
+        confirmedGroups.toLocaleString("de-DE") +
+        (confirmedGroups === 1 ? " Gruppe bestätigt." : " Gruppen bestätigt.") +
+        (errors.length > 0
+          ? " " +
+            errors.length.toLocaleString("de-DE") +
+            " Gruppe(n) konnten wegen zwischenzeitlicher Änderungen nicht übernommen werden."
+          : "");
+    });
+  });
+
+  actions.append(selectAll, clearAll, confirmButton);
+  card.append(header, list, actions);
+  updateSelection();
+  return card;
+}
+
 function renderPersonOverview(overview: PersonOverview): void {
   personCandidates.replaceChildren();
   confirmedPersons.replaceChildren();
@@ -5114,7 +5774,24 @@ function renderPersonOverview(overview: PersonOverview): void {
   } else {
     const fragment = document.createDocumentFragment();
 
+    // Kandidatengruppen, die dieselbe bereits bekannte Person als besten
+    // Treffer haben, werden nicht mehr als verstreute Einzelkarten gerendert.
+    // Stattdessen kann man die komplette Ähnlichkeitsspanne einer Person in
+    // einer Sammelkarte von hoch nach niedrig prüfen und gemeinsam bestätigen.
+    const suggestionBuckets = groupedPersonSuggestionBuckets(visibleCandidates);
+    const summarizedCandidateIds = new Set<number>();
+
+    for (const bucket of suggestionBuckets) {
+      for (const entry of bucket.entries) {
+        summarizedCandidateIds.add(entry.candidate.id);
+      }
+      fragment.appendChild(
+        renderGroupedPersonSuggestionBucket(bucket, overview)
+      );
+    }
+
     for (const candidate of visibleCandidates) {
+      if (summarizedCandidateIds.has(candidate.id)) continue;
       const card = document.createElement("article");
       card.className = "person-candidate-card";
 
@@ -5347,7 +6024,7 @@ function renderPersonOverview(overview: PersonOverview): void {
           if (sourceId !== null) {
             // Nur die Personenansicht neu laden. Das ist bewusst read-only und
             // löst kein komplettes Re-Clustering tausender Gesichter aus.
-            await loadPersonOverview(sourceId);
+            await reloadPersonOverviewPreservingPosition(sourceId);
           } else {
             card.remove();
             await refreshIdentityTabStats();
@@ -5404,7 +6081,7 @@ function renderPersonOverview(overview: PersonOverview): void {
             " Gesichter dauerhaft ignoriert. Eindeutige zukünftige Treffer werden automatisch ausgeblendet.";
 
           const sourceId = selectedSourceId();
-          if (sourceId !== null) await loadPersonOverview(sourceId);
+          if (sourceId !== null) await reloadPersonOverviewPreservingPosition(sourceId);
           await refreshIdentityTabStats();
         });
       });
@@ -5584,7 +6261,7 @@ function renderPersonOverview(overview: PersonOverview): void {
           renameButton.disabled = true;
           await window.imageSorter.people.renamePerson(person.id, newName);
           const sourceId = selectedSourceId();
-          if (sourceId !== null) await loadPersonOverview(sourceId);
+          if (sourceId !== null) await reloadPersonOverviewPreservingPosition(sourceId);
           progressText.textContent = "Person wurde in „" + newName + "“ umbenannt.";
         });
       });
@@ -5659,6 +6336,8 @@ function renderPersonOverview(overview: PersonOverview): void {
 
     confirmedPersons.appendChild(fragment);
   }
+
+  renderPersonSerialOverview(overview);
 }
 
 async function loadPersonOverview(
@@ -5666,9 +6345,25 @@ async function loadPersonOverview(
   forceRefresh = false
 ): Promise<void> {
   refreshPeopleButton.disabled = true;
-  showBlockLoading(personCandidates, "Personenvorschläge werden geladen …");
-  showBlockLoading(confirmedPersons, "Bestätigte Personen werden geladen …");
-  personStatus.textContent = "Personendaten werden geladen …";
+
+  const workspacePage = personView.closest<HTMLElement>(".workspace-page");
+  const preserveWorkspacePosition =
+    !personView.hidden && workspacePage !== null && !workspacePage.hidden;
+  const workspaceScrollTop = preserveWorkspacePosition
+    ? appWorkspace.scrollTop
+    : 0;
+
+  // Während einer Bestätigung die vorhandenen Karten stehen lassen. Wenn wir
+  // sie vor der DB-Antwort durch einen kleinen Ladeblock ersetzen, schrumpft
+  // der Workspace und der Browser klemmt scrollTop bereits auf 0/oben fest.
+  if (!preserveWorkspacePosition) {
+    showBlockLoading(personCandidates, "Personenvorschläge werden geladen …");
+    showBlockLoading(confirmedPersons, "Bestätigte Personen werden geladen …");
+  }
+  personStatus.textContent = preserveWorkspacePosition
+    ? "Personendaten werden aktualisiert …"
+    : "Personendaten werden geladen …";
+
   try {
     const overview = await window.imageSorter.people.getOverview(
       sourceId,
@@ -5676,6 +6371,16 @@ async function loadPersonOverview(
     );
     lastPersonOverview = overview;
     renderPersonOverview(overview);
+
+    if (preserveWorkspacePosition) {
+      appWorkspace.scrollTop = workspaceScrollTop;
+      window.requestAnimationFrame(() => {
+        if (!personView.hidden && workspacePage !== null && !workspacePage.hidden) {
+          appWorkspace.scrollTop = workspaceScrollTop;
+        }
+      });
+    }
+
     await refreshIdentityTabStats();
   } finally {
     refreshPeopleButton.disabled = false;
@@ -6029,7 +6734,7 @@ function renderPetOverview(overview: PetOverview): void {
             );
 
           const sourceId = selectedSourceId();
-          if (sourceId !== null) await loadPetOverview(sourceId);
+          if (sourceId !== null) await reloadPetOverviewPreservingPosition(sourceId);
           progressText.textContent =
             result.detectionCount.toLocaleString("de-DE") +
             (result.detectionCount === 1
@@ -6062,7 +6767,7 @@ function renderPetOverview(overview: PetOverview): void {
           );
 
           const sourceId = selectedSourceId();
-          if (sourceId !== null) await loadPetOverview(sourceId);
+          if (sourceId !== null) await reloadPetOverviewPreservingPosition(sourceId);
           progressText.textContent =
             "Gruppe dauerhaft geteilt: " +
             result.selectedCount.toLocaleString("de-DE") +
@@ -6190,7 +6895,7 @@ function renderPetOverview(overview: PetOverview): void {
 
           const sourceId = selectedSourceId();
           if (sourceId !== null) {
-            await loadPetOverview(sourceId);
+            await reloadPetOverviewPreservingPosition(sourceId);
           } else {
             card.remove();
             await refreshIdentityTabStats();
@@ -6247,7 +6952,7 @@ function renderPetOverview(overview: PetOverview): void {
             " Hundefundstellen dauerhaft ignoriert. Eindeutige zukünftige Treffer werden automatisch ausgeblendet.";
 
           const sourceId = selectedSourceId();
-          if (sourceId !== null) await loadPetOverview(sourceId);
+          if (sourceId !== null) await reloadPetOverviewPreservingPosition(sourceId);
           await refreshIdentityTabStats();
         });
       });
@@ -6402,7 +7107,7 @@ function renderPetOverview(overview: PetOverview): void {
                 detection.petDetectionId
               );
               const sourceId = selectedSourceId();
-              if (sourceId !== null) await loadPetOverview(sourceId);
+              if (sourceId !== null) await reloadPetOverviewPreservingPosition(sourceId);
               progressText.textContent =
                 result.affectedPets > 0
                   ? "Automatische Zuordnung zu „" + pet.name +
@@ -6475,7 +7180,7 @@ function renderPetOverview(overview: PetOverview): void {
           renameButton.disabled = true;
           await window.imageSorter.pets.renamePet(pet.id, newName);
           const sourceId = selectedSourceId();
-          if (sourceId !== null) await loadPetOverview(sourceId);
+          if (sourceId !== null) await reloadPetOverviewPreservingPosition(sourceId);
           progressText.textContent =
             "Haustier wurde in „" + newName + "“ umbenannt.";
         });
@@ -6547,6 +7252,8 @@ function renderPetOverview(overview: PetOverview): void {
 
     confirmedPets.appendChild(fragment);
   }
+
+  renderPetSerialOverview(overview);
 }
 
 async function loadPetOverview(
@@ -6554,9 +7261,22 @@ async function loadPetOverview(
   forceRefresh = false
 ): Promise<void> {
   refreshPetsButton.disabled = true;
-  showBlockLoading(petCandidates, "Haustiergruppen werden geladen …");
-  showBlockLoading(confirmedPets, "Bestätigte Haustiere werden geladen …");
-  petStatus.textContent = "Haustierdaten werden geladen …";
+
+  const workspacePage = petView.closest<HTMLElement>(".workspace-page");
+  const preserveWorkspacePosition =
+    !petView.hidden && workspacePage !== null && !workspacePage.hidden;
+  const workspaceScrollTop = preserveWorkspacePosition
+    ? appWorkspace.scrollTop
+    : 0;
+
+  if (!preserveWorkspacePosition) {
+    showBlockLoading(petCandidates, "Haustiergruppen werden geladen …");
+    showBlockLoading(confirmedPets, "Bestätigte Haustiere werden geladen …");
+  }
+  petStatus.textContent = preserveWorkspacePosition
+    ? "Haustierdaten werden aktualisiert …"
+    : "Haustierdaten werden geladen …";
+
   try {
     const overview = await window.imageSorter.pets.getOverview(
       sourceId,
@@ -6564,10 +7284,32 @@ async function loadPetOverview(
     );
     lastPetOverview = overview;
     renderPetOverview(overview);
+
+    if (preserveWorkspacePosition) {
+      appWorkspace.scrollTop = workspaceScrollTop;
+      window.requestAnimationFrame(() => {
+        if (!petView.hidden && workspacePage !== null && !workspacePage.hidden) {
+          appWorkspace.scrollTop = workspaceScrollTop;
+        }
+      });
+    }
+
     await refreshIdentityTabStats();
   } finally {
     refreshPetsButton.disabled = false;
   }
+}
+
+async function reloadPersonOverviewPreservingPosition(
+  sourceId: number
+): Promise<void> {
+  await loadPersonOverview(sourceId);
+}
+
+async function reloadPetOverviewPreservingPosition(
+  sourceId: number
+): Promise<void> {
+  await loadPetOverview(sourceId);
 }
 
 function setPersonConfirmationMediaFilter(filter: ConfirmationMediaFilter): void {
@@ -6898,6 +7640,7 @@ async function refreshCatalog(): Promise<void> {
     renderPersonOverview({
       candidates: [],
       persons: [],
+      ungroupedFaces: [],
       clusteringPending: false,
       candidateTotal: 0,
       candidateFaceTotal: 0,
@@ -6906,6 +7649,7 @@ async function refreshCatalog(): Promise<void> {
     renderPetOverview({
       candidates: [],
       pets: [],
+      ungroupedPets: [],
       clusteringPending: false,
       candidateTotal: 0,
       candidateDetectionTotal: 0,
@@ -7674,6 +8418,8 @@ window.imageSorter.lifecycle.onShutdownStatus((status) => {
     analysisRefreshTimer,
     sourcePipelineRefreshTimer,
     identityStatsRefreshTimer,
+    personSerialRefreshTimer,
+    petSerialRefreshTimer,
     watchCatalogRefreshTimer
   ]) {
     if (timer !== null) window.clearTimeout(timer);
@@ -7681,6 +8427,8 @@ window.imageSorter.lifecycle.onShutdownStatus((status) => {
   analysisRefreshTimer = null;
   sourcePipelineRefreshTimer = null;
   identityStatsRefreshTimer = null;
+  personSerialRefreshTimer = null;
+  petSerialRefreshTimer = null;
   watchCatalogRefreshTimer = null;
 
   shutdownMessage.textContent = status.message;
@@ -7714,10 +8462,60 @@ window.imageSorter.analysis.onPipelineStatus((status) => {
   scheduleIdentityTabStatsRefresh();
 });
 
+function scheduleSerialConfirmationRefresh(
+  kind: "person" | "pet"
+): void {
+  const currentTimer =
+    kind === "person" ? personSerialRefreshTimer : petSerialRefreshTimer;
+  if (currentTimer !== null) {
+    window.clearTimeout(currentTimer);
+  }
+
+  const timer = window.setTimeout(() => {
+    if (kind === "person") personSerialRefreshTimer = null;
+    else petSerialRefreshTimer = null;
+
+    if (rendererShuttingDown) return;
+    const sourceId = selectedSourceId();
+    if (sourceId === null) return;
+
+    void runSafely(async () => {
+      if (kind === "person") {
+        await loadPersonOverview(sourceId);
+      } else {
+        await loadPetOverview(sourceId);
+      }
+      await refreshIdentityTabStats();
+    });
+  }, 700);
+
+  if (kind === "person") personSerialRefreshTimer = timer;
+  else petSerialRefreshTimer = timer;
+}
+
+window.addEventListener("serial-confirmation:changed", (event) => {
+  if (rendererShuttingDown) return;
+  const detail = (event as CustomEvent<{ kind: "person" | "pet" }>).detail;
+  if (!detail) return;
+
+  // Mehrere schnelle Ja-Klicks erzeugen nur einen gebündelten DB-Refresh.
+  // Die serielle UI selbst läuft bereits optimistisch mit den vorgeladenen
+  // Bildern weiter und darf nicht auf Overview-/Statistikabfragen warten.
+  scheduleSerialConfirmationRefresh(detail.kind);
+});
+
 window.imageSorter.people.onUpdated(() => {
   if (rendererShuttingDown) return;
   const sourceId = selectedSourceId();
   if (sourceId === null) return;
+
+  const serialView = document.querySelector<HTMLElement>("#personSerialView");
+  if (currentView === "people" && serialView && !serialView.hidden) {
+    // Während der schnellen seriellen Runde keine komplette Overview-Abfrage
+    // nach jedem einzelnen Hintergrund-Commit starten.
+    scheduleIdentityTabStatsRefresh();
+    return;
+  }
 
   void runSafely(async () => {
     await refreshIdentityTabStats();
@@ -7734,6 +8532,12 @@ window.imageSorter.pets.onUpdated(() => {
   if (rendererShuttingDown) return;
   const sourceId = selectedSourceId();
   if (sourceId === null) return;
+
+  const serialView = document.querySelector<HTMLElement>("#petSerialView");
+  if (currentView === "pets" && serialView && !serialView.hidden) {
+    scheduleIdentityTabStatsRefresh();
+    return;
+  }
 
   void runSafely(async () => {
     await refreshIdentityTabStats();

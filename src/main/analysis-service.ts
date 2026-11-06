@@ -106,6 +106,7 @@ const DEFAULT_STATUS: AnalysisWorkerStatus = {
 export class AnalysisService {
   private child: ChildProcessWithoutNullStreams | null = null;
   private readonly pending = new Map<string, Pending>();
+  private stdinWriteChain: Promise<void> = Promise.resolve();
   private stopping = false;
   private qwenServerPid: number | null = null;
   private workerCapabilities: Record<string, unknown> = {};
@@ -516,6 +517,9 @@ export class AnalysisService {
         settled = true;
 
         this.child = child;
+        // A new worker must not inherit backpressure from writes that belonged
+        // to an older, already terminated process.
+        this.stdinWriteChain = Promise.resolve();
         this.attachChild(child);
         this.devLog("SPAWN_EVENT", {
           label: candidate.label,
@@ -761,6 +765,64 @@ export class AnalysisService {
     });
   }
 
+  private enqueueWorkerWrite(
+    child: ChildProcessWithoutNullStreams,
+    requestId: string,
+    method: string,
+    data: string
+  ): Promise<void> {
+    const write = async (): Promise<void> => {
+      // A request can time out while waiting behind pipe backpressure. In that
+      // case it must never be written later as a zombie request.
+      if (!this.pending.has(requestId)) {
+        this.devLog("REQUEST_WRITE_SKIPPED_STALE", {
+          requestId,
+          method
+        });
+        return;
+      }
+
+      if (
+        this.child !== child ||
+        !child.stdin.writable ||
+        child.stdin.destroyed ||
+        child.stdin.writableEnded ||
+        child.killed ||
+        this.stopping
+      ) {
+        throw new Error(
+          "Analyse-Worker wird beendet oder ist nicht mehr schreibbar."
+        );
+      }
+
+      await new Promise<void>((resolve, reject) => {
+        const accepted = child.stdin.write(data, (error) => {
+          if (error) {
+            reject(error);
+            return;
+          }
+          resolve();
+        });
+
+        if (!accepted) {
+          this.devLog("REQUEST_WRITE_BACKPRESSURE", {
+            requestId,
+            method,
+            pendingRequests: this.pending.size
+          });
+        }
+      });
+    };
+
+    // Serialize writes to the worker pipe. Node's stdin stream previously
+    // accepted hundreds of concurrent writes while Python was not reading,
+    // eventually failing with ENOBUFS. The chain makes the stream's own
+    // backpressure authoritative without serializing worker execution.
+    const queued = this.stdinWriteChain.then(write, write);
+    this.stdinWriteChain = queued.catch(() => undefined);
+    return queued;
+  }
+
   private armPendingTimeout(id: string, pending: Pending): void {
     clearTimeout(pending.timeout);
     pending.timeout = setTimeout(() => {
@@ -858,36 +920,39 @@ export class AnalysisService {
       return response;
     }
 
-    child.stdin.write(
-      JSON.stringify({ id, method, payload }) + "\n",
-      (error) => {
-        if (!error) return;
+    void this.enqueueWorkerWrite(
+      child,
+      id,
+      method,
+      JSON.stringify({ id, method, payload }) + "\n"
+    ).catch((error) => {
+      const writeError =
+        error instanceof Error ? error : new Error(String(error));
 
-        const pending = this.pending.get(id);
-        if (pending) {
-          clearTimeout(pending.timeout);
-          this.pending.delete(id);
-          pending.reject(error);
-        }
+      const pending = this.pending.get(id);
+      if (pending) {
+        clearTimeout(pending.timeout);
+        this.pending.delete(id);
+        pending.reject(writeError);
+      }
 
-        // Beim App-Shutdown kann der Worker stdin bereits geschlossen haben.
-        // Fehler wie EPIPE/EOF dürfen dann nicht als uncaught exception enden.
-        if (this.stopping || child.killed || child.stdin.destroyed) {
-          this.devLog("REQUEST_WRITE_IGNORED_DURING_SHUTDOWN", {
-            requestId: id,
-            method,
-            error: error.message
-          });
-          return;
-        }
-
-        this.devLog("REQUEST_WRITE_ERROR", {
+      // Beim App-Shutdown kann der Worker stdin bereits geschlossen haben.
+      // Fehler wie EPIPE/EOF dürfen dann nicht als uncaught exception enden.
+      if (this.stopping || child.killed || child.stdin.destroyed) {
+        this.devLog("REQUEST_WRITE_IGNORED_DURING_SHUTDOWN", {
           requestId: id,
           method,
-          error: error.message
+          error: writeError.message
         });
+        return;
       }
-    );
+
+      this.devLog("REQUEST_WRITE_ERROR", {
+        requestId: id,
+        method,
+        error: writeError.message
+      });
+    });
     return response;
   }
 

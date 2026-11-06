@@ -1,4 +1,5 @@
 import path from "node:path";
+import { createServer, type Server as HttpServer } from "node:http";
 import { pathToFileURL } from "node:url";
 import { readFile, readdir, rm } from "node:fs/promises";
 import { app, BrowserWindow, clipboard, dialog, ipcMain, net, protocol, shell, type OpenDialogOptions } from "electron";
@@ -78,6 +79,7 @@ let catalogWatchService: CatalogWatchService | null = null;
 let thumbnailCacheRoot = "";
 let personRefreshTimer: NodeJS.Timeout | null = null;
 let personRefreshRunning = false;
+let personRefreshRescheduleRequested = false;
 let lifeAreaRuleRefreshTimer: NodeJS.Timeout | null = null;
 const groupedFaceEmbeddingCounts = new Map<number, number>();
 const groupedPetEmbeddingCounts = new Map<number, number>();
@@ -90,6 +92,96 @@ let qwenBenchmarkPreparing: Promise<void> | null = null;
 let backgroundPaused = false;
 let backgroundPauseChanging = false;
 const mediaStreamPathCache = new Map<number, string>();
+
+const REMOTE_WEB_PORT = 8787;
+const REMOTE_WEB_HOST = "::";
+let remoteWebServer: HttpServer | null = null;
+
+const EMPTY_REMOTE_START_PAGE =
+  "<!doctype html><html lang=\"de\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>Image Sortierer</title></head><body></body></html>";
+
+function startRemoteWebServer(): Promise<void> {
+  if (remoteWebServer) return Promise.resolve();
+
+  return new Promise<void>((resolve, reject) => {
+    const server = createServer((request, response) => {
+      const method = request.method ?? "GET";
+      let pathname = "/";
+
+      try {
+        pathname = new URL(
+          request.url ?? "/",
+          "http://localhost"
+        ).pathname;
+      } catch {
+        response.writeHead(400, {
+          "Content-Type": "text/plain; charset=utf-8",
+          "Cache-Control": "no-store"
+        });
+        response.end("Bad Request");
+        return;
+      }
+
+      if ((method === "GET" || method === "HEAD") && pathname === "/") {
+        response.writeHead(200, {
+          "Content-Type": "text/html; charset=utf-8",
+          "Cache-Control": "no-store",
+          "X-Content-Type-Options": "nosniff",
+          "Referrer-Policy": "no-referrer",
+          "Content-Security-Policy":
+            "default-src 'none'; base-uri 'none'; frame-ancestors 'none'"
+        });
+        response.end(method === "HEAD" ? undefined : EMPTY_REMOTE_START_PAGE);
+        return;
+      }
+
+      response.writeHead(404, {
+        "Content-Type": "text/plain; charset=utf-8",
+        "Cache-Control": "no-store",
+        "X-Content-Type-Options": "nosniff"
+      });
+      response.end("Not Found");
+    });
+
+    let settled = false;
+
+    server.once("error", (error) => {
+      if (remoteWebServer === server) remoteWebServer = null;
+      if (!settled) {
+        settled = true;
+        reject(error);
+      }
+    });
+
+    server.listen(
+      {
+        host: REMOTE_WEB_HOST,
+        port: REMOTE_WEB_PORT,
+        ipv6Only: false
+      },
+      () => {
+        remoteWebServer = server;
+        settled = true;
+        analysis?.logDiagnostic("REMOTE_WEB_SERVER_STARTED", {
+          host: REMOTE_WEB_HOST,
+          port: REMOTE_WEB_PORT
+        });
+        resolve();
+      }
+    );
+  });
+}
+
+function stopRemoteWebServer(): Promise<void> {
+  const server = remoteWebServer;
+  remoteWebServer = null;
+  if (!server) return Promise.resolve();
+
+  return new Promise<void>((resolve) => {
+    server.close(() => resolve());
+    setTimeout(resolve, 1000).unref();
+  });
+}
 
 const IDENTITY_FACE_BATCH_SIZE = 250;
 const IDENTITY_DOG_BATCH_SIZE = 50;
@@ -267,9 +359,15 @@ function schedulePersonRefresh(): void {
     shutdownInProgress ||
     backgroundPaused ||
     (!personService && !petService) ||
-    personRefreshRunning ||
     personRefreshTimer
   ) {
+    return;
+  }
+
+  if (personRefreshRunning) {
+    // Do not start another global clustering request in parallel. Remember the
+    // invalidation instead and run one fresh pass after the active pass ends.
+    personRefreshRescheduleRequested = true;
     return;
   }
 
@@ -282,9 +380,14 @@ function schedulePersonRefresh(): void {
     if (
       (!personService && !petService) ||
       isQuitting ||
-      backgroundPaused ||
-      personRefreshRunning
+      shutdownInProgress ||
+      backgroundPaused
     ) {
+      return;
+    }
+
+    if (personRefreshRunning) {
+      personRefreshRescheduleRequested = true;
       return;
     }
 
@@ -397,13 +500,20 @@ function schedulePersonRefresh(): void {
     })()
       .catch((error) => {
         // Bei einem temporären Clusterfehler bleiben die Embedding-Zähler
-        // unverändert; der nächste Sammellauf versucht denselben Stand erneut.
+        // unverändert. Ein Retry wird explizit vorgemerkt, statt darauf zu
+        // hoffen, dass zufällig noch ein weiterer Pipeline-Statuswechsel kommt.
+        personRefreshRescheduleRequested = true;
         analysis?.logDiagnostic("IDENTITY_REFRESH_ERROR", {
           error: error instanceof Error ? error.message : String(error)
         });
       })
       .finally(() => {
         personRefreshRunning = false;
+
+        if (personRefreshRescheduleRequested) {
+          personRefreshRescheduleRequested = false;
+          schedulePersonRefresh();
+        }
       });
   }, 30000);
   personRefreshTimer.unref();
@@ -1103,40 +1213,89 @@ function registerIpc(): void {
   );
 
   ipcMain.handle(
+    "catalog:assignVideoFrameIdentityNames",
+    (
+      _event,
+      mediaId: number,
+      assignments: Array<{
+        timestampMs: number;
+        kind: "person" | "pet";
+        detectionIndex: number;
+        petClass: "dog" | "cat" | null;
+        name: string;
+      }>
+    ) =>
+      catalog!.request("assignVideoFrameIdentityNames", {
+        mediaId,
+        assignments
+      })
+  );
+
+  ipcMain.handle(
     "catalog:reanalyzeMedia",
     async (_event, mediaId: number): Promise<ReanalyzeMediaResult> => {
-      // Keine laufende Analyse darf nach dem Reset alte Ergebnisse wieder
-      // eintragen. Deshalb beide Pipelines kurz sauber anhalten.
-      await analysisCoordinator?.pauseForMaintenance();
+      const requeueStartedAt = Date.now();
+      analysis?.logDiagnostic("REANALYZE_REQUEST_BEGIN", { mediaId });
+      // For video, rebuilding tracks does not touch image identity groups.
+      // Avoid waiting for a potentially lengthy global clustering refresh.
+      const info = await catalog!.request<MediaPreviewInfo | null>(
+        "getMediaPreviewInfo", { mediaId }
+      );
+      if (!info) throw new Error("Medium wurde nicht gefunden.");
+      const isVideo = VIDEO_EXTENSIONS.has(path.extname(info.absolutePath).toLowerCase());
+
+      // Old in-flight jobs keep their own IDs and are rejected if their result
+      // arrives after requeue. Only outstanding job claims must settle first.
+      await analysisCoordinator?.pauseForMaintenance(mediaId, false);
       thumbnailCoordinator?.stop();
 
-      if (personRefreshTimer) {
+      if (!isVideo && personRefreshTimer) {
         clearTimeout(personRefreshTimer);
         personRefreshTimer = null;
       }
 
       try {
-        await Promise.all([
-          thumbnailCoordinator?.waitUntilIdle() ?? Promise.resolve(),
-          waitForIdentityRefreshIdle()
-        ]);
+        // A single-media reset no longer waits for global identity clustering.
+        // The clustering snapshot is independent of this maintenance action;
+        // after requeue the source counters are invalidated and a fresh pass is
+        // guaranteed via personRefreshRescheduleRequested.
+        if (!isVideo && personRefreshRunning) {
+          personRefreshRescheduleRequested = true;
+          analysis?.logDiagnostic("REANALYZE_IDENTITY_REFRESH_DEFERRED", {
+            mediaId
+          });
+        }
+
+        await (
+          thumbnailCoordinator?.waitUntilClaimsSettled() ?? Promise.resolve()
+        );
         const result = await catalog!.request<ReanalyzeMediaResult>(
-          "reanalyzeMedia",
-          { mediaId }
+          "reanalyzeMedia", { mediaId }
         );
 
-        // Die gespeicherten Vergleichszähler dürfen den Neuaufbau nicht
-        // überspringen, falls nach der Neuanalyse wieder gleich viele Treffer
-        // entstehen wie zuvor.
-        groupedFaceEmbeddingCounts.delete(result.sourceId);
-        groupedPetEmbeddingCounts.delete(result.sourceId);
-        schedulePersonRefresh();
+        if (!isVideo) {
+          groupedFaceEmbeddingCounts.delete(result.sourceId);
+          groupedPetEmbeddingCounts.delete(result.sourceId);
+          schedulePersonRefresh();
+        }
         scheduleLifeAreaRuleRefresh();
+        analysis?.logDiagnostic("REANALYZE_QUEUED", {
+          mediaId,
+          isVideo,
+          stages: result.requeued,
+          elapsedMs: Date.now() - requeueStartedAt
+        });
 
         return result;
       } finally {
         analysisCoordinator?.resumeAfterMaintenance();
-        await thumbnailCoordinator?.start();
+        // Thumbnail restart can enqueue catalog backfill work; do not make the
+        // user's requeue response wait for these unrelated UI updates.
+        void thumbnailCoordinator?.start().catch((error) => {
+          analysis?.logDiagnostic("THUMBNAIL_RESTART_ERROR", {
+            mediaId, error: error instanceof Error ? error.message : String(error)
+          });
+        });
       }
     }
   );
@@ -1185,6 +1344,7 @@ function registerIpc(): void {
       clearTimeout(personRefreshTimer);
       personRefreshTimer = null;
     }
+    personRefreshRescheduleRequested = false;
 
     // Harter Stopp beendet auch einen eventuell laufenden Qwen/llama.cpp-
     // Prozessbaum und verwirft alle offenen Python-Requests sofort.
@@ -1627,6 +1787,16 @@ function registerIpc(): void {
   );
 
   ipcMain.handle(
+    "people:rejectDetectionSuggestion",
+    (
+      _event,
+      faceDetectionId: number,
+      personId: number
+    ): Promise<PersonCorrectionResult> =>
+      personService!.rejectDetectionSuggestion(faceDetectionId, personId)
+  );
+
+  ipcMain.handle(
     "people:removeCandidateFace",
     (
       _event,
@@ -1720,6 +1890,16 @@ function registerIpc(): void {
         expectedMemberSignature,
         ignoredIdentityId
       )
+  );
+
+  ipcMain.handle(
+    "pets:rejectDetectionSuggestion",
+    (
+      _event,
+      petDetectionId: number,
+      petId: number
+    ): Promise<PetCorrectionResult> =>
+      petService!.rejectDetectionSuggestion(petDetectionId, petId)
   );
 
   ipcMain.handle(
@@ -1874,6 +2054,14 @@ app.whenReady().then(() => {
   catalog.start();
   thumbnailService.start();
   registerIpc();
+
+  void startRemoteWebServer().catch((error) => {
+    analysis?.logDiagnostic("REMOTE_WEB_SERVER_START_ERROR", {
+      host: REMOTE_WEB_HOST,
+      port: REMOTE_WEB_PORT,
+      error: error instanceof Error ? error.message : String(error)
+    });
+  });
 
   protocol.handle("image-sorter-thumb", async (request) => {
     try {
@@ -2222,6 +2410,7 @@ async function prepareCatalogForShutdown(): Promise<boolean> {
 
 async function performGracefulShutdown(): Promise<void> {
   shutdownInProgress = true;
+  await stopRemoteWebServer();
   publishShutdownStatus(
     "PREPARING",
     "App wird sicher beendet. Neue Analysejobs und Dateiscans werden angehalten …"
@@ -2375,6 +2564,8 @@ function shutdownServicesImmediately(): void {
     personRefreshTimer = null;
   }
 
+  remoteWebServer?.close();
+  remoteWebServer = null;
   catalogWatchService?.stop();
   analysisCoordinator?.stop();
   thumbnailCoordinator?.stop();
