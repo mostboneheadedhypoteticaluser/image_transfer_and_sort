@@ -4997,6 +4997,10 @@ body {
   box-shadow: 0 1px 3px rgb(0 0 0 / 10%);
 }
 
+.serial-review-open {
+  overflow: hidden;
+}
+
 .serial-review-view {
   position: fixed;
   inset: 0;
