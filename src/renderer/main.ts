@@ -101,6 +101,10 @@ const watchState = document.querySelector<HTMLSpanElement>("#watchState")!;
 const watchDetail = document.querySelector<HTMLElement>("#watchDetail")!;
 const watchHistory = document.querySelector<HTMLDivElement>("#watchHistory")!;
 const workerState = document.querySelector<HTMLSpanElement>("#workerState")!;
+const analysisBoostButton = document.querySelector<HTMLButtonElement>("#analysisBoostButton")!;
+const analysisBoostIcon = document.querySelector<HTMLElement>("#analysisBoostIcon")!;
+const analysisBoostLabel = document.querySelector<HTMLElement>("#analysisBoostLabel")!;
+const analysisBoostHint = document.querySelector<HTMLElement>("#analysisBoostHint")!;
 const backgroundPauseButton = document.querySelector<HTMLButtonElement>("#backgroundPauseButton")!;
 const backgroundPauseIcon = document.querySelector<HTMLElement>("#backgroundPauseIcon")!;
 const backgroundPauseLabel = document.querySelector<HTMLElement>("#backgroundPauseLabel")!;
@@ -805,8 +809,28 @@ function renderBackgroundPauseState(state: BackgroundPauseState): void {
   }
 }
 
+function renderAnalysisBoostState(status: AnalysisWorkerStatus): void {
+  const active = status.boostEnabled === true;
+  analysisBoostButton.classList.toggle("active", active);
+  analysisBoostButton.setAttribute("aria-pressed", String(active));
+  analysisBoostIcon.textContent = "⚡";
+
+  if (active) {
+    analysisBoostLabel.textContent = "Boost aktiv";
+    analysisBoostHint.textContent = "100 % CPU · hohe Priorität";
+    analysisBoostButton.title =
+      "Analyse-Boost deaktivieren und auf Hintergrundbetrieb zurückschalten";
+  } else {
+    analysisBoostLabel.textContent = "Boost aktivieren";
+    analysisBoostHint.textContent = "100 % CPU · hohe Priorität";
+    analysisBoostButton.title =
+      "Analyse-Boost aktivieren: 100 % CPU-Zielbudget und hohe Prozesspriorität";
+  }
+}
+
 function renderAnalysisStatus(status: AnalysisWorkerStatus): void {
   latestAnalysisStatus = status;
+  renderAnalysisBoostState(status);
   analysisWorkerState.className = "analysis-state";
 
   switch (status.state) {
@@ -836,7 +860,7 @@ function renderAnalysisStatus(status: AnalysisWorkerStatus): void {
 
   analysisPython.textContent = status.python ?? "—";
   analysisPriority.textContent =
-    status.processPriority === "below-normal" ? "Niedrig" : status.processPriority;
+    status.processPriority === "high" ? "Hoch" : "Niedrig";
   analysisCpuBudget.textContent = `${status.cpuBudgetPercent} % Ziel`;
   if (document.activeElement !== analysisParallelSelect) {
     analysisParallelSelect.value = String(status.maxConcurrentJobs);
@@ -7973,6 +7997,27 @@ analysisCopyDevLogButton.addEventListener("click", () => {
   });
 });
 
+analysisBoostButton.addEventListener("click", () => {
+  const nextEnabled = !(latestAnalysisStatus?.boostEnabled ?? false);
+
+  void runSafely(async () => {
+    analysisBoostButton.disabled = true;
+    try {
+      const status = await window.imageSorter.analysis.setBoostEnabled(nextEnabled);
+      window.localStorage.setItem(
+        "image-sorter.analysis.boostEnabled",
+        String(status.boostEnabled)
+      );
+      renderAnalysisStatus(status);
+      progressText.textContent = status.boostEnabled
+        ? "Analyse-Boost aktiv: 100 % CPU-Zielbudget und hohe Prozesspriorität."
+        : "Analyse-Boost beendet: Hintergrundpriorität und 50 % CPU-Zielbudget.";
+    } finally {
+      analysisBoostButton.disabled = false;
+    }
+  });
+});
+
 analysisParallelSelect.addEventListener("change", () => {
   const requested = Math.max(
     1,
@@ -8631,6 +8676,13 @@ void window.imageSorter.analysis
       const result = await window.imageSorter.analysis.setMaxConcurrentJobs(saved);
       analysisParallelSelect.value = String(result.maxConcurrentJobs);
     }
+
+    const savedBoost =
+      window.localStorage.getItem("image-sorter.analysis.boostEnabled") === "true";
+    if (savedBoost !== status.boostEnabled) {
+      const boostedStatus = await window.imageSorter.analysis.setBoostEnabled(savedBoost);
+      renderAnalysisStatus(boostedStatus);
+    }
   })
   .catch((error) => {
     renderAnalysisStatus({
@@ -8638,6 +8690,7 @@ void window.imageSorter.analysis
       pid: null,
       python: null,
       processPriority: "below-normal",
+      boostEnabled: false,
       cpuBudgetPercent: 50,
       maxConcurrentJobs: 1,
       queuedJobs: 0,
