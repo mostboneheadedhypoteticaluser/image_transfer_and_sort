@@ -79,6 +79,8 @@ const api = {
     getStatus: (): Promise<AnalysisWorkerStatus> => ipcRenderer.invoke("analysis:getStatus"),
     setMaxConcurrentJobs: (value: number): Promise<{ maxConcurrentJobs: number }> =>
       ipcRenderer.invoke("analysis:setMaxConcurrentJobs", value),
+    setBoostEnabled: (enabled: boolean): Promise<AnalysisWorkerStatus> =>
+      ipcRenderer.invoke("analysis:setBoostEnabled", enabled),
     getPipelineStatus: (sourceId?: number): Promise<PipelineStatus> =>
       ipcRenderer.invoke("analysis:getPipelineStatus", sourceId),
     openDevLog: (): Promise<{ opened: true; path: string }> =>
