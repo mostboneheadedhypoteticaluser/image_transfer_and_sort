@@ -62,6 +62,7 @@ declare global {
       analysis: {
         getStatus(): Promise<AnalysisWorkerStatus>;
         setMaxConcurrentJobs(value: number): Promise<{ maxConcurrentJobs: number }>;
+        setBoostEnabled(enabled: boolean): Promise<AnalysisWorkerStatus>;
         getPipelineStatus(sourceId?: number): Promise<PipelineStatus>;
         openDevLog(): Promise<{ opened: true; path: string }>;
         copyDevLog(): Promise<{
