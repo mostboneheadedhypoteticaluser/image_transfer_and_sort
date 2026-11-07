@@ -434,6 +434,11 @@ function schedulePersonRefresh(): void {
         return;
       }
 
+      analysis?.setIdentityGroupingActivity(
+        faceChangedSources.length > 0,
+        petChangedSources.length > 0
+      );
+
       analysis?.logDiagnostic("IDENTITY_REFRESH_BEGIN", {
         faceSources: faceChangedSources.map((entry) => ({
           sourceId: entry.sourceId,
@@ -495,6 +500,7 @@ function schedulePersonRefresh(): void {
           if (!activeSourceIds.has(sourceId)) groupedPetEmbeddingCounts.delete(sourceId);
         }
       } finally {
+        analysis?.setIdentityGroupingActivity(false, false);
         // Kein exklusiver Maintenance-Stopp mehr nötig.
       }
     })()
