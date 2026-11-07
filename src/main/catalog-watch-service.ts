@@ -67,7 +67,8 @@ export class CatalogWatchService {
     private readonly onDiagnostic?: (
       event: string,
       fields?: Record<string, unknown>
-    ) => void
+    ) => void,
+    private readonly shouldDeferSafetyScan?: () => boolean
   ) {}
 
   async start(runInitialSafetyScan = true): Promise<void> {
@@ -715,6 +716,17 @@ export class CatalogWatchService {
     return false;
   }
 
+  private safetySweepShouldWait(): boolean {
+    if (this.hasLiveActivity()) return true;
+
+    try {
+      return this.shouldDeferSafetyScan?.() === true;
+    } catch {
+      // Eine optionale Lastprüfung darf den Watcher niemals stoppen.
+      return false;
+    }
+  }
+
   private scheduleInitialSafetySweep(delayMs: number): void {
     if (this.initialSafetyTimer) {
       clearTimeout(this.initialSafetyTimer);
@@ -724,7 +736,7 @@ export class CatalogWatchService {
       this.initialSafetyTimer = null;
       if (this.stopped) return;
 
-      if (this.hasLiveActivity()) {
+      if (this.safetySweepShouldWait()) {
         this.scheduleInitialSafetySweep(SAFETY_IDLE_RETRY_MS);
         return;
       }
@@ -738,9 +750,15 @@ export class CatalogWatchService {
     if (this.stopped) return;
 
     // Periodische Vollscans sind reine Sicherheitsnetze. Während gerade
-    // Live-Events verarbeitet werden, würden sie nur denselben Katalog-Worker
-    // zusätzlich blockieren. Der Live-Watcher hat dann Vorrang.
-    if (this.hasLiveActivity()) return;
+    // Live-Events oder Analysejobs laufen, würden sie denselben Katalog-Worker
+    // zusätzlich blockieren. Live-Watcher und Analyse-Backlog haben Vorrang.
+    if (this.safetySweepShouldWait()) {
+      this.onDiagnostic?.("WATCH_SAFETY_SCAN_DEFERRED", {
+        trigger,
+        reason: this.hasLiveActivity() ? "watch-activity" : "analysis-backlog"
+      });
+      return;
+    }
 
     try {
       await this.syncSources();
