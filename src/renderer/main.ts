@@ -349,6 +349,7 @@ let watchCatalogRefreshTimer: number | null = null;
 let rendererShuttingDown = false;
 let searchFacetsScopeKey: string | null = null;
 let latestAnalysisStatus: AnalysisWorkerStatus | null = null;
+let latestPipelineStatus: PipelineStatus | null = null;
 let backgroundPauseState: BackgroundPauseState = {
   paused: false,
   changing: false,
@@ -869,6 +870,10 @@ function renderAnalysisStatus(status: AnalysisWorkerStatus): void {
   analysisActive.textContent = status.activeJobs.toLocaleString("de-DE");
   analysisMessage.textContent = status.message;
 
+  if (latestPipelineStatus) {
+    renderLivePipelineActivity(latestPipelineStatus);
+  }
+
   if (status.progress?.kind === "qwen3vl") {
     const progress = status.progress;
     if (
@@ -954,6 +959,21 @@ function renderLivePipelineActivity(status: PipelineStatus): void {
     ["Videoanalyse", status.videoAnalysis.running]
   ];
 
+  const scanningSources = catalogWatchSnapshot.sources.filter(
+    (source) => source.state === "SCANNING"
+  ).length;
+  if (scanningSources > 0) {
+    stages.push(["Katalogscan", scanningSources]);
+  }
+
+  const identityGrouping = latestAnalysisStatus?.identityGrouping ?? "none";
+  if (identityGrouping === "people" || identityGrouping === "both") {
+    stages.push(["Personengruppierung", 1]);
+  }
+  if (identityGrouping === "pets" || identityGrouping === "both") {
+    stages.push(["Haustiergruppierung", 1]);
+  }
+
   const active = stages.filter(([, count]) => count > 0);
   const total = active.reduce((sum, [, count]) => sum + count, 0);
 
@@ -963,10 +983,11 @@ function renderLivePipelineActivity(status: PipelineStatus): void {
       ? active
           .map(([label, count]) => `${count}× ${label}`)
           .join(" · ")
-      : "Keine laufenden Pipeline-Jobs.";
+      : "Keine laufende Hintergrundarbeit.";
 }
 
 function renderPipelineStatus(status: PipelineStatus): void {
+  latestPipelineStatus = status;
   renderLivePipelineActivity(status);
   renderStage(technicalStageState, technicalStageCounts, status.technical);
   renderStage(thumbnailStageState, thumbnailStageCounts, status.thumbnails);
@@ -8413,6 +8434,9 @@ window.imageSorter.catalog.onWatchEvent((event) => {
   if (rendererShuttingDown) return;
   updateCatalogWatchSnapshot(event);
   renderCatalogWatchState();
+  if (latestPipelineStatus) {
+    renderLivePipelineActivity(latestPipelineStatus);
+  }
 
   if (event.sourceId !== selectedSourceId()) return;
 
@@ -8691,6 +8715,7 @@ void window.imageSorter.analysis
       python: null,
       processPriority: "below-normal",
       boostEnabled: false,
+      identityGrouping: "none",
       cpuBudgetPercent: 50,
       maxConcurrentJobs: 1,
       queuedJobs: 0,
@@ -8703,6 +8728,9 @@ void runSafely(async () => {
   catalogWatchSnapshot = await window.imageSorter.catalog.getWatchSnapshot();
   await loadSources();
   renderCatalogWatchState();
+  if (latestPipelineStatus) {
+    renderLivePipelineActivity(latestPipelineStatus);
+  }
   workerState.textContent = "Katalog-Worker aktiv";
   workerState.classList.add("ready");
 });
