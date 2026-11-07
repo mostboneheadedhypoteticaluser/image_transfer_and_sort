@@ -2052,7 +2052,14 @@ app.whenReady().then(() => {
     (event) => {
       sendToRenderer("catalog:watchEvent", event);
     },
-    (event, fields = {}) => analysis?.logDiagnostic(event, fields)
+    (event, fields = {}) => analysis?.logDiagnostic(event, fields),
+    () => {
+      const status = analysis?.getStatus();
+      return (
+        personRefreshRunning ||
+        Boolean(status && (status.queuedJobs > 0 || status.activeJobs > 0))
+      );
+    }
   );
 
   catalog.start();
