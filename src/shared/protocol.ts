@@ -10,7 +10,8 @@ export type AnalysisWorkerStatus = {
   state: "STARTING" | "READY" | "STOPPED" | "ERROR";
   pid: number | null;
   python: string | null;
-  processPriority: "below-normal";
+  processPriority: "below-normal" | "high";
+  boostEnabled: boolean;
   cpuBudgetPercent: number;
   maxConcurrentJobs: number;
   queuedJobs: number;
