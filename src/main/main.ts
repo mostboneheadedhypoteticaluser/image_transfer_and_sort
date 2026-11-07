@@ -1439,6 +1439,10 @@ function registerIpc(): void {
     return { maxConcurrentJobs };
   });
 
+  ipcMain.handle("analysis:setBoostEnabled", async (_event, enabled: boolean) =>
+    analysis!.setBoostEnabled(enabled === true)
+  );
+
   ipcMain.handle("analysis:openDevLog", async () => {
     const logPath = analysis!.getDevLogPath();
     const result = await shell.openPath(logPath);
