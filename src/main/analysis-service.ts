@@ -95,6 +95,7 @@ const DEFAULT_STATUS: AnalysisWorkerStatus = {
   pid: null,
   python: null,
   processPriority: "below-normal",
+  boostEnabled: false,
   cpuBudgetPercent: 50,
   maxConcurrentJobs: 2,
   queuedJobs: 0,
@@ -423,8 +424,8 @@ export class AnalysisService {
           "configure",
           {
             maxConcurrentJobs: this.status.maxConcurrentJobs,
-            cpuBudgetPercent: 50,
-            profile: "background"
+            cpuBudgetPercent: this.status.boostEnabled ? 100 : 50,
+            profile: this.status.boostEnabled ? "full" : "background"
           },
           15000
         );
@@ -527,19 +528,14 @@ export class AnalysisService {
           elapsedMs: Date.now() - launchAt
         });
 
-        try {
-          if (child.pid !== undefined) {
-            os.setPriority(child.pid, os.constants.priority.PRIORITY_BELOW_NORMAL);
-          }
-        } catch {
-          // Prozessisolation und Parallelitätslimit bleiben auch dann aktiv.
-        }
+        this.applyProcessPriority(child.pid ?? null);
 
         this.publish({
           state: "STARTING",
           pid: child.pid ?? null,
           python: candidate.label,
-          processPriority: "below-normal",
+          processPriority: this.status.boostEnabled ? "high" : "below-normal",
+          cpuBudgetPercent: this.status.boostEnabled ? 100 : 50,
           message: "Analyse-Worker antwortet, Konfiguration wird gesetzt …"
         });
 
@@ -581,6 +577,7 @@ export class AnalysisService {
           message.pid > 0
         ) {
           this.qwenServerPid = message.pid;
+          this.applyProcessPriority(message.pid);
           this.devLog("QWEN_SERVER_TRACKED", {
             qwenServerPid: message.pid,
             port: message.port ?? null
@@ -745,11 +742,74 @@ export class AnalysisService {
     });
   }
 
+  private applyProcessPriority(pid: number | null | undefined): void {
+    if (!pid || pid <= 0) return;
+
+    try {
+      os.setPriority(
+        pid,
+        this.status.boostEnabled
+          ? os.constants.priority.PRIORITY_HIGH
+          : os.constants.priority.PRIORITY_BELOW_NORMAL
+      );
+    } catch (error) {
+      this.devLog("PROCESS_PRIORITY_UPDATE_ERROR", {
+        pid,
+        boostEnabled: this.status.boostEnabled,
+        error: error instanceof Error ? error.message : String(error)
+      });
+    }
+  }
+
   private applyWorkerResult(result: Record<string, unknown>): void {
     this.publish({
       cpuBudgetPercent: Number(result.cpu_budget_percent ?? this.status.cpuBudgetPercent),
       maxConcurrentJobs: Number(result.max_concurrent_jobs ?? this.status.maxConcurrentJobs)
     });
+  }
+
+  async setBoostEnabled(enabled: boolean): Promise<AnalysisWorkerStatus> {
+    const boostEnabled = enabled === true;
+    const cpuBudgetPercent = boostEnabled ? 100 : 50;
+    const processPriority: AnalysisWorkerStatus["processPriority"] =
+      boostEnabled ? "high" : "below-normal";
+
+    this.publish({
+      boostEnabled,
+      cpuBudgetPercent,
+      processPriority
+    });
+
+    this.applyProcessPriority(this.child?.pid ?? null);
+    this.applyProcessPriority(this.qwenServerPid);
+
+    if (!this.child || this.status.state !== "READY") {
+      this.devLog("BOOST_MODE_UPDATED", {
+        boostEnabled,
+        cpuBudgetPercent,
+        processPriority,
+        workerReady: false
+      });
+      return this.getStatus();
+    }
+
+    const configured = await this.request<Record<string, unknown>>(
+      "configure",
+      {
+        maxConcurrentJobs: this.status.maxConcurrentJobs,
+        cpuBudgetPercent,
+        profile: boostEnabled ? "full" : "background"
+      },
+      15000
+    );
+    this.applyWorkerResult(configured);
+    this.devLog("BOOST_MODE_UPDATED", {
+      boostEnabled,
+      cpuBudgetPercent: this.status.cpuBudgetPercent,
+      processPriority,
+      workerReady: true
+    });
+    return this.getStatus();
   }
 
   setQueueState(
@@ -969,7 +1029,7 @@ export class AnalysisService {
       {
         maxConcurrentJobs,
         cpuBudgetPercent: this.status.cpuBudgetPercent,
-        profile: "background"
+        profile: this.status.boostEnabled ? "full" : "background"
       },
       15000
     );
