@@ -2968,6 +2968,69 @@ body {
   gap: 10px;
 }
 
+.analysis-boost-button {
+  width: 100%;
+  min-height: 58px;
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid rgba(255,255,255,.16);
+  border-radius: 11px;
+  background: rgba(255,255,255,.08);
+  color: #fff;
+  text-align: left;
+}
+
+.analysis-boost-button:hover:not(:disabled) {
+  background: rgba(255,255,255,.13);
+}
+
+.analysis-boost-button:disabled {
+  cursor: wait;
+  opacity: .72;
+}
+
+.analysis-boost-button.active {
+  border-color: rgba(255, 207, 74, .72);
+  background: #9a6500;
+  box-shadow: 0 8px 18px rgba(0, 0, 0, .18);
+}
+
+.analysis-boost-button.active:hover:not(:disabled) {
+  background: #855700;
+}
+
+.analysis-boost-icon {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 9px;
+  background: rgba(255,255,255,.16);
+  font-size: 19px;
+  font-weight: 900;
+  line-height: 1;
+}
+
+.analysis-boost-copy {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.analysis-boost-copy strong {
+  font-size: 13px;
+  line-height: 1.2;
+}
+
+.analysis-boost-copy small {
+  color: rgba(255,255,255,.78);
+  font-size: 10px;
+  line-height: 1.2;
+}
+
 .background-pause-button {
   width: 100%;
   min-height: 58px;
