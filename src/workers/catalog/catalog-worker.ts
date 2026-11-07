@@ -2640,47 +2640,33 @@ function sameIdentity(
   return left !== null && left === right;
 }
 
-function loadIndex(sourceId: number): {
+function indexedMediaFromRow(row: Record<string, unknown>): IndexedMedia {
+  return {
+    id: Number(row.id),
+    relativePath: String(row.relative_path),
+    absolutePath: String(row.absolute_path),
+    extension: String(row.extension),
+    sizeBytes: Number(row.size_bytes),
+    mtimeMs: Number(row.mtime_ms),
+    sha256: String(row.sha256),
+    deviceId: row.device_id === null ? null : String(row.device_id),
+    inode: row.inode === null ? null : String(row.inode),
+    availability: String(row.availability) as "AVAILABLE" | "MISSING",
+    inRecycleBin: Boolean(row.in_recycle_bin)
+  };
+}
+
+function createMediaIndex(rows: Array<Record<string, unknown>>): {
   byPath: Map<string, IndexedMedia>;
   byHash: Map<string, IndexedMedia[]>;
   byIdentity: Map<string, IndexedMedia[]>;
 } {
-  const rows = db.prepare(`
-    SELECT
-      id,
-      relative_path,
-      absolute_path,
-      extension,
-      size_bytes,
-      mtime_ms,
-      sha256,
-      device_id,
-      inode,
-      availability,
-      in_recycle_bin
-    FROM media_items
-    WHERE source_id=?
-  `).all(sourceId);
-
   const byPath = new Map<string, IndexedMedia>();
   const byHash = new Map<string, IndexedMedia[]>();
   const byIdentity = new Map<string, IndexedMedia[]>();
 
   for (const row of rows) {
-    const media: IndexedMedia = {
-      id: Number(row.id),
-      relativePath: String(row.relative_path),
-      absolutePath: String(row.absolute_path),
-      extension: String(row.extension),
-      sizeBytes: Number(row.size_bytes),
-      mtimeMs: Number(row.mtime_ms),
-      sha256: String(row.sha256),
-      deviceId: row.device_id === null ? null : String(row.device_id),
-      inode: row.inode === null ? null : String(row.inode),
-      availability: String(row.availability) as "AVAILABLE" | "MISSING",
-      inRecycleBin: Boolean(row.in_recycle_bin)
-    };
-
+    const media = indexedMediaFromRow(row);
     byPath.set(media.relativePath, media);
 
     const hashItems = byHash.get(media.sha256) ?? [];
@@ -2696,6 +2682,91 @@ function loadIndex(sourceId: number): {
   }
 
   return { byPath, byHash, byIdentity };
+}
+
+function indexedMediaSelectSql(): string {
+  return `
+    SELECT
+      id,
+      relative_path,
+      absolute_path,
+      extension,
+      size_bytes,
+      mtime_ms,
+      sha256,
+      device_id,
+      inode,
+      availability,
+      in_recycle_bin
+    FROM media_items
+  `;
+}
+
+function loadIndex(sourceId: number): {
+  byPath: Map<string, IndexedMedia>;
+  byHash: Map<string, IndexedMedia[]>;
+  byIdentity: Map<string, IndexedMedia[]>;
+} {
+  const rows = db.prepare(
+    indexedMediaSelectSql() + " WHERE source_id=?"
+  ).all(sourceId) as Array<Record<string, unknown>>;
+
+  return createMediaIndex(rows);
+}
+
+function loadIndexForPaths(
+  sourceId: number,
+  relativePaths: string[]
+): {
+  byPath: Map<string, IndexedMedia>;
+  byHash: Map<string, IndexedMedia[]>;
+  byIdentity: Map<string, IndexedMedia[]>;
+} {
+  const uniquePaths = [...new Set(relativePaths)];
+  if (uniquePaths.length === 0) return createMediaIndex([]);
+
+  const rows: Array<Record<string, unknown>> = [];
+  const chunkSize = 400;
+
+  for (let offset = 0; offset < uniquePaths.length; offset += chunkSize) {
+    const chunk = uniquePaths.slice(offset, offset + chunkSize);
+    const placeholders = chunk.map(() => "?").join(",");
+    const chunkRows = db.prepare(
+      indexedMediaSelectSql() +
+        ` WHERE source_id=? AND relative_path IN (${placeholders})`
+    ).all(sourceId, ...chunk) as Array<Record<string, unknown>>;
+    rows.push(...chunkRows);
+  }
+
+  return createMediaIndex(rows);
+}
+
+function loadIdentityCandidates(
+  sourceId: number,
+  deviceId: string,
+  inode: string
+): IndexedMedia[] {
+  if (!identityKey(deviceId, inode)) return [];
+
+  const rows = db.prepare(
+    indexedMediaSelectSql() +
+      " WHERE source_id=? AND device_id=? AND inode=?"
+  ).all(sourceId, deviceId, inode) as Array<Record<string, unknown>>;
+
+  return rows.map(indexedMediaFromRow);
+}
+
+function loadHashCandidates(
+  sourceId: number,
+  hash: string,
+  sizeBytes: number
+): IndexedMedia[] {
+  const rows = db.prepare(
+    indexedMediaSelectSql() +
+      " WHERE source_id=? AND sha256=? AND size_bytes=?"
+  ).all(sourceId, hash, sizeBytes) as Array<Record<string, unknown>>;
+
+  return rows.map(indexedMediaFromRow);
 }
 
 function loadDirectoryIndex(sourceId: number): DirectoryIndex {
@@ -3024,6 +3095,42 @@ async function uniqueMoveCandidate(
   }
 
   return missingAtOldLocation.length === 1 ? missingAtOldLocation[0] : null;
+}
+
+async function uniqueIdentityMoveCandidateFromDb(
+  sourceId: number,
+  deviceId: string,
+  inode: string,
+  seenIds: Set<number>
+): Promise<IndexedMedia | null> {
+  const key = identityKey(deviceId, inode);
+  if (!key) return null;
+
+  const candidates = loadIdentityCandidates(sourceId, deviceId, inode);
+  return uniqueIdentityMoveCandidate(
+    deviceId,
+    inode,
+    new Map([[key, candidates]]),
+    seenIds
+  );
+}
+
+async function uniqueMoveCandidateFromDb(
+  sourceId: number,
+  hash: string,
+  sizeBytes: number,
+  deviceId: string,
+  inode: string,
+  seenIds: Set<number>
+): Promise<IndexedMedia | null> {
+  return uniqueMoveCandidate(
+    hash,
+    sizeBytes,
+    deviceId,
+    inode,
+    new Map([[hash, loadHashCandidates(sourceId, hash, sizeBytes)]]),
+    seenIds
+  );
 }
 
 function normalizeRecyclePath(value: string): string {
@@ -4277,7 +4384,12 @@ async function reconcileSourceChanges(
     scanId = Number(started.lastInsertRowid);
 
     const token = randomUUID();
-    const { byPath, byHash, byIdentity } = loadIndex(sourceId);
+    // Normale Datei-Events dürfen nicht mehr den kompletten Medienbestand der
+    // Quelle in drei Maps laden. Bei Verzeichnisereignissen bleibt der volle
+    // Index bewusst erhalten, weil Directory-Moves ganze Teilbäume umschreiben.
+    const { byPath, byHash, byIdentity } = containsDirectoryPath
+      ? loadIndex(sourceId)
+      : loadIndexForPaths(sourceId, relativePaths);
     const directoryIndex: DirectoryIndex = containsDirectoryPath
       ? loadDirectoryIndex(sourceId)
       : {
@@ -4478,12 +4590,19 @@ async function reconcileSourceChanges(
         return;
       }
 
-      const identityCandidate = await uniqueIdentityMoveCandidate(
-        file.deviceId,
-        file.inode,
-        byIdentity,
-        seenIds
-      );
+      const identityCandidate = containsDirectoryPath
+        ? await uniqueIdentityMoveCandidate(
+            file.deviceId,
+            file.inode,
+            byIdentity,
+            seenIds
+          )
+        : await uniqueIdentityMoveCandidateFromDb(
+            sourceId,
+            file.deviceId,
+            file.inode,
+            seenIds
+          );
 
       if (identityCandidate) {
         const previousPath = identityCandidate.relativePath;
@@ -4525,14 +4644,23 @@ async function reconcileSourceChanges(
       }
 
       const hash = await sha256File(file.absolutePath);
-      const moveCandidate = await uniqueMoveCandidate(
-        hash,
-        file.sizeBytes,
-        file.deviceId,
-        file.inode,
-        byHash,
-        seenIds
-      );
+      const moveCandidate = containsDirectoryPath
+        ? await uniqueMoveCandidate(
+            hash,
+            file.sizeBytes,
+            file.deviceId,
+            file.inode,
+            byHash,
+            seenIds
+          )
+        : await uniqueMoveCandidateFromDb(
+            sourceId,
+            hash,
+            file.sizeBytes,
+            file.deviceId,
+            file.inode,
+            seenIds
+          );
 
       if (moveCandidate) {
         const previousPath = moveCandidate.relativePath;
