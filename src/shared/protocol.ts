@@ -12,6 +12,7 @@ export type AnalysisWorkerStatus = {
   python: string | null;
   processPriority: "below-normal" | "high";
   boostEnabled: boolean;
+  identityGrouping: "none" | "people" | "pets" | "both";
   cpuBudgetPercent: number;
   maxConcurrentJobs: number;
   queuedJobs: number;
