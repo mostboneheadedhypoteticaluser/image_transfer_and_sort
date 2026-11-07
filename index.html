@@ -24,6 +24,19 @@
           </nav>
           <div class="sidebar-status">
             <button
+              id="analysisBoostButton"
+              class="analysis-boost-button"
+              type="button"
+              aria-pressed="false"
+              title="Analyse-Boost aktivieren: 100 % CPU-Zielbudget und hohe Prozesspriorität"
+            >
+              <span id="analysisBoostIcon" class="analysis-boost-icon">⚡</span>
+              <span class="analysis-boost-copy">
+                <strong id="analysisBoostLabel">Boost aktivieren</strong>
+                <small id="analysisBoostHint">100 % CPU · hohe Priorität</small>
+              </span>
+            </button>
+            <button
               id="backgroundPauseButton"
               class="background-pause-button"
               type="button"
