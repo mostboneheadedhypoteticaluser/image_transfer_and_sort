@@ -96,6 +96,7 @@ const DEFAULT_STATUS: AnalysisWorkerStatus = {
   python: null,
   processPriority: "below-normal",
   boostEnabled: false,
+  identityGrouping: "none",
   cpuBudgetPercent: 50,
   maxConcurrentJobs: 2,
   queuedJobs: 0,
@@ -219,6 +220,14 @@ export class AnalysisService {
 
   getStatus(): AnalysisWorkerStatus {
     return { ...this.status };
+  }
+
+  setIdentityGroupingActivity(people: boolean, pets: boolean): void {
+    const identityGrouping: AnalysisWorkerStatus["identityGrouping"] =
+      people && pets ? "both" : people ? "people" : pets ? "pets" : "none";
+
+    if (this.status.identityGrouping === identityGrouping) return;
+    this.publish({ identityGrouping });
   }
 
   isQwen3vl4bAvailable(): boolean {
