@@ -502,21 +502,57 @@ export const REMOTE_START_PAGE = String.raw`<!doctype html>
     await loadCandidates(false);
     window.scrollTo({top:0,behavior:"smooth"});
   }
+  function currentCandidate(id){
+    var data=state.confirmMode==="people"?state.people:state.pets;
+    var candidates=data&&data.candidates?data.candidates:[];
+    return candidates.find(function(c){return Number(c.id)===Number(id);})||null;
+  }
   async function confirmCandidate(id,button){
     var input=document.querySelector('[data-candidate-name="'+id+'"]'), name=input&&input.value?input.value.trim():"";
     if(!name){toast("Bitte einen Namen eingeben.");return;}
+    var candidate=currentCandidate(id);
+    if(!candidate){toast("Die Gruppe ist nicht mehr aktuell. Bitte neu laden.");return;}
+    var payload={candidateId:id,name:name};
+    if(state.confirmMode==="people"){
+      payload.fallbackFaceDetectionId=candidate.representativeFaceId||(candidate.faces&&candidate.faces[0]&&candidate.faces[0].faceDetectionId)||null;
+      payload.expectedFaceCount=candidate.faceCount;
+      payload.expectedMemberSignature=candidate.memberSignature;
+    }else{
+      var suggestedName=candidate.suggestedPetName||(candidate.suggestedPets&&candidate.suggestedPets[0]&&candidate.suggestedPets[0].petName)||"";
+      var suggestedId=candidate.suggestedPetId||(candidate.suggestedPets&&candidate.suggestedPets[0]&&candidate.suggestedPets[0].petId)||null;
+      if(suggestedId&&suggestedName&&name.toLocaleLowerCase("de-DE")!==String(suggestedName).toLocaleLowerCase("de-DE")){
+        payload.rejectedPetId=suggestedId;
+      }
+      payload.fallbackPetDetectionId=candidate.representativePetId||(candidate.pets&&candidate.pets[0]&&candidate.pets[0].petDetectionId)||null;
+      payload.expectedDetectionCount=candidate.detectionCount;
+      payload.expectedMemberSignature=candidate.memberSignature;
+    }
     button.disabled=true;
     try{
-      await apiPost("/api/"+state.confirmMode+"/confirm",{candidateId:id,name:name});
+      var result=await apiPost("/api/"+state.confirmMode+"/confirm",payload);
       state.identityOptions=null;
-      toast("Bestätigt.");
+      toast(state.confirmMode==="people"
+        ? fmt.format(result.faceCount||0)+" Gesichter bestätigt."
+        : fmt.format(result.detectionCount||0)+" Fundstellen bestätigt.");
       await loadCandidates(false);
     }catch(e){toast(e.message);}finally{button.disabled=false;}
   }
   async function ignoreCandidate(id,button){
+    var candidate=currentCandidate(id);
+    if(!candidate){toast("Die Gruppe ist nicht mehr aktuell. Bitte neu laden.");return;}
+    var payload={candidateId:id,ignoredIdentityId:candidate.ignoredIdentityId||null};
+    if(state.confirmMode==="people"){
+      payload.fallbackFaceDetectionId=candidate.representativeFaceId||(candidate.faces&&candidate.faces[0]&&candidate.faces[0].faceDetectionId)||null;
+      payload.expectedFaceCount=candidate.faceCount;
+      payload.expectedMemberSignature=candidate.memberSignature;
+    }else{
+      payload.fallbackPetDetectionId=candidate.representativePetId||(candidate.pets&&candidate.pets[0]&&candidate.pets[0].petDetectionId)||null;
+      payload.expectedDetectionCount=candidate.detectionCount;
+      payload.expectedMemberSignature=candidate.memberSignature;
+    }
     button.disabled=true;
     try{
-      await apiPost("/api/"+state.confirmMode+"/ignore",{candidateId:id});
+      await apiPost("/api/"+state.confirmMode+"/ignore",payload);
       toast("Kandidat ignoriert.");
       await loadCandidates(false);
     }catch(e){toast(e.message);}finally{button.disabled=false;}
@@ -531,7 +567,9 @@ export const REMOTE_START_PAGE = String.raw`<!doctype html>
   el("candidateNext").addEventListener("click",function(){changeCandidatePage(1).catch(function(e){toast(e.message);});});
   el("confirmRefresh").addEventListener("click",function(){
     state.confirmPage[state.confirmMode]=0;
-    loadCandidates(true).catch(function(e){toast(e.message);});
+    loadCandidates(true)
+      .then(function(){toast("Neugruppierung läuft im Hintergrund. Der bisherige Stand bleibt sichtbar.");})
+      .catch(function(e){toast(e.message);});
   });
 
   var candidateTouchStart=null;
