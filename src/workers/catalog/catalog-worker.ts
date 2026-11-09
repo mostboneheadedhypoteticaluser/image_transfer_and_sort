@@ -8334,10 +8334,15 @@ function listPetCandidates(
       pe.vector_blob
     FROM pet_candidate_items pci
     JOIN pet_embeddings pe ON pe.pet_detection_id=pci.pet_detection_id
+    JOIN pet_fused_detections pd ON pd.id=pci.pet_detection_id
+    JOIN media_items m ON m.id=pd.media_id
     LEFT JOIN pet_assignments pa
       ON pa.pet_detection_id=pci.pet_detection_id
     WHERE pci.candidate_id=?
       AND pe.model_version='DogReID DINOv2-B14 0.2.0'
+      AND m.availability='AVAILABLE'
+      AND pd.input_sha256=m.sha256
+      AND pe.input_sha256=m.sha256
       AND pa.pet_detection_id IS NULL
     ORDER BY pci.pet_detection_id
   `);
@@ -8879,8 +8884,12 @@ function confirmPetCandidate(
   const members = db.prepare(`
     SELECT pci.pet_detection_id, pci.similarity
     FROM pet_candidate_items pci
+    JOIN pet_fused_detections pd ON pd.id=pci.pet_detection_id
+    JOIN media_items m ON m.id=pd.media_id
     LEFT JOIN pet_assignments pa ON pa.pet_detection_id=pci.pet_detection_id
     WHERE pci.candidate_id=?
+      AND m.availability='AVAILABLE'
+      AND pd.input_sha256=m.sha256
       AND pa.pet_detection_id IS NULL
     ORDER BY pci.pet_detection_id
   `).all(resolvedCandidateId);
@@ -10508,11 +10517,15 @@ function listPersonCandidates(
   `).all(sourceId, limit);
 
   const memberSignatureQuery = db.prepare(`
-    SELECT face_detection_id
+    SELECT pcf.face_detection_id
     FROM person_candidate_faces pcf
+    JOIN face_detections fd ON fd.id=pcf.face_detection_id
+    JOIN media_items m ON m.id=fd.media_id
     LEFT JOIN person_face_assignments pfa
       ON pfa.face_detection_id=pcf.face_detection_id
     WHERE pcf.candidate_id=?
+      AND m.availability='AVAILABLE'
+      AND fd.input_sha256=m.sha256
       AND pfa.face_detection_id IS NULL
     ORDER BY pcf.face_detection_id
   `);
@@ -10550,10 +10563,15 @@ function listPersonCandidates(
       fe.vector_blob
     FROM person_candidate_faces pcf
     JOIN face_embeddings fe ON fe.face_detection_id=pcf.face_detection_id
+    JOIN face_detections fd ON fd.id=pcf.face_detection_id
+    JOIN media_items m ON m.id=fd.media_id
     LEFT JOIN person_face_assignments pfa
       ON pfa.face_detection_id=pcf.face_detection_id
     WHERE pcf.candidate_id=?
       AND fe.model_version='SFace 2021dec'
+      AND m.availability='AVAILABLE'
+      AND fd.input_sha256=m.sha256
+      AND fe.input_sha256=m.sha256
       AND pfa.face_detection_id IS NULL
     ORDER BY pcf.face_detection_id
   `);
@@ -11609,9 +11627,13 @@ function confirmPersonCandidate(
   const members = db.prepare(`
     SELECT pcf.face_detection_id, pcf.similarity
     FROM person_candidate_faces pcf
+    JOIN face_detections fd ON fd.id=pcf.face_detection_id
+    JOIN media_items m ON m.id=fd.media_id
     LEFT JOIN person_face_assignments pfa
       ON pfa.face_detection_id=pcf.face_detection_id
     WHERE pcf.candidate_id=?
+      AND m.availability='AVAILABLE'
+      AND fd.input_sha256=m.sha256
       AND pfa.face_detection_id IS NULL
     ORDER BY pcf.face_detection_id
   `).all(resolvedCandidateId);
