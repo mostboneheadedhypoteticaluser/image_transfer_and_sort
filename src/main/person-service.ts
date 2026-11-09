@@ -47,7 +47,8 @@ export class PersonService {
     allowWhilePending = false,
     rebuildIfNeeded = true,
     candidateLimit = 500,
-    includeSupporting = true
+    includeSupporting = true,
+    readOnly = false
   ): Promise<PersonOverview> {
     const queue = await this.catalog.request<AnalysisQueueStats>(
       "getAnalysisQueueStats",
@@ -60,6 +61,7 @@ export class PersonService {
     const clusteringPending = queue.pending > 0 || queue.running > 0;
 
     if (
+      !readOnly &&
       (!clusteringPending || allowWhilePending) &&
       this.analysis.getStatus().state === "READY"
     ) {
@@ -174,7 +176,8 @@ export class PersonService {
     forceRefresh = false,
     candidateLimit = 500,
     candidateOffset = 0,
-    includeSupporting = true
+    includeSupporting = true,
+    readOnly = false
   ): Promise<PersonOverview> {
     const sources = await this.catalog.request<Array<{
       id: number;
@@ -205,7 +208,8 @@ export class PersonService {
           false,
           forceRefresh,
           sourceWindow,
-          includeSupporting
+          includeSupporting,
+          readOnly
         )
       );
     }
