@@ -303,26 +303,14 @@ function startRemoteWebServer(): Promise<void> {
         }
 
         if ((method === "GET" || method === "HEAD") && pathname === "/api/remote-status") {
-          const [stats, moduleQueues] = catalog
-            ? await Promise.all([
-                catalog.request<CatalogStats>("getStats"),
-                catalog.request<{
-                  byModule: Record<string, AnalysisQueueStats>;
-                  petDetection: AnalysisQueueStats;
-                }>("getPipelineQueueStats")
-              ])
-            : [null, { byModule: {}, petDetection: { ...EMPTY_QUEUE } }];
-
           const payload = {
             ok: true,
             app: "Image Sortierer",
             serverTime: new Date().toISOString(),
             catalogReady: Boolean(catalog),
-            stats,
             background: backgroundPauseState(),
             analysis: analysis?.getStatus() ?? null,
-            pipeline: pipelineStatus,
-            moduleQueues
+            pipeline: pipelineStatus
           };
 
           if (method === "HEAD") {
@@ -333,6 +321,24 @@ function startRemoteWebServer(): Promise<void> {
             response.end();
           } else {
             writeRemoteJson(response, 200, payload);
+          }
+          return;
+        }
+
+        if ((method === "GET" || method === "HEAD") && pathname === "/api/remote-summary") {
+          if (!catalog) throw new Error("Katalog ist noch nicht bereit.");
+          const summary = await catalog.request<Pick<
+            CatalogStats,
+            "total" | "available" | "missing" | "persons" | "pets" | "lastScan"
+          >>("getRemoteSummary");
+          if (method === "HEAD") {
+            response.writeHead(200, {
+              ...REMOTE_WEB_SECURITY_HEADERS,
+              "Content-Type": "application/json; charset=utf-8"
+            });
+            response.end();
+          } else {
+            writeRemoteJson(response, 200, summary);
           }
           return;
         }
