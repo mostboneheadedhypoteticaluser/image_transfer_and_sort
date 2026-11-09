@@ -8517,26 +8517,82 @@ function listPetCandidates(
       `).all(sourceId, limit);
 
   if (summaryOnly) {
-    return candidates.map((candidate) => ({
-      id: Number(candidate.id),
-      petClass: String(candidate.pet_class),
-      detectionCount: Number(candidate.detection_count),
-      newestPetId: Number(candidate.newest_pet_id),
-      memberSignature: "",
-      representativePetId:
-        candidate.first_pet_id === null || candidate.first_pet_id === undefined
-          ? null
-          : Number(candidate.first_pet_id),
-      averageSimilarity: Number(candidate.average_similarity),
-      minSimilarity: Number(candidate.min_similarity),
-      suggestedPetId: null,
-      suggestedPetName: null,
-      suggestedPetSimilarity: null,
-      suggestedPets: [],
-      ignoredIdentityId: null,
-      ignoredSimilarity: null,
-      pets: []
-    }));
+    const knownPets = knownPetCentroids();
+    const embeddingQuery = db.prepare(`
+      SELECT
+        pe.dimension,
+        pe.vector_blob
+      FROM pet_candidate_items pci
+      JOIN pet_embeddings pe ON pe.pet_detection_id=pci.pet_detection_id
+      JOIN pet_fused_detections pd ON pd.id=pci.pet_detection_id
+      JOIN media_items m ON m.id=pd.media_id
+      LEFT JOIN pet_assignments pa
+        ON pa.pet_detection_id=pci.pet_detection_id
+      WHERE pci.candidate_id=?
+        AND pe.model_version='DogReID DINOv2-B14 0.2.0'
+        AND m.availability='AVAILABLE'
+        AND pd.input_sha256=m.sha256
+        AND pe.input_sha256=m.sha256
+        AND pa.pet_detection_id IS NULL
+      ORDER BY pci.pet_detection_id
+    `);
+    const exclusionQuery = db.prepare(`
+      SELECT 1
+      FROM pet_candidate_items pci
+      JOIN pet_assignment_exclusions pae
+        ON pae.pet_detection_id=pci.pet_detection_id
+      WHERE pci.candidate_id=?
+        AND pae.pet_id=?
+      LIMIT 1
+    `);
+
+    return candidates.map((candidate) => {
+      const candidateId = Number(candidate.id);
+      const candidateVector = centroid(
+        embeddingQuery.all(candidateId).map((row) =>
+          vectorFromBlob(row.vector_blob, Number(row.dimension))
+        )
+      );
+      const suggestedPets = candidateVector
+        ? knownPets
+            .filter(
+              (known) =>
+                known.petClass === String(candidate.pet_class) &&
+                !exclusionQuery.get(candidateId, known.id)
+            )
+            .map((known) => ({
+              petId: known.id,
+              petName: known.name,
+              similarity: cosineSimilarity(candidateVector, known.vector),
+              representativePetId: known.representativePetId
+            }))
+            .filter((match) => match.similarity >= 0.60)
+            .sort((left, right) => right.similarity - left.similarity)
+            .slice(0, 3)
+        : [];
+      const bestPetSuggestion = suggestedPets[0] ?? null;
+
+      return {
+        id: candidateId,
+        petClass: String(candidate.pet_class),
+        detectionCount: Number(candidate.detection_count),
+        newestPetId: Number(candidate.newest_pet_id),
+        memberSignature: "",
+        representativePetId:
+          candidate.first_pet_id === null || candidate.first_pet_id === undefined
+            ? null
+            : Number(candidate.first_pet_id),
+        averageSimilarity: Number(candidate.average_similarity),
+        minSimilarity: Number(candidate.min_similarity),
+        suggestedPetId: bestPetSuggestion?.petId ?? null,
+        suggestedPetName: bestPetSuggestion?.petName ?? null,
+        suggestedPetSimilarity: bestPetSuggestion?.similarity ?? null,
+        suggestedPets,
+        ignoredIdentityId: null,
+        ignoredSimilarity: null,
+        pets: []
+      };
+    });
   }
 
   const itemQuery = db.prepare(`
@@ -8766,7 +8822,7 @@ function listPetCandidateItems(
       ? -1
       : Number(candidate.representative_pet_id);
 
-  return db.prepare(`
+  const rows = db.prepare(`
     SELECT
       pci.pet_detection_id,
       pd.media_id,
@@ -8775,35 +8831,70 @@ function listPetCandidateItems(
       pd.x,
       pd.y,
       pd.width,
-      pd.height
+      pd.height,
+      pe.dimension,
+      pe.vector_blob,
+      pd.pet_class
     FROM pet_candidate_items pci
     JOIN pet_fused_detections pd ON pd.id=pci.pet_detection_id
     JOIN media_items m ON m.id=pd.media_id
+    JOIN pet_embeddings pe ON pe.pet_detection_id=pci.pet_detection_id
     LEFT JOIN pet_assignments pa
       ON pa.pet_detection_id=pci.pet_detection_id
     WHERE pci.candidate_id=?
       AND m.availability='AVAILABLE'
       AND pd.input_sha256=m.sha256
+      AND pe.input_sha256=m.sha256
+      AND pe.model_version='DogReID DINOv2-B14 0.2.0'
       AND pa.pet_detection_id IS NULL
     ORDER BY
       CASE WHEN pci.pet_detection_id=? THEN 0 ELSE 1 END,
       pci.similarity DESC,
       pci.pet_detection_id ASC
     LIMIT ? OFFSET ?
-  `).all(candidateId, representativePetId, limit, offset).map((row) => ({
-    petDetectionId: Number(row.pet_detection_id),
-    mediaId: Number(row.media_id),
-    relativePath: String(row.relative_path),
-    similarity: Number(row.similarity),
-    x: Number(row.x),
-    y: Number(row.y),
-    width: Number(row.width),
-    height: Number(row.height),
-    suggestedPets: []
-  }));
+  `).all(candidateId, representativePetId, limit, offset);
+
+  const knownPets = knownPetCentroids();
+  const exclusionQuery = db.prepare(
+    "SELECT 1 FROM pet_assignment_exclusions " +
+    "WHERE pet_detection_id=? AND pet_id=? LIMIT 1"
+  );
+
+  return rows.map((row) => {
+    const petDetectionId = Number(row.pet_detection_id);
+    const petClass = String(row.pet_class);
+    const vector = vectorFromBlob(row.vector_blob, Number(row.dimension));
+    const suggestedPets = knownPets
+      .filter(
+        (known) =>
+          known.petClass === petClass &&
+          !exclusionQuery.get(petDetectionId, known.id)
+      )
+      .map((known) => ({
+        petId: known.id,
+        petName: known.name,
+        similarity: cosineSimilarity(vector, known.vector),
+        representativePetId: known.representativePetId
+      }))
+      .filter((match) => match.similarity >= 0.52)
+      .sort((left, right) => right.similarity - left.similarity)
+      .slice(0, 5);
+
+    return {
+      petDetectionId,
+      mediaId: Number(row.media_id),
+      relativePath: String(row.relative_path),
+      similarity: Number(row.similarity),
+      x: Number(row.x),
+      y: Number(row.y),
+      width: Number(row.width),
+      height: Number(row.height),
+      suggestedPets
+    };
+  });
 }
 
-function listPets(sourceId: number) {
+function listPets(sourceId: number, summaryOnly = false) {
   const pets = db.prepare(`
     SELECT
       p.id,
@@ -8871,6 +8962,21 @@ function listPets(sourceId: number) {
     )
     ORDER BY p.name COLLATE NOCASE, p.id
   `).all(sourceId, sourceId, sourceId, sourceId, sourceId, sourceId);
+
+  if (summaryOnly) {
+    return pets.map((row) => ({
+      id: Number(row.id),
+      name: String(row.name),
+      petClass: String(row.pet_class),
+      detectionCount: Number(row.detection_count),
+      confirmedCount: Number(row.confirmed_count ?? 0),
+      automaticCount: Number(row.automatic_count ?? 0),
+      representativePetId:
+        row.representative_pet_id === null ? null : Number(row.representative_pet_id),
+      pets: [],
+      videoHits: []
+    }));
+  }
 
   const itemQuery = db.prepare(`
     SELECT
@@ -10849,22 +10955,77 @@ function listPersonCandidates(
       `).all(sourceId, limit);
 
   if (summaryOnly) {
-    return candidates.map((candidate) => ({
-      id: Number(candidate.id),
-      faceCount: Number(candidate.face_count),
-      newestFaceId: Number(candidate.newest_face_id),
-      memberSignature: "",
-      representativeFaceId:
-        candidate.first_face_id === null || candidate.first_face_id === undefined
-          ? null
-          : Number(candidate.first_face_id),
-      averageSimilarity: Number(candidate.average_similarity),
-      minSimilarity: Number(candidate.min_similarity),
-      suggestedPersons: [],
-      ignoredIdentityId: null,
-      ignoredSimilarity: null,
-      faces: []
-    }));
+    // Die paginierte Bestätigungsansicht soll schnell bleiben, aber weiterhin
+    // die ähnlichsten bereits bestätigten Personen anzeigen. Deshalb laden wir
+    // keine Einzelbilder der Gruppe, berechnen aber für die wenigen sichtbaren
+    // Gruppen weiterhin exakt denselben Gruppen-Zentroid wie in der Vollansicht.
+    const knownPersons = knownPersonCentroids();
+    const embeddingQuery = db.prepare(`
+      SELECT
+        fe.dimension,
+        fe.vector_blob
+      FROM person_candidate_faces pcf
+      JOIN face_embeddings fe ON fe.face_detection_id=pcf.face_detection_id
+      JOIN face_detections fd ON fd.id=pcf.face_detection_id
+      JOIN media_items m ON m.id=fd.media_id
+      LEFT JOIN person_face_assignments pfa
+        ON pfa.face_detection_id=pcf.face_detection_id
+      WHERE pcf.candidate_id=?
+        AND fe.model_version='SFace 2021dec'
+        AND m.availability='AVAILABLE'
+        AND fd.input_sha256=m.sha256
+        AND fe.input_sha256=m.sha256
+        AND pfa.face_detection_id IS NULL
+      ORDER BY pcf.face_detection_id
+    `);
+    const exclusionQuery = db.prepare(`
+      SELECT 1
+      FROM person_candidate_faces pcf
+      JOIN person_face_exclusions pfe
+        ON pfe.face_detection_id=pcf.face_detection_id
+      WHERE pcf.candidate_id=?
+        AND pfe.person_id=?
+      LIMIT 1
+    `);
+
+    return candidates.map((candidate) => {
+      const candidateId = Number(candidate.id);
+      const candidateVector = centroid(
+        embeddingQuery.all(candidateId).map((row) =>
+          vectorFromBlob(row.vector_blob, Number(row.dimension))
+        )
+      );
+      const suggestedPersons = candidateVector
+        ? knownPersons
+            .filter((known) => !exclusionQuery.get(candidateId, known.id))
+            .map((known) => ({
+              personId: known.id,
+              personName: known.name,
+              similarity: cosineSimilarity(candidateVector, known.vector),
+              representativeFaceId: known.representativeFaceId
+            }))
+            .filter((match) => match.similarity >= 0.55)
+            .sort((left, right) => right.similarity - left.similarity)
+            .slice(0, 3)
+        : [];
+
+      return {
+        id: candidateId,
+        faceCount: Number(candidate.face_count),
+        newestFaceId: Number(candidate.newest_face_id),
+        memberSignature: "",
+        representativeFaceId:
+          candidate.first_face_id === null || candidate.first_face_id === undefined
+            ? null
+            : Number(candidate.first_face_id),
+        averageSimilarity: Number(candidate.average_similarity),
+        minSimilarity: Number(candidate.min_similarity),
+        suggestedPersons,
+        ignoredIdentityId: null,
+        ignoredSimilarity: null,
+        faces: []
+      };
+    });
   }
 
   const memberSignatureQuery = db.prepare(`
@@ -11081,7 +11242,7 @@ function listPersonCandidateItems(
       ? -1
       : Number(candidate.representative_face_id);
 
-  return db.prepare(`
+  const rows = db.prepare(`
     SELECT
       pcf.face_detection_id,
       fd.media_id,
@@ -11090,35 +11251,64 @@ function listPersonCandidateItems(
       fd.x,
       fd.y,
       fd.width,
-      fd.height
+      fd.height,
+      fe.dimension,
+      fe.vector_blob
     FROM person_candidate_faces pcf
     JOIN face_detections fd ON fd.id=pcf.face_detection_id
     JOIN media_items m ON m.id=fd.media_id
+    JOIN face_embeddings fe ON fe.face_detection_id=pcf.face_detection_id
     LEFT JOIN person_face_assignments pfa
       ON pfa.face_detection_id=pcf.face_detection_id
     WHERE pcf.candidate_id=?
       AND m.availability='AVAILABLE'
       AND fd.input_sha256=m.sha256
+      AND fe.input_sha256=m.sha256
+      AND fe.model_version='SFace 2021dec'
       AND pfa.face_detection_id IS NULL
     ORDER BY
       CASE WHEN pcf.face_detection_id=? THEN 0 ELSE 1 END,
       pcf.similarity DESC,
       pcf.face_detection_id ASC
     LIMIT ? OFFSET ?
-  `).all(candidateId, representativeFaceId, limit, offset).map((row) => ({
-    faceDetectionId: Number(row.face_detection_id),
-    mediaId: Number(row.media_id),
-    relativePath: String(row.relative_path),
-    similarity: Number(row.similarity),
-    x: Number(row.x),
-    y: Number(row.y),
-    width: Number(row.width),
-    height: Number(row.height),
-    suggestedPersons: []
-  }));
+  `).all(candidateId, representativeFaceId, limit, offset);
+
+  const knownPersons = knownPersonCentroids();
+  const exclusionQuery = db.prepare(
+    "SELECT 1 FROM person_face_exclusions " +
+    "WHERE face_detection_id=? AND person_id=? LIMIT 1"
+  );
+
+  return rows.map((row) => {
+    const faceDetectionId = Number(row.face_detection_id);
+    const vector = vectorFromBlob(row.vector_blob, Number(row.dimension));
+    const suggestedPersons = knownPersons
+      .filter((known) => !exclusionQuery.get(faceDetectionId, known.id))
+      .map((known) => ({
+        personId: known.id,
+        personName: known.name,
+        similarity: cosineSimilarity(vector, known.vector),
+        representativeFaceId: known.representativeFaceId
+      }))
+      .filter((match) => match.similarity >= 0.48)
+      .sort((left, right) => right.similarity - left.similarity)
+      .slice(0, 5);
+
+    return {
+      faceDetectionId,
+      mediaId: Number(row.media_id),
+      relativePath: String(row.relative_path),
+      similarity: Number(row.similarity),
+      x: Number(row.x),
+      y: Number(row.y),
+      width: Number(row.width),
+      height: Number(row.height),
+      suggestedPersons
+    };
+  });
 }
 
-function listPersons(sourceId: number) {
+function listPersons(sourceId: number, summaryOnly = false) {
   const persons = db.prepare(`
     SELECT
       p.id,
@@ -11159,6 +11349,18 @@ function listPersons(sourceId: number) {
     )
     ORDER BY p.name COLLATE NOCASE, p.id
   `).all(sourceId, sourceId, sourceId, sourceId);
+
+  if (summaryOnly) {
+    return persons.map((row) => ({
+      id: Number(row.id),
+      name: String(row.name),
+      faceCount: Number(row.face_count),
+      representativeFaceId:
+        row.representative_face_id === null ? null : Number(row.representative_face_id),
+      faces: [],
+      videoHits: []
+    }));
+  }
 
   const faceQuery = db.prepare(`
     SELECT
@@ -14028,7 +14230,10 @@ async function dispatch(method: CatalogMethod, payload: Record<string, unknown> 
         payload.offset === undefined ? 0 : asNumber(payload.offset, "offset")
       );
     case "listPets":
-      return listPets(asNumber(payload.sourceId, "sourceId"));
+      return listPets(
+        asNumber(payload.sourceId, "sourceId"),
+        payload.summaryOnly === true
+      );
     case "confirmPetCandidate":
       return confirmPetCandidate(
         asNumber(payload.candidateId, "candidateId"),
@@ -14166,7 +14371,10 @@ async function dispatch(method: CatalogMethod, payload: Record<string, unknown> 
         payload.offset === undefined ? 0 : asNumber(payload.offset, "offset")
       );
     case "listPersons":
-      return listPersons(asNumber(payload.sourceId, "sourceId"));
+      return listPersons(
+        asNumber(payload.sourceId, "sourceId"),
+        payload.summaryOnly === true
+      );
     case "assignPersonCandidateSelection":
       return assignPersonCandidateSelection(
         asNumber(payload.candidateId, "candidateId"),
