@@ -49,7 +49,8 @@ export class PetService {
     rebuildIfNeeded = true,
     candidateLimit = 500,
     includeSupporting = true,
-    readOnly = false
+    readOnly = false,
+    summaryOnly = false
   ): Promise<PetOverview> {
     const queue = await this.catalog.request<AnalysisQueueStats>(
       "getAnalysisQueueStats",
@@ -142,7 +143,8 @@ export class PetService {
         sourceId,
         limit: normalizedCandidateLimit,
         ignoreDefiniteThreshold: CLUSTER_THRESHOLD,
-        ignoreDoubtThreshold: VERIFICATION_THRESHOLD
+        ignoreDoubtThreshold: VERIFICATION_THRESHOLD,
+        summaryOnly
       }
     );
     const [pets, stats, ungroupedPets] = await Promise.all([
@@ -177,7 +179,8 @@ export class PetService {
     candidateLimit = 500,
     candidateOffset = 0,
     includeSupporting = true,
-    readOnly = false
+    readOnly = false,
+    summaryOnly = false
   ): Promise<PetOverview> {
     const sources = await this.catalog.request<SourceRecord[]>("listSources");
     const enabledSources = sources.filter((source) => source.enabled);
@@ -201,7 +204,8 @@ export class PetService {
           forceRefresh,
           sourceWindow,
           includeSupporting,
-          readOnly
+          readOnly,
+          summaryOnly
         )
       );
     }
@@ -293,6 +297,17 @@ export class PetService {
       if (!source.enabled) continue;
       await this.getOverview(source.id, incremental, incremental);
     }
+  }
+
+  async listCandidateItems(
+    candidateId: number,
+    limit = 5000,
+    offset = 0
+  ): Promise<PetCandidate["pets"]> {
+    return this.catalog.request<PetCandidate["pets"]>(
+      "listPetCandidateItems",
+      { candidateId, limit, offset }
+    );
   }
 
   async confirmCandidate(
