@@ -154,6 +154,7 @@ export class PersonService {
       }>("getIdentityCandidateSummaryStats", { sourceId });
 
       return {
+        summaryOnly: true,
         candidates,
         persons: [],
         ungroupedFaces: [],
@@ -289,6 +290,7 @@ export class PersonService {
       .slice(normalizedOffset, normalizedOffset + normalizedLimit);
 
     return {
+      summaryOnly,
       candidates,
       persons: [...personMap.values()].sort(
         (a, b) => a.name.localeCompare(b.name, "de", { sensitivity: "base" })
