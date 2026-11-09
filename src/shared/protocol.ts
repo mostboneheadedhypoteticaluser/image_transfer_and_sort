@@ -253,6 +253,8 @@ export type GeoMediaPoint = {
   mediaId: number;
   sourceId: number;
   relativePath: string;
+  extension: string;
+  sizeBytes: number;
   latitude: number;
   longitude: number;
   capturedAt: string | null;
