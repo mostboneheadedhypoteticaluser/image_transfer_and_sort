@@ -13839,7 +13839,10 @@ async function dispatch(method: CatalogMethod, payload: Record<string, unknown> 
           : asNumber(payload.sourceId, "sourceId"),
         payload.limit === undefined ? 500 : asNumber(payload.limit, "limit"),
         payload.filter as SearchFilter | undefined,
-        payload.semantic as SemanticTextEmbedding | null | undefined
+        payload.semantic as SemanticTextEmbedding | null | undefined,
+        payload.mediaKind === "image" || payload.mediaKind === "video"
+          ? payload.mediaKind
+          : "all"
       );
     case "listDuplicateGroups":
       return listDuplicateGroups(
