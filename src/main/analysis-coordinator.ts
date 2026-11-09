@@ -521,28 +521,18 @@ export class AnalysisCoordinator {
       ? result.objectVerification.running
       : 0;
 
-    const queued =
-      result.technical.pending +
-      result.imageMetadata.pending +
-      result.faces.pending +
-      result.faceEmbeddings.pending +
-      result.petDetection.pending +
-      result.petFusion.pending +
-      result.petEmbeddings.pending +
-      qwenQueued +
-      result.semanticEmbeddings.pending +
-      result.videoAnalysis.pending;
-    const active =
-      result.technical.running +
-      result.imageMetadata.running +
-      result.faces.running +
-      result.faceEmbeddings.running +
-      result.petDetection.running +
-      result.petFusion.running +
-      result.petEmbeddings.running +
-      qwenActive +
-      result.semanticEmbeddings.running +
-      result.videoAnalysis.running;
+    // Die globale Warteschlange zählt echte Jobs und nicht zusammengefasste
+    // UI-Stufen. Insbesondere NanoDet und YOLOX sind zwei getrennte Jobs pro
+    // Bild und werden daher beide gezählt. Thumbnails laufen in einem eigenen
+    // Coordinator und werden im Renderer zusätzlich aufgeschlagen.
+    const queued = MODULES.reduce((sum, spec) => {
+      if (spec.stage === "objectVerification" && !qwenRunnable) return sum;
+      return sum + (snapshot.byModule[spec.module]?.pending ?? 0);
+    }, 0);
+    const active = MODULES.reduce((sum, spec) => {
+      if (spec.stage === "objectVerification" && !qwenRunnable) return sum;
+      return sum + (snapshot.byModule[spec.module]?.running ?? 0);
+    }, 0);
 
     const pausedQwen =
       (!this.automaticQwenEnabled || !this.analysis.isQwen3vl4bAvailable()) &&
