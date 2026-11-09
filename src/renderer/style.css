@@ -944,6 +944,22 @@ td .badge + .badge {
   gap: 12px;
 }
 
+.identity-candidate-pager {
+  display: grid;
+  grid-template-columns: auto minmax(180px, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 0 2px;
+}
+
+.identity-candidate-pager > span {
+  color: #68717d;
+  font-size: 12px;
+  font-weight: 700;
+  text-align: center;
+}
+
+
 .person-candidate-card {
   position: relative;
   display: grid;
