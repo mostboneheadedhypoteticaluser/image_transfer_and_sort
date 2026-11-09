@@ -147,6 +147,23 @@ export class PersonService {
         summaryOnly
       }
     );
+    if (summaryOnly) {
+      const stats = await this.catalog.request<{
+        personCandidates: number;
+        personCandidateFaces: number;
+      }>("getIdentityCandidateSummaryStats", { sourceId });
+
+      return {
+        candidates,
+        persons: [],
+        ungroupedFaces: [],
+        clusteringPending,
+        candidateTotal: stats.personCandidates,
+        candidateFaceTotal: stats.personCandidateFaces,
+        ungroupedFaceTotal: 0
+      };
+    }
+
     const [persons, stats, ungroupedFaces] = await Promise.all([
       includeSupporting
         ? this.catalog.request<PersonRecord[]>("listPersons", { sourceId })
