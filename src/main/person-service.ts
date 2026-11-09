@@ -45,7 +45,9 @@ export class PersonService {
     sourceId: number,
     forceRefresh = false,
     allowWhilePending = false,
-    rebuildIfNeeded = true
+    rebuildIfNeeded = true,
+    candidateLimit = 500,
+    includeSupporting = true
   ): Promise<PersonOverview> {
     const queue = await this.catalog.request<AnalysisQueueStats>(
       "getAnalysisQueueStats",
@@ -128,22 +130,30 @@ export class PersonService {
     // Kandidaten zuerst laden: listPersonCandidates darf dabei eindeutige
     // Treffer gegen die dauerhafte Ignore-Liste automatisch ausblenden.
     // Die danach gelesenen Summen entsprechen dadurch exakt der sichtbaren Ansicht.
+    const normalizedCandidateLimit = Math.max(
+      1,
+      Math.min(2000, Math.trunc(candidateLimit || 500))
+    );
     const candidates = await this.catalog.request<PersonCandidate[]>(
       "listPersonCandidates",
       {
         sourceId,
-        limit: 500,
+        limit: normalizedCandidateLimit,
         ignoreDefiniteThreshold: CLUSTER_THRESHOLD,
         ignoreDoubtThreshold: VERIFICATION_THRESHOLD
       }
     );
     const [persons, stats, ungroupedFaces] = await Promise.all([
-      this.catalog.request<PersonRecord[]>("listPersons", { sourceId }),
+      includeSupporting
+        ? this.catalog.request<PersonRecord[]>("listPersons", { sourceId })
+        : Promise.resolve([] as PersonRecord[]),
       this.catalog.request<CatalogStats>("getStats", { sourceId }),
-      this.catalog.request<PersonOverview["ungroupedFaces"]>(
-        "listUngroupedPersonDetections",
-        { sourceId, limit: 1000 }
-      )
+      includeSupporting
+        ? this.catalog.request<PersonOverview["ungroupedFaces"]>(
+            "listUngroupedPersonDetections",
+            { sourceId, limit: 1000 }
+          )
+        : Promise.resolve([] as PersonOverview["ungroupedFaces"])
     ]);
 
     return {
@@ -160,7 +170,12 @@ export class PersonService {
     };
   }
 
-  async getCombinedOverview(forceRefresh = false): Promise<PersonOverview> {
+  async getCombinedOverview(
+    forceRefresh = false,
+    candidateLimit = 500,
+    candidateOffset = 0,
+    includeSupporting = true
+  ): Promise<PersonOverview> {
     const sources = await this.catalog.request<Array<{
       id: number;
       path: string;
@@ -168,13 +183,30 @@ export class PersonService {
     }>>("listSources");
     const enabledSources = sources.filter((source) => source.enabled);
 
+    const normalizedLimit = Math.max(
+      1,
+      Math.min(100, Math.trunc(candidateLimit || 10))
+    );
+    const normalizedOffset = Math.max(0, Math.trunc(candidateOffset || 0));
+    // Für eine global korrekt sortierte Seite brauchen wir aus jeder Quelle
+    // höchstens die ersten offset+limit Gruppen. So lädt Seite 1 bei 10er-
+    // Pagination nur 10 statt bisher 500 vollständige Gruppen pro Quelle.
+    const sourceWindow = Math.min(2000, normalizedOffset + normalizedLimit);
+
     const overviews: PersonOverview[] = [];
     for (const source of enabledSources) {
       // Normales Öffnen der Bestätigungsansicht ist read-only und darf nicht
       // spontan ein minutenlanges Re-Clustering auslösen. Ein explizites
       // Aktualisieren darf dagegen neu gruppieren.
       overviews.push(
-        await this.getOverview(source.id, forceRefresh, false, forceRefresh)
+        await this.getOverview(
+          source.id,
+          forceRefresh,
+          false,
+          forceRefresh,
+          sourceWindow,
+          includeSupporting
+        )
       );
     }
 
@@ -229,7 +261,7 @@ export class PersonService {
           b.averageSimilarity - a.averageSimilarity ||
           b.newestFaceId - a.newestFaceId
       )
-      .slice(0, 500);
+      .slice(normalizedOffset, normalizedOffset + normalizedLimit);
 
     return {
       candidates,
