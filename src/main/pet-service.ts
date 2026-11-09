@@ -147,6 +147,23 @@ export class PetService {
         summaryOnly
       }
     );
+    if (summaryOnly) {
+      const stats = await this.catalog.request<{
+        petCandidates: number;
+        petCandidateDetections: number;
+      }>("getIdentityCandidateSummaryStats", { sourceId });
+
+      return {
+        candidates,
+        pets: [],
+        ungroupedPets: [],
+        clusteringPending,
+        candidateTotal: stats.petCandidates,
+        candidateDetectionTotal: stats.petCandidateDetections,
+        ungroupedDetectionTotal: 0
+      };
+    }
+
     const [pets, stats, ungroupedPets] = await Promise.all([
       includeSupporting
         ? this.catalog.request<PetRecord[]>("listPets", { sourceId })
