@@ -97,14 +97,50 @@ const REMOTE_WEB_PORT = 8787;
 const REMOTE_WEB_HOST = "::";
 let remoteWebServer: HttpServer | null = null;
 
-const EMPTY_REMOTE_START_PAGE =
-  "<!doctype html><html lang=\"de\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>Image Sortierer</title></head><body></body></html>";
+const REMOTE_START_PAGE = "<!doctype html>\n<html lang=\"de\">\n<head>\n  <meta charset=\"utf-8\">\n  <meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\n  <title>Image Sortierer – Remote-Test</title>\n  <style>\n    :root { color-scheme: dark; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif; background:#0b0d10; color:#f4f5f7; }\n    * { box-sizing:border-box; }\n    body { margin:0; min-height:100vh; background:radial-gradient(circle at top,#171b21 0,#0b0d10 52%); }\n    main { width:min(980px,calc(100% - 32px)); margin:0 auto; padding:40px 0 64px; }\n    .hero,.panel { border:1px solid #2a3039; background:rgba(20,23,28,.94); border-radius:18px; box-shadow:0 18px 60px rgba(0,0,0,.28); }\n    .hero { padding:28px; }\n    .eyebrow { display:flex; align-items:center; gap:10px; color:#aeb7c4; font-size:14px; }\n    .dot { width:11px; height:11px; border-radius:999px; background:#46d17b; box-shadow:0 0 0 5px rgba(70,209,123,.12); }\n    h1 { margin:14px 0 8px; font-size:clamp(28px,5vw,46px); line-height:1.04; }\n    .sub { margin:0; color:#aeb7c4; }\n    .grid { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:12px; margin-top:18px; }\n    .card { padding:17px; border:1px solid #2a3039; border-radius:14px; background:#111419; }\n    .value { font-size:28px; font-weight:750; letter-spacing:-.03em; }\n    .label { margin-top:5px; color:#8f99a8; font-size:13px; }\n    .panel { margin-top:18px; padding:22px; }\n    .row { display:flex; justify-content:space-between; gap:18px; padding:10px 0; border-bottom:1px solid #252a31; }\n    .row:last-child { border-bottom:0; }\n    .key { color:#8f99a8; }\n    .mono { font-family:ui-monospace,SFMono-Regular,Consolas,monospace; font-size:13px; overflow-wrap:anywhere; }\n    button { border:0; border-radius:10px; background:#f4f5f7; color:#0b0d10; padding:11px 15px; font-weight:700; cursor:pointer; }\n    button:disabled { opacity:.55; cursor:wait; }\n    .ping { display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin-top:14px; }\n    .ok { color:#69e69a; }\n    .bad { color:#ff8585; }\n    @media (max-width:760px) { .grid { grid-template-columns:repeat(2,minmax(0,1fr)); } .hero,.panel { border-radius:14px; } }\n  </style>\n</head>\n<body>\n<main>\n  <section class=\"hero\">\n    <div class=\"eyebrow\"><span class=\"dot\"></span><span id=\"connection\">Verbindung wird geprüft …</span></div>\n    <h1>Image Sortierer</h1>\n    <p class=\"sub\">Live-Test: Browser ↔ Cloudflare Tunnel ↔ lokale App ↔ Katalog-Datenbank</p>\n    <div class=\"grid\">\n      <div class=\"card\"><div class=\"value\" id=\"total\">–</div><div class=\"label\">Medien gesamt</div></div>\n      <div class=\"card\"><div class=\"value\" id=\"available\">–</div><div class=\"label\">Verfügbar</div></div>\n      <div class=\"card\"><div class=\"value\" id=\"persons\">–</div><div class=\"label\">Personen</div></div>\n      <div class=\"card\"><div class=\"value\" id=\"pets\">–</div><div class=\"label\">Haustiere</div></div>\n      <div class=\"card\"><div class=\"value\" id=\"faces\">–</div><div class=\"label\">Erkannte Gesichter</div></div>\n    </div>\n  </section>\n  <section class=\"panel\">\n    <div class=\"row\"><span class=\"key\">Serverzeit</span><span class=\"mono\" id=\"serverTime\">–</span></div>\n    <div class=\"row\"><span class=\"key\">Letzter Katalog-Scan</span><span class=\"mono\" id=\"lastScan\">–</span></div>\n    <div class=\"row\"><span class=\"key\">Hintergrundanalyse</span><span id=\"background\">–</span></div>\n    <div class=\"row\"><span class=\"key\">Letzter Abruf</span><span class=\"mono\" id=\"lastFetch\">–</span></div>\n    <div class=\"ping\">\n      <button id=\"pingButton\" type=\"button\">Testdaten senden</button>\n      <span id=\"pingResult\" class=\"mono\">Noch kein Ping gesendet.</span>\n    </div>\n  </section>\n</main>\n<script>\n  const number = new Intl.NumberFormat(\"de-DE\");\n  const ids = [\"total\",\"available\",\"persons\",\"pets\",\"faces\"];\n  function setText(id,value){ document.getElementById(id).textContent = value; }\n\n  async function refreshStatus(){\n    try {\n      const response = await fetch(\"/api/remote-status\", { cache:\"no-store\" });\n      if (!response.ok) throw new Error(\"HTTP \" + response.status);\n      const payload = await response.json();\n      const stats = payload.stats || {};\n      setText(\"connection\", payload.catalogReady ? \"Remote-Verbindung aktiv · Katalog erreichbar\" : \"Remote-Verbindung aktiv · Katalog startet\");\n      document.getElementById(\"connection\").className = payload.catalogReady ? \"ok\" : \"\";\n      setText(\"total\", Number.isFinite(stats.total) ? number.format(stats.total) : \"–\");\n      setText(\"available\", Number.isFinite(stats.available) ? number.format(stats.available) : \"–\");\n      setText(\"persons\", Number.isFinite(stats.persons) ? number.format(stats.persons) : \"–\");\n      setText(\"pets\", Number.isFinite(stats.pets) ? number.format(stats.pets) : \"–\");\n      setText(\"faces\", Number.isFinite(stats.detectedFaces) ? number.format(stats.detectedFaces) : \"–\");\n      setText(\"serverTime\", payload.serverTime ? new Date(payload.serverTime).toLocaleString(\"de-DE\") : \"–\");\n      setText(\"lastScan\", stats.lastScan ? new Date(stats.lastScan).toLocaleString(\"de-DE\") : \"noch keiner\");\n      setText(\"background\", payload.background && payload.background.paused ? \"pausiert\" : \"läuft\");\n      setText(\"lastFetch\", new Date().toLocaleTimeString(\"de-DE\"));\n    } catch (error) {\n      setText(\"connection\", \"Verbindung unterbrochen\");\n      document.getElementById(\"connection\").className = \"bad\";\n      ids.forEach((id) => setText(id,\"–\"));\n      setText(\"lastFetch\", String(error));\n    }\n  }\n\n  document.getElementById(\"pingButton\").addEventListener(\"click\", async () => {\n    const button = document.getElementById(\"pingButton\");\n    button.disabled = true;\n    const started = performance.now();\n    try {\n      const sentAt = new Date().toISOString();\n      const response = await fetch(\"/api/remote-echo\", {\n        method:\"POST\",\n        headers:{ \"Content-Type\":\"application/json\" },\n        body:JSON.stringify({ sentAt, message:\"Hallo vom Browser\" })\n      });\n      if (!response.ok) throw new Error(\"HTTP \" + response.status);\n      const payload = await response.json();\n      const roundtrip = Math.round(performance.now() - started);\n      const echo = payload.echo && payload.echo.message ? payload.echo.message : \"Antwort erhalten\";\n      setText(\"pingResult\", echo + \" · \" + roundtrip + \" ms · Server \" + new Date(payload.receivedAt).toLocaleTimeString(\"de-DE\"));\n      document.getElementById(\"pingResult\").className = \"mono ok\";\n    } catch (error) {\n      setText(\"pingResult\", \"Fehler: \" + String(error));\n      document.getElementById(\"pingResult\").className = \"mono bad\";\n    } finally {\n      button.disabled = false;\n    }\n  });\n\n  refreshStatus();\n  setInterval(refreshStatus, 3000);\n</script>\n</body>\n</html>";
+
+const REMOTE_WEB_SECURITY_HEADERS = {
+  "Cache-Control": "no-store",
+  "X-Content-Type-Options": "nosniff",
+  "Referrer-Policy": "no-referrer",
+  "Content-Security-Policy":
+    "default-src 'none'; connect-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'"
+} as const;
+
+function writeRemoteJson(
+  response: import("node:http").ServerResponse,
+  statusCode: number,
+  payload: unknown
+): void {
+  response.writeHead(statusCode, {
+    ...REMOTE_WEB_SECURITY_HEADERS,
+    "Content-Type": "application/json; charset=utf-8"
+  });
+  response.end(JSON.stringify(payload));
+}
+
+async function readRemoteJsonBody(
+  request: import("node:http").IncomingMessage,
+  maxBytes = 4096
+): Promise<unknown> {
+  let body = "";
+
+  for await (const chunk of request) {
+    body += Buffer.isBuffer(chunk) ? chunk.toString("utf8") : String(chunk);
+    if (Buffer.byteLength(body, "utf8") > maxBytes) {
+      throw new Error("Request body too large");
+    }
+  }
+
+  if (!body.trim()) return {};
+  return JSON.parse(body);
+}
 
 function startRemoteWebServer(): Promise<void> {
   if (remoteWebServer) return Promise.resolve();
 
   return new Promise<void>((resolve, reject) => {
-    const server = createServer((request, response) => {
+    const server = createServer(async (request, response) => {
       const method = request.method ?? "GET";
       let pathname = "/";
 
@@ -115,8 +151,8 @@ function startRemoteWebServer(): Promise<void> {
         ).pathname;
       } catch {
         response.writeHead(400, {
-          "Content-Type": "text/plain; charset=utf-8",
-          "Cache-Control": "no-store"
+          ...REMOTE_WEB_SECURITY_HEADERS,
+          "Content-Type": "text/plain; charset=utf-8"
         });
         response.end("Bad Request");
         return;
@@ -124,21 +160,69 @@ function startRemoteWebServer(): Promise<void> {
 
       if ((method === "GET" || method === "HEAD") && pathname === "/") {
         response.writeHead(200, {
-          "Content-Type": "text/html; charset=utf-8",
-          "Cache-Control": "no-store",
-          "X-Content-Type-Options": "nosniff",
-          "Referrer-Policy": "no-referrer",
-          "Content-Security-Policy":
-            "default-src 'none'; base-uri 'none'; frame-ancestors 'none'"
+          ...REMOTE_WEB_SECURITY_HEADERS,
+          "Content-Type": "text/html; charset=utf-8"
         });
-        response.end(method === "HEAD" ? undefined : EMPTY_REMOTE_START_PAGE);
+        response.end(method === "HEAD" ? undefined : REMOTE_START_PAGE);
+        return;
+      }
+
+      if ((method === "GET" || method === "HEAD") && pathname === "/api/remote-status") {
+        try {
+          const stats = catalog
+            ? await catalog.request<CatalogStats>("getStats")
+            : null;
+
+          const payload = {
+            ok: true,
+            app: "Image Sortierer",
+            serverTime: new Date().toISOString(),
+            catalogReady: Boolean(catalog),
+            stats,
+            background: backgroundPauseState(),
+            pipeline: pipelineStatus
+          };
+
+          if (method === "HEAD") {
+            response.writeHead(200, {
+              ...REMOTE_WEB_SECURITY_HEADERS,
+              "Content-Type": "application/json; charset=utf-8"
+            });
+            response.end();
+          } else {
+            writeRemoteJson(response, 200, payload);
+          }
+        } catch (error) {
+          writeRemoteJson(response, 503, {
+            ok: false,
+            serverTime: new Date().toISOString(),
+            catalogReady: Boolean(catalog),
+            error: error instanceof Error ? error.message : String(error)
+          });
+        }
+        return;
+      }
+
+      if (method === "POST" && pathname === "/api/remote-echo") {
+        try {
+          const echo = await readRemoteJsonBody(request);
+          writeRemoteJson(response, 200, {
+            ok: true,
+            receivedAt: new Date().toISOString(),
+            echo
+          });
+        } catch (error) {
+          writeRemoteJson(response, 400, {
+            ok: false,
+            error: error instanceof Error ? error.message : String(error)
+          });
+        }
         return;
       }
 
       response.writeHead(404, {
-        "Content-Type": "text/plain; charset=utf-8",
-        "Cache-Control": "no-store",
-        "X-Content-Type-Options": "nosniff"
+        ...REMOTE_WEB_SECURITY_HEADERS,
+        "Content-Type": "text/plain; charset=utf-8"
       });
       response.end("Not Found");
     });
