@@ -2744,6 +2744,29 @@ function listDuplicateGroups(sourceId: number, requestedLimit: number) {
     LIMIT ?
   `).all(sourceId, limit);
 
+  if (summaryOnly) {
+    return candidates.map((candidate) => ({
+      id: Number(candidate.id),
+      petClass: String(candidate.pet_class),
+      detectionCount: Number(candidate.detection_count),
+      newestPetId: Number(candidate.newest_pet_id),
+      memberSignature: "",
+      representativePetId:
+        candidate.first_pet_id === null || candidate.first_pet_id === undefined
+          ? null
+          : Number(candidate.first_pet_id),
+      averageSimilarity: Number(candidate.average_similarity),
+      minSimilarity: Number(candidate.min_similarity),
+      suggestedPetId: null,
+      suggestedPetName: null,
+      suggestedPetSimilarity: null,
+      suggestedPets: [],
+      ignoredIdentityId: null,
+      ignoredSimilarity: null,
+      pets: []
+    }));
+  }
+
   const itemQuery = db.prepare(`
     SELECT id, relative_path, extension, size_bytes
     FROM media_items
@@ -8258,7 +8281,8 @@ function listPetCandidates(
   sourceId: number,
   requestedLimit: number,
   ignoreDefiniteThreshold = 0.68,
-  ignoreDoubtThreshold = 0.60
+  ignoreDoubtThreshold = 0.60,
+  summaryOnly = false
 ) {
   const limit = Math.max(1, Math.min(2000, Math.trunc(requestedLimit || 500)));
 
@@ -8270,6 +8294,7 @@ function listPetCandidates(
       pc.average_similarity,
       pc.min_similarity,
       COUNT(pci.pet_detection_id) AS detection_count,
+      MIN(pci.pet_detection_id) AS first_pet_id,
       MAX(pci.pet_detection_id) AS newest_pet_id
     FROM pet_candidates pc
     JOIN pet_candidate_items pci ON pci.candidate_id=pc.id
@@ -8312,6 +8337,25 @@ function listPetCandidates(
       pci.pet_detection_id ASC
     LIMIT 200
   `);
+
+  if (summaryOnly) {
+    return candidates.map((candidate) => ({
+      id: Number(candidate.id),
+      faceCount: Number(candidate.face_count),
+      newestFaceId: Number(candidate.newest_face_id),
+      memberSignature: "",
+      representativeFaceId:
+        candidate.first_face_id === null || candidate.first_face_id === undefined
+          ? null
+          : Number(candidate.first_face_id),
+      averageSimilarity: Number(candidate.average_similarity),
+      minSimilarity: Number(candidate.min_similarity),
+      suggestedPersons: [],
+      ignoredIdentityId: null,
+      ignoredSimilarity: null,
+      faces: []
+    }));
+  }
 
   const memberSignatureQuery = db.prepare(`
     SELECT pci.pet_detection_id
@@ -8494,6 +8538,61 @@ function listPetCandidates(
       }))
     };
   }).filter((candidate) => candidate !== null);
+}
+
+function listPetCandidateItems(
+  candidateId: number,
+  requestedLimit = 5000,
+  requestedOffset = 0
+) {
+  const limit = Math.max(1, Math.min(5000, Math.trunc(requestedLimit || 5000)));
+  const offset = Math.max(0, Math.trunc(requestedOffset || 0));
+  const candidate = db.prepare(
+    "SELECT representative_pet_id FROM pet_candidates WHERE id=?"
+  ).get(candidateId);
+  if (!candidate) return [];
+
+  const representativePetId =
+    candidate.representative_pet_id === null ||
+    candidate.representative_pet_id === undefined
+      ? -1
+      : Number(candidate.representative_pet_id);
+
+  return db.prepare(`
+    SELECT
+      pci.pet_detection_id,
+      pd.media_id,
+      m.relative_path,
+      pci.similarity,
+      pd.x,
+      pd.y,
+      pd.width,
+      pd.height
+    FROM pet_candidate_items pci
+    JOIN pet_fused_detections pd ON pd.id=pci.pet_detection_id
+    JOIN media_items m ON m.id=pd.media_id
+    LEFT JOIN pet_assignments pa
+      ON pa.pet_detection_id=pci.pet_detection_id
+    WHERE pci.candidate_id=?
+      AND m.availability='AVAILABLE'
+      AND pd.input_sha256=m.sha256
+      AND pa.pet_detection_id IS NULL
+    ORDER BY
+      CASE WHEN pci.pet_detection_id=? THEN 0 ELSE 1 END,
+      pci.similarity DESC,
+      pci.pet_detection_id ASC
+    LIMIT ? OFFSET ?
+  `).all(candidateId, representativePetId, limit, offset).map((row) => ({
+    petDetectionId: Number(row.pet_detection_id),
+    mediaId: Number(row.media_id),
+    relativePath: String(row.relative_path),
+    similarity: Number(row.similarity),
+    x: Number(row.x),
+    y: Number(row.y),
+    width: Number(row.width),
+    height: Number(row.height),
+    suggestedPets: []
+  }));
 }
 
 function listPets(sourceId: number) {
@@ -10492,7 +10591,8 @@ function listPersonCandidates(
   sourceId: number,
   requestedLimit: number,
   ignoreDefiniteThreshold = 0.62,
-  ignoreDoubtThreshold = 0.55
+  ignoreDoubtThreshold = 0.55,
+  summaryOnly = false
 ) {
   const limit = Math.max(1, Math.min(2000, Math.trunc(requestedLimit || 500)));
 
@@ -10503,6 +10603,7 @@ function listPersonCandidates(
       pc.average_similarity,
       pc.min_similarity,
       COUNT(pcf.face_detection_id) AS face_count,
+      MIN(pcf.face_detection_id) AS first_face_id,
       MAX(pcf.face_detection_id) AS newest_face_id
     FROM person_candidates pc
     JOIN person_candidate_faces pcf ON pcf.candidate_id=pc.id
@@ -10714,6 +10815,61 @@ function listPersonCandidates(
       }))
     };
   }).filter((candidate) => candidate !== null);
+}
+
+function listPersonCandidateItems(
+  candidateId: number,
+  requestedLimit = 5000,
+  requestedOffset = 0
+) {
+  const limit = Math.max(1, Math.min(5000, Math.trunc(requestedLimit || 5000)));
+  const offset = Math.max(0, Math.trunc(requestedOffset || 0));
+  const candidate = db.prepare(
+    "SELECT representative_face_id FROM person_candidates WHERE id=?"
+  ).get(candidateId);
+  if (!candidate) return [];
+
+  const representativeFaceId =
+    candidate.representative_face_id === null ||
+    candidate.representative_face_id === undefined
+      ? -1
+      : Number(candidate.representative_face_id);
+
+  return db.prepare(`
+    SELECT
+      pcf.face_detection_id,
+      fd.media_id,
+      m.relative_path,
+      pcf.similarity,
+      fd.x,
+      fd.y,
+      fd.width,
+      fd.height
+    FROM person_candidate_faces pcf
+    JOIN face_detections fd ON fd.id=pcf.face_detection_id
+    JOIN media_items m ON m.id=fd.media_id
+    LEFT JOIN person_face_assignments pfa
+      ON pfa.face_detection_id=pcf.face_detection_id
+    WHERE pcf.candidate_id=?
+      AND m.availability='AVAILABLE'
+      AND fd.input_sha256=m.sha256
+      AND pfa.face_detection_id IS NULL
+    ORDER BY
+      CASE WHEN pcf.face_detection_id=? THEN 0 ELSE 1 END,
+      pcf.similarity DESC,
+      pcf.face_detection_id ASC
+    LIMIT ? OFFSET ?
+  `).all(candidateId, representativeFaceId, limit, offset).map((row) => ({
+    faceDetectionId: Number(row.face_detection_id),
+    mediaId: Number(row.media_id),
+    relativePath: String(row.relative_path),
+    similarity: Number(row.similarity),
+    x: Number(row.x),
+    y: Number(row.y),
+    width: Number(row.width),
+    height: Number(row.height),
+    suggestedPersons: []
+  }));
 }
 
 function listPersons(sourceId: number) {
@@ -13609,7 +13765,14 @@ async function dispatch(method: CatalogMethod, payload: Record<string, unknown> 
           : Number(payload.ignoreDefiniteThreshold),
         payload.ignoreDoubtThreshold === undefined
           ? 0.60
-          : Number(payload.ignoreDoubtThreshold)
+          : Number(payload.ignoreDoubtThreshold),
+        payload.summaryOnly === true
+      );
+    case "listPetCandidateItems":
+      return listPetCandidateItems(
+        asNumber(payload.candidateId, "candidateId"),
+        payload.limit === undefined ? 5000 : asNumber(payload.limit, "limit"),
+        payload.offset === undefined ? 0 : asNumber(payload.offset, "offset")
       );
     case "listPets":
       return listPets(asNumber(payload.sourceId, "sourceId"));
@@ -13740,7 +13903,14 @@ async function dispatch(method: CatalogMethod, payload: Record<string, unknown> 
           : Number(payload.ignoreDefiniteThreshold),
         payload.ignoreDoubtThreshold === undefined
           ? 0.55
-          : Number(payload.ignoreDoubtThreshold)
+          : Number(payload.ignoreDoubtThreshold),
+        payload.summaryOnly === true
+      );
+    case "listPersonCandidateItems":
+      return listPersonCandidateItems(
+        asNumber(payload.candidateId, "candidateId"),
+        payload.limit === undefined ? 5000 : asNumber(payload.limit, "limit"),
+        payload.offset === undefined ? 0 : asNumber(payload.offset, "offset")
       );
     case "listPersons":
       return listPersons(asNumber(payload.sourceId, "sourceId"));
