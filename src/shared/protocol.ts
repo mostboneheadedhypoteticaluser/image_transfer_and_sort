@@ -1009,6 +1009,7 @@ export type CatalogMethod =
   | "addSource"
   | "disableSource"
   | "getStats"
+  | "getRemoteSummary"
   | "listMedia"
   | "listGeoMedia"
   | "listLifeAreas"
