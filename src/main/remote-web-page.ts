@@ -236,7 +236,7 @@ export const REMOTE_START_PAGE = String.raw`<!doctype html>
   "use strict";
   var state = {
     sources: [], media: [], filteredMedia: [], people: null, pets: null,
-    status: null, history: null, confirmMode: "people", historyDays: 7, activeView: "media"
+    status: null, summary: null, history: null, confirmMode: "people", historyDays: 7, activeView: "media"
   };
   var fmt = new Intl.NumberFormat("de-DE");
   var moduleLabels = {
@@ -254,6 +254,20 @@ export const REMOTE_START_PAGE = String.raw`<!doctype html>
     "video-analyze-v1":"Videoanalyse"
   };
   var moduleOrder = Object.keys(moduleLabels);
+  var stageLabels = {
+    technical:"Technische Prüfung",
+    thumbnails:"Thumbnail",
+    imageMetadata:"Bildmetadaten",
+    faces:"Gesichtsdetektion",
+    faceEmbeddings:"Gesichtsmerkmale",
+    petDetection:"Haustiererkennung",
+    petFusion:"Haustier-Fusion",
+    petEmbeddings:"Hundemerkmale",
+    semanticEmbeddings:"SigLIP2",
+    objectVerification:"Qwen3-VL",
+    videoAnalysis:"Videoanalyse"
+  };
+  var stageOrder = Object.keys(stageLabels);
   var el = function(id){ return document.getElementById(id); };
   var escapeHtml = function(value){
     return String(value == null ? "" : value)
@@ -293,6 +307,7 @@ export const REMOTE_START_PAGE = String.raw`<!doctype html>
     if(name==="confirm") loadCandidates(false);
     if(name==="analysis") refreshStatus();
     if(name==="history") loadHistory();
+    if(name==="more") loadSummary().catch(function(e){toast(e.message);});
   }
   document.querySelectorAll("nav button").forEach(function(b){b.addEventListener("click",function(){switchView(b.getAttribute("data-view"));});});
 
@@ -466,7 +481,7 @@ export const REMOTE_START_PAGE = String.raw`<!doctype html>
     return state.history.rows.filter(function(r){return r.day===today&&r.status==="DONE";}).reduce(function(sum,r){return sum+Number(r.count||0);},0);
   }
   function renderAnalysis(){
-    var p=state.status||{}, analysis=p.analysis||{}, queues=(p.moduleQueues&&p.moduleQueues.byModule)||{};
+    var p=state.status||{}, analysis=p.analysis||{}, queues=p.pipeline||{};
     var totals=queueTotals(queues);
     el("analysisMetrics").innerHTML='<div class="metric"><strong>'+fmt.format(totals.pending)+'</strong><span>Jobs offen</span></div><div class="metric"><strong>'+fmt.format(totals.running)+'</strong><span>Laufen</span></div><div class="metric"><strong>'+fmt.format(todayDone())+'</strong><span>Heute erledigt</span></div><div class="metric"><strong>'+fmt.format(totals.failed)+'</strong><span>Fehler</span></div>';
     el("boostButton").textContent=analysis.boostEnabled?"Boost deaktivieren":"Boost aktivieren";
@@ -474,9 +489,9 @@ export const REMOTE_START_PAGE = String.raw`<!doctype html>
     var paused=p.background&&p.background.paused;
     el("pauseButton").textContent=paused?"Fortsetzen":"Pause";
     el("pauseButton").className="btn "+(paused?"good":"warn");
-    el("stageRows").innerHTML=moduleOrder.map(function(module){
-      var q=queues[module]||{pending:0,running:0,done:0,failed:0,unavailable:0};
-      return '<div class="stage-row"><strong>'+moduleLabels[module]+'</strong><span class="pill warn">'+fmt.format(q.pending||0)+'</span><span class="pill">'+fmt.format(q.running||0)+'</span><span class="pill good">'+fmt.format(q.done||0)+'</span><span class="pill bad">'+fmt.format(q.failed||0)+'</span></div>';
+    el("stageRows").innerHTML=stageOrder.map(function(stage){
+      var q=queues[stage]||{pending:0,running:0,done:0,failed:0,unavailable:0};
+      return '<div class="stage-row"><strong>'+stageLabels[stage]+'</strong><span class="pill warn">'+fmt.format(q.pending||0)+'</span><span class="pill">'+fmt.format(q.running||0)+'</span><span class="pill good">'+fmt.format(q.done||0)+'</span><span class="pill bad">'+fmt.format(q.failed||0)+'</span></div>';
     }).join("");
   }
   async function refreshStatus(){
@@ -531,14 +546,18 @@ export const REMOTE_START_PAGE = String.raw`<!doctype html>
   });});
   el("historyRefresh").addEventListener("click",function(){loadHistory().catch(function(e){toast(e.message);});});
 
+  async function loadSummary(){
+    state.summary=await api("/api/remote-summary");
+    renderMore();
+  }
   function renderMore(){
-    var p=state.status||{}, stats=p.stats||{}, analysis=p.analysis||{};
+    var p=state.status||{}, stats=state.summary||{}, analysis=p.analysis||{};
     var rows=[
       ["Serverzeit",p.serverTime?new Date(p.serverTime).toLocaleString("de-DE"):"—"],
-      ["Medien gesamt",fmt.format(stats.total||0)],
-      ["Verfügbar",fmt.format(stats.available||0)],
-      ["Personen",fmt.format(stats.persons||0)],
-      ["Haustiere",fmt.format(stats.pets||0)],
+      ["Medien gesamt",stats.total==null?"—":fmt.format(stats.total)],
+      ["Verfügbar",stats.available==null?"—":fmt.format(stats.available)],
+      ["Personen",stats.persons==null?"—":fmt.format(stats.persons)],
+      ["Haustiere",stats.pets==null?"—":fmt.format(stats.pets)],
       ["Letzter Scan",stats.lastScan?new Date(stats.lastScan).toLocaleString("de-DE"):"—"],
       ["Worker",analysis.state||"—"],
       ["Parallel",analysis.maxConcurrentJobs==null?"—":String(analysis.maxConcurrentJobs)],
@@ -553,7 +572,7 @@ export const REMOTE_START_PAGE = String.raw`<!doctype html>
 
   async function boot(){
     try{
-      await Promise.all([loadSources(),refreshStatus(),loadHistory()]);
+      await Promise.all([loadSources(),refreshStatus()]);
       await loadMedia();
       setConnection(true,"Verbunden");
     }catch(e){setConnection(false,"Fehler: "+e.message);toast(e.message);}
