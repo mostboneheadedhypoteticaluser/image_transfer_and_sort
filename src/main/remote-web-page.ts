@@ -583,7 +583,7 @@ export const REMOTE_START_PAGE = String.raw`<!doctype html>
     if(state.remoteMap) return true;
     if(!window.L){el("remoteMapGrid").innerHTML='<div class="remote-map-empty">Kartenbibliothek konnte nicht geladen werden.</div>';return false;}
     state.remoteMap=window.L.map("remoteMediaMap",{zoomControl:true,preferCanvas:true}).setView([48.8,9.2],5);
-    window.L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",{maxZoom:19,attribution:"© OpenStreetMap"}).addTo(state.remoteMap);
+    window.L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png",{maxZoom:19,attribution:'&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap contributors</a>'}).addTo(state.remoteMap);
     state.remoteMapLayer=window.L.layerGroup().addTo(state.remoteMap);
     state.remoteMap.on("moveend zoomend",renderRemoteMap);
     return true;
