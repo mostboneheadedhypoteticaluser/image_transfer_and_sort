@@ -5,6 +5,8 @@ export const REMOTE_START_PAGE = String.raw`<!doctype html>
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#0b0d10">
   <title>Image Sortierer</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <style>
     :root {
       color-scheme: dark;
@@ -217,6 +219,23 @@ export const REMOTE_START_PAGE = String.raw`<!doctype html>
     .loading { opacity:.6; pointer-events:none; }
     .toast { position:fixed; left:50%; bottom:92px; z-index:80; transform:translateX(-50%) translateY(20px); opacity:0; transition:.18s; padding:10px 13px; border-radius:999px; background:#f4f5f7; color:#0b0d10; font-size:12px; font-weight:800; pointer-events:none; max-width:calc(100% - 30px); text-align:center; }
     .toast.show { opacity:1; transform:translateX(-50%) translateY(0); }
+    .media-filter-grid { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-bottom:10px; }
+    .media-filter-grid select { min-width:0; }
+    .media-pane[hidden] { display:none !important; }
+    .remote-map-shell { display:grid; gap:10px; }
+    .remote-map-stage { position:relative; border:1px solid var(--line); border-radius:14px; overflow:hidden; background:#e8edf1; }
+    #remoteMediaMap { height:310px; width:100%; }
+    .remote-map-toolbar { display:flex; align-items:center; justify-content:space-between; gap:8px; flex-wrap:wrap; }
+    .remote-map-toolbar select { width:auto; min-width:155px; }
+    .remote-map-count { font-size:11px; color:var(--muted); font-weight:800; }
+    .remote-map-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; }
+    .remote-map-empty { grid-column:1/-1; padding:20px 12px; border:1px dashed var(--line); border-radius:12px; color:var(--muted); text-align:center; font-size:11px; }
+    .remote-map-more { grid-column:1/-1; padding:8px 4px 2px; color:var(--muted); text-align:center; font-size:10px; }
+    .leaflet-container { font:inherit; }
+    .leaflet-control-attribution { font-size:8px !important; }
+    .remote-map-popup { display:grid; gap:5px; max-width:220px; }
+    .remote-map-popup img { width:180px; max-width:100%; max-height:125px; object-fit:cover; border-radius:7px; }
+    .remote-map-popup strong { overflow-wrap:anywhere; font-size:11px; }
     @media (min-width:700px) {
       .view { padding:22px; }
       .cards { grid-template-columns:repeat(4,minmax(0,1fr)); }
@@ -234,14 +253,34 @@ export const REMOTE_START_PAGE = String.raw`<!doctype html>
 
   <main>
     <section id="view-media" class="view active">
-      <div class="section-head"><div><h1>Medien</h1><p>Bilder und Videos ansehen und herunterladen</p></div><button id="mediaRefresh" class="btn">↻</button></div>
+      <div class="section-head"><div><h1>Medien</h1><p>Bilder und Videos ansehen, filtern und herunterladen</p></div><button id="mediaRefresh" class="btn">↻</button></div>
+      <div class="subtabs">
+        <button class="btn active" type="button" data-media-mode="gallery">Galerie</button>
+        <button class="btn" type="button" data-media-mode="map">Karte</button>
+      </div>
       <div class="toolbar three">
         <select id="sourceSelect" aria-label="Quelle"></select>
         <select id="kindSelect" aria-label="Medientyp"><option value="all">Alle</option><option value="image">Bilder</option><option value="video">Videos</option></select>
         <button id="loadMedia" class="btn primary">Laden</button>
       </div>
-      <input id="mediaFilter" type="search" placeholder="In geladenen Medien filtern …" style="margin-bottom:12px">
-      <div id="mediaGrid" class="cards"></div>
+      <div class="media-filter-grid">
+        <select id="personFilter" aria-label="Person"><option value="">Alle Personen</option></select>
+        <select id="petFilter" aria-label="Haustier"><option value="">Alle Haustiere</option></select>
+      </div>
+      <div id="mediaGalleryPane" class="media-pane">
+        <input id="mediaFilter" type="search" placeholder="In geladenen Medien filtern …" style="margin-bottom:12px">
+        <div id="mediaGrid" class="cards"></div>
+      </div>
+      <div id="mediaMapPane" class="media-pane" hidden>
+        <div class="remote-map-shell">
+          <div class="remote-map-stage"><div id="remoteMediaMap" aria-label="Karte der Aufnahmeorte"></div></div>
+          <div class="remote-map-toolbar">
+            <div id="remoteMapCount" class="remote-map-count">0 Medien im Ausschnitt</div>
+            <select id="remoteMapSort" aria-label="Sortierung"><option value="newest">Neueste zuerst</option><option value="oldest">Älteste zuerst</option><option value="name">Dateiname</option></select>
+          </div>
+          <div id="remoteMapGrid" class="remote-map-grid"></div>
+        </div>
+      </div>
     </section>
 
     <section id="view-confirm" class="view">
@@ -345,7 +384,8 @@ export const REMOTE_START_PAGE = String.raw`<!doctype html>
     sources: [], media: [], filteredMedia: [], people: null, pets: null,
     identityOptions: null, status: null, summary: null, history: null,
     confirmMode: "people", confirmPage: {people:0,pets:0}, confirmPageSize: 10,
-    groupReview: null, groupImageIndex: 0, historyDays: 7, activeView: "media"
+    groupReview: null, groupImageIndex: 0, historyDays: 7, activeView: "media",
+    mediaMode: "gallery", geoMedia: [], geoSourceId: 0, remoteMap: null, remoteMapLayer: null
   };
   var fmt = new Intl.NumberFormat("de-DE");
   var moduleLabels = {
@@ -433,6 +473,140 @@ export const REMOTE_START_PAGE = String.raw`<!doctype html>
     var ext=String(item.extension||"").toLowerCase();
     return [".mp4",".mov",".m4v",".avi",".mkv",".webm",".mts",".m2ts"].indexOf(ext)>=0?"video":"image";
   }
+  function selectedIdentityFilter(){
+    return {
+      personId:Number(el("personFilter").value)||0,
+      petId:Number(el("petFilter").value)||0
+    };
+  }
+  function geoThumb(point){
+    return point.thumbnailVersion?"/api/media/"+point.mediaId+"/thumbnail?v="+encodeURIComponent(point.thumbnailVersion):"";
+  }
+  function geoCaptured(point){
+    if(!point.capturedAt) return "Datum unbekannt";
+    var d=new Date(point.capturedAt);
+    return Number.isFinite(d.getTime())?d.toLocaleString("de-DE"):String(point.capturedAt);
+  }
+  function geoBasePoints(){
+    var kind=el("kindSelect").value;
+    var filter=selectedIdentityFilter();
+    var allowed=null;
+    if(filter.personId||filter.petId){
+      allowed=new Set(state.media.map(function(row){return Number(row.id);}));
+    }
+    return state.geoMedia.filter(function(point){
+      if(kind!=="all"&&mediaKind(point)!==kind) return false;
+      return !allowed||allowed.has(Number(point.mediaId));
+    });
+  }
+  function geoVisiblePoints(){
+    if(!state.remoteMap) return [];
+    var bounds=state.remoteMap.getBounds();
+    return geoBasePoints().filter(function(point){
+      return bounds.contains([Number(point.latitude),Number(point.longitude)]);
+    });
+  }
+  function sortGeoRows(rows){
+    var sort=el("remoteMapSort").value;
+    return rows.slice().sort(function(a,b){
+      if(sort==="name") return String(a.relativePath).localeCompare(String(b.relativePath),"de");
+      var left=String(a.capturedAt||""), right=String(b.capturedAt||"");
+      if(sort==="oldest") return left.localeCompare(right)||String(a.relativePath).localeCompare(String(b.relativePath),"de");
+      return right.localeCompare(left)||String(a.relativePath).localeCompare(String(b.relativePath),"de");
+    });
+  }
+  function renderRemoteMapGallery(){
+    var rows=sortGeoRows(geoVisiblePoints());
+    el("remoteMapCount").textContent=fmt.format(rows.length)+(rows.length===1?" Medium im Ausschnitt":" Medien im Ausschnitt");
+    var grid=el("remoteMapGrid");
+    if(!rows.length){grid.innerHTML='<div class="remote-map-empty">Im aktuellen Kartenausschnitt liegen keine Medien für diesen Filter.</div>';return;}
+    var limit=60, visible=rows.slice(0,limit);
+    grid.innerHTML=visible.map(function(point){
+      var image=geoThumb(point);
+      var preview=image?'<img loading="lazy" src="'+image+'" alt="">':'<div class="thumb-placeholder">▧</div>';
+      return '<button class="media-card" type="button" data-map-media-id="'+point.mediaId+'"><div class="thumb-wrap">'+preview+'</div><div class="media-copy"><div class="media-name">'+escapeHtml(basename(point.relativePath))+'</div><div class="media-meta"><span>'+escapeHtml(geoCaptured(point))+'</span></div></div></button>';
+    }).join("")+(rows.length>limit?'<div class="remote-map-more">'+fmt.format(rows.length-limit)+' weitere Medien · weiter hineinzoomen zum Eingrenzen</div>':'');
+    grid.querySelectorAll("[data-map-media-id]").forEach(function(button){
+      button.addEventListener("click",function(){openDetail(Number(button.getAttribute("data-map-media-id")));});
+    });
+  }
+  function geoClusters(rows){
+    if(!state.remoteMap) return [];
+    var zoom=state.remoteMap.getZoom(), cell=Math.max(52,96-zoom*3), groups={};
+    rows.forEach(function(point){
+      var projected=state.remoteMap.project([Number(point.latitude),Number(point.longitude)],zoom);
+      var key=Math.floor(projected.x/cell)+":"+Math.floor(projected.y/cell);
+      (groups[key]||(groups[key]=[])).push(point);
+    });
+    return Object.keys(groups).map(function(key){return groups[key];});
+  }
+  function renderRemoteMap(){
+    if(!state.remoteMap||!state.remoteMapLayer||!window.L) return;
+    state.remoteMapLayer.clearLayers();
+    var rows=geoVisiblePoints();
+    geoClusters(rows).forEach(function(group){
+      var lat=group.reduce(function(sum,p){return sum+Number(p.latitude);},0)/group.length;
+      var lng=group.reduce(function(sum,p){return sum+Number(p.longitude);},0)/group.length;
+      if(group.length===1){
+        var point=group[0];
+        var marker=window.L.circleMarker([lat,lng],{radius:7,weight:2,fillOpacity:.82});
+        var image=geoThumb(point);
+        marker.bindPopup('<div class="remote-map-popup">'+(image?'<img src="'+image+'" alt="">':'')+'<strong>'+escapeHtml(basename(point.relativePath))+'</strong><small>'+escapeHtml(geoCaptured(point))+'</small></div>');
+        marker.addTo(state.remoteMapLayer);
+      }else{
+        var radius=Math.min(28,11+Math.log2(group.length)*4);
+        var marker=window.L.circleMarker([lat,lng],{radius:radius,weight:2,fillOpacity:.86});
+        marker.bindTooltip(String(group.length),{permanent:true,direction:"center"});
+        marker.on("click",function(){state.remoteMap.setView([lat,lng],Math.min(18,state.remoteMap.getZoom()+2),{animate:true});});
+        marker.addTo(state.remoteMapLayer);
+      }
+    });
+    renderRemoteMapGallery();
+  }
+  function focusRemotePrimaryArea(){
+    if(!state.remoteMap||!window.L) return;
+    var rows=geoBasePoints();
+    if(!rows.length) return;
+    var buckets={};
+    rows.forEach(function(point){
+      var key=Math.floor(Number(point.latitude)/4)+":"+Math.floor(Number(point.longitude)/4);
+      (buckets[key]||(buckets[key]=[])).push(point);
+    });
+    var primary=Object.keys(buckets).map(function(key){return buckets[key];}).sort(function(a,b){return b.length-a.length;})[0]||[];
+    if(primary.length===1){state.remoteMap.setView([primary[0].latitude,primary[0].longitude],11);return;}
+    if(primary.length>1){
+      var bounds=window.L.latLngBounds(primary.map(function(point){return [Number(point.latitude),Number(point.longitude)];}));
+      state.remoteMap.fitBounds(bounds.pad(.2),{maxZoom:10});
+    }
+  }
+  function ensureRemoteMap(){
+    if(state.remoteMap) return true;
+    if(!window.L){el("remoteMapGrid").innerHTML='<div class="remote-map-empty">Kartenbibliothek konnte nicht geladen werden.</div>';return false;}
+    state.remoteMap=window.L.map("remoteMediaMap",{zoomControl:true,preferCanvas:true}).setView([48.8,9.2],5);
+    window.L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",{maxZoom:19,attribution:"© OpenStreetMap"}).addTo(state.remoteMap);
+    state.remoteMapLayer=window.L.layerGroup().addTo(state.remoteMap);
+    state.remoteMap.on("moveend zoomend",renderRemoteMap);
+    return true;
+  }
+  async function loadGeoMedia(force){
+    var sourceId=Number(el("sourceSelect").value);
+    if(!sourceId) return;
+    if(!force&&state.geoSourceId===sourceId&&state.geoMedia.length){renderRemoteMap();return;}
+    state.geoMedia=await api("/api/geo-media?sourceId="+sourceId);
+    state.geoSourceId=sourceId;
+    if(ensureRemoteMap()){
+      setTimeout(function(){state.remoteMap.invalidateSize();focusRemotePrimaryArea();renderRemoteMap();},0);
+    }
+  }
+  function switchMediaMode(mode){
+    state.mediaMode=mode==="map"?"map":"gallery";
+    document.querySelectorAll("[data-media-mode]").forEach(function(button){button.classList.toggle("active",button.getAttribute("data-media-mode")===state.mediaMode);});
+    el("mediaGalleryPane").hidden=state.mediaMode!=="gallery";
+    el("mediaMapPane").hidden=state.mediaMode!=="map";
+    if(state.mediaMode==="map"){
+      loadMedia().then(function(){return loadGeoMedia(false);}).catch(function(e){toast(e.message);});
+    }
+  }
   function renderMedia(){
     var q=el("mediaFilter").value.trim().toLowerCase();
     state.filteredMedia=state.media.filter(function(m){return !q || String(m.relativePath).toLowerCase().indexOf(q)>=0;});
@@ -452,13 +626,33 @@ export const REMOTE_START_PAGE = String.raw`<!doctype html>
   async function loadMedia(){
     var sourceId=Number(el("sourceSelect").value);
     if(!sourceId) return;
+    var identity=selectedIdentityFilter();
+    var limit=state.mediaMode==="map"||identity.personId||identity.petId?2000:300;
     el("mediaGrid").innerHTML='<div class="empty" style="grid-column:1/-1">Medien werden geladen …</div>';
-    state.media=await api("/api/media?sourceId="+sourceId+"&kind="+encodeURIComponent(el("kindSelect").value)+"&limit=300");
+    var url="/api/media?sourceId="+sourceId+"&kind="+encodeURIComponent(el("kindSelect").value)+"&limit="+limit;
+    if(identity.personId) url+="&personId="+identity.personId;
+    if(identity.petId) url+="&petId="+identity.petId;
+    state.media=await api(url);
     renderMedia();
+    if(state.mediaMode==="map") renderRemoteMap();
   }
   el("mediaFilter").addEventListener("input",renderMedia);
-  el("loadMedia").addEventListener("click",function(){loadMedia().catch(function(e){toast(e.message);});});
-  el("mediaRefresh").addEventListener("click",function(){loadMedia().catch(function(e){toast(e.message);});});
+  el("remoteMapSort").addEventListener("change",renderRemoteMapGallery);
+  document.querySelectorAll("[data-media-mode]").forEach(function(button){
+    button.addEventListener("click",function(){switchMediaMode(button.getAttribute("data-media-mode"));});
+  });
+  ["kindSelect","personFilter","petFilter"].forEach(function(id){
+    el(id).addEventListener("change",function(){loadMedia().catch(function(e){toast(e.message);});});
+  });
+  el("sourceSelect").addEventListener("change",function(){
+    loadMedia().then(function(){if(state.mediaMode==="map") return loadGeoMedia(true);}).catch(function(e){toast(e.message);});
+  });
+  el("loadMedia").addEventListener("click",function(){
+    loadMedia().then(function(){if(state.mediaMode==="map") return loadGeoMedia(false);}).catch(function(e){toast(e.message);});
+  });
+  el("mediaRefresh").addEventListener("click",function(){
+    loadMedia().then(function(){if(state.mediaMode==="map") return loadGeoMedia(true);}).catch(function(e){toast(e.message);});
+  });
 
   function nameLists(){
     var options=state.identityOptions||{}, people=options.people||[], pets=options.pets||[];
@@ -567,6 +761,11 @@ export const REMOTE_START_PAGE = String.raw`<!doctype html>
   async function ensureIdentityLists(force){
     if(force||!state.identityOptions) state.identityOptions=await api("/api/identity-options");
     nameLists();
+  }
+  function populateMediaIdentityFilters(){
+    var options=state.identityOptions||{}, people=options.people||[], pets=options.pets||[];
+    el("personFilter").innerHTML='<option value="">Alle Personen</option>'+people.map(function(row){return '<option value="'+row.id+'">'+escapeHtml(row.name)+' ('+fmt.format(row.mediaCount||0)+')</option>';}).join("");
+    el("petFilter").innerHTML='<option value="">Alle Haustiere</option>'+pets.map(function(row){return '<option value="'+row.id+'">'+escapeHtml(row.name)+' ('+fmt.format(row.mediaCount||0)+')</option>';}).join("");
   }
   function identityRows(details){
     var rows=[];
@@ -1086,7 +1285,8 @@ export const REMOTE_START_PAGE = String.raw`<!doctype html>
 
   async function boot(){
     try{
-      await Promise.all([loadSources(),refreshStatus()]);
+      await Promise.all([loadSources(),refreshStatus(),ensureIdentityLists(false)]);
+      populateMediaIdentityFilters();
       await loadMedia();
       setConnection(true,"Verbunden");
     }catch(e){setConnection(false,"Fehler: "+e.message);toast(e.message);}
