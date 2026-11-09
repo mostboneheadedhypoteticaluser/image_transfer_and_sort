@@ -1181,7 +1181,7 @@ function schedulePersonRefresh(
         if (personRefreshRescheduleRequested || personRefreshForceRequested) {
           const forceNext = personRefreshForceRequested;
           personRefreshRescheduleRequested = false;
-    personRefreshForceRequested = false;
+          personRefreshForceRequested = false;
           schedulePersonRefresh(forceNext, forceNext ? 0 : 30000);
         }
       });
@@ -2015,6 +2015,7 @@ function registerIpc(): void {
       personRefreshTimer = null;
     }
     personRefreshRescheduleRequested = false;
+    personRefreshForceRequested = false;
 
     // Harter Stopp beendet auch einen eventuell laufenden Qwen/llama.cpp-
     // Prozessbaum und verwirft alle offenen Python-Requests sofort.
