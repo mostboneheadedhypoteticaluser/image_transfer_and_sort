@@ -2415,9 +2415,21 @@ function registerIpc(): void {
 
   ipcMain.handle(
     "people:getOverview",
-    async (_event, _sourceId: number, forceRefresh = false): Promise<PersonOverview> => {
+    async (
+      _event,
+      _sourceId: number,
+      forceRefresh = false,
+      candidateLimit = 10,
+      candidateOffset = 0
+    ): Promise<PersonOverview> => {
       if (forceRefresh) schedulePersonRefresh(true, 0);
-      return personService!.getCombinedOverview(false, 500, 0, true, true);
+      return personService!.getCombinedOverview(
+        false,
+        candidateLimit,
+        candidateOffset,
+        true,
+        true
+      );
     }
   );
 
@@ -2532,9 +2544,21 @@ function registerIpc(): void {
 
   ipcMain.handle(
     "pets:getOverview",
-    async (_event, _sourceId: number, forceRefresh = false): Promise<PetOverview> => {
+    async (
+      _event,
+      _sourceId: number,
+      forceRefresh = false,
+      candidateLimit = 10,
+      candidateOffset = 0
+    ): Promise<PetOverview> => {
       if (forceRefresh) schedulePersonRefresh(true, 0);
-      return petService!.getCombinedOverview(false, 500, 0, true, true);
+      return petService!.getCombinedOverview(
+        false,
+        candidateLimit,
+        candidateOffset,
+        true,
+        true
+      );
     }
   );
 
