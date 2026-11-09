@@ -533,7 +533,9 @@ export const REMOTE_START_PAGE = String.raw`<!doctype html>
     }).join("");
     el("candidateList").querySelectorAll("[data-confirm-candidate]").forEach(function(b){b.addEventListener("click",function(){confirmCandidate(Number(b.getAttribute("data-confirm-candidate")),b);});});
     el("candidateList").querySelectorAll("[data-ignore-candidate]").forEach(function(b){b.addEventListener("click",function(){ignoreCandidate(Number(b.getAttribute("data-ignore-candidate")),b);});});
-    el("candidateList").querySelectorAll("[data-review-candidate]").forEach(function(b){b.addEventListener("click",function(){openGroupReview(Number(b.getAttribute("data-review-candidate")));});});
+    el("candidateList").querySelectorAll("[data-review-candidate]").forEach(function(b){b.addEventListener("click",function(){
+      openGroupReview(Number(b.getAttribute("data-review-candidate"))).catch(function(e){toast(e.message);});
+    });});
   }
 
   var groupReviewObserver=null;
@@ -594,12 +596,29 @@ export const REMOTE_START_PAGE = String.raw`<!doctype html>
     }
     updateGroupReviewCount();
   }
-  function openGroupReview(id){
+  async function openGroupReview(id){
     var candidate=currentCandidate(id);
     if(!candidate){toast("Die Gruppe ist nicht mehr aktuell. Bitte neu laden.");return;}
-    var ids=candidateMemberIds(candidate);
-    if(!ids.length){toast("Für diese Gruppe wurden keine Fundstellen gefunden.");return;}
     var mode=state.confirmMode;
+    el("groupReviewTitle").textContent=(mode==="people"?"Personengruppe":"Tiergruppe")+" · wird geladen …";
+    el("groupReviewGrid").innerHTML='<div class="empty" style="grid-column:1/-1">Fundstellen werden geladen …</div>';
+    el("groupReviewMore").hidden=true;
+    el("groupReviewName").setAttribute("list",mode==="people"?"personNames":"petNames");
+    el("groupReviewName").value=candidateDefaultName(candidate,mode);
+    if(!el("groupReviewDialog").open) el("groupReviewDialog").showModal();
+
+    var result=await api("/api/"+mode+"/"+id+"/items?limit=5000&offset=0");
+    var items=result&&result.items?result.items:[];
+    var ids=items.map(function(item){
+      return Number(mode==="people"?item.faceDetectionId:item.petDetectionId);
+    }).filter(function(value,index,array){
+      return Number.isSafeInteger(value)&&value>0&&array.indexOf(value)===index;
+    });
+    if(!ids.length){
+      el("groupReviewDialog").close();
+      toast("Für diese Gruppe wurden keine Fundstellen gefunden.");
+      return;
+    }
     state.groupReview={
       mode:mode,
       candidateId:id,
@@ -608,10 +627,7 @@ export const REMOTE_START_PAGE = String.raw`<!doctype html>
       visibleCount:Math.min(24,ids.length)
     };
     el("groupReviewTitle").textContent=(mode==="people"?"Personengruppe":"Tiergruppe")+" · "+fmt.format(ids.length)+" Fundstellen";
-    el("groupReviewName").setAttribute("list",mode==="people"?"personNames":"petNames");
-    el("groupReviewName").value=candidateDefaultName(candidate,mode);
     renderGroupReview();
-    el("groupReviewDialog").showModal();
   }
   el("groupReviewClose").addEventListener("click",function(){el("groupReviewDialog").close();});
   el("groupReviewDialog").addEventListener("close",function(){
@@ -668,7 +684,7 @@ export const REMOTE_START_PAGE = String.raw`<!doctype html>
     if(state.confirmMode==="people"){
       payload.fallbackFaceDetectionId=candidate.representativeFaceId||(candidate.faces&&candidate.faces[0]&&candidate.faces[0].faceDetectionId)||null;
       payload.expectedFaceCount=candidate.faceCount;
-      payload.expectedMemberSignature=candidate.memberSignature;
+      if(candidate.memberSignature) payload.expectedMemberSignature=candidate.memberSignature;
     }else{
       var suggestedName=candidate.suggestedPetName||(candidate.suggestedPets&&candidate.suggestedPets[0]&&candidate.suggestedPets[0].petName)||"";
       var suggestedId=candidate.suggestedPetId||(candidate.suggestedPets&&candidate.suggestedPets[0]&&candidate.suggestedPets[0].petId)||null;
@@ -677,7 +693,7 @@ export const REMOTE_START_PAGE = String.raw`<!doctype html>
       }
       payload.fallbackPetDetectionId=candidate.representativePetId||(candidate.pets&&candidate.pets[0]&&candidate.pets[0].petDetectionId)||null;
       payload.expectedDetectionCount=candidate.detectionCount;
-      payload.expectedMemberSignature=candidate.memberSignature;
+      if(candidate.memberSignature) payload.expectedMemberSignature=candidate.memberSignature;
     }
     button.disabled=true;
     try{
@@ -696,11 +712,11 @@ export const REMOTE_START_PAGE = String.raw`<!doctype html>
     if(state.confirmMode==="people"){
       payload.fallbackFaceDetectionId=candidate.representativeFaceId||(candidate.faces&&candidate.faces[0]&&candidate.faces[0].faceDetectionId)||null;
       payload.expectedFaceCount=candidate.faceCount;
-      payload.expectedMemberSignature=candidate.memberSignature;
+      if(candidate.memberSignature) payload.expectedMemberSignature=candidate.memberSignature;
     }else{
       payload.fallbackPetDetectionId=candidate.representativePetId||(candidate.pets&&candidate.pets[0]&&candidate.pets[0].petDetectionId)||null;
       payload.expectedDetectionCount=candidate.detectionCount;
-      payload.expectedMemberSignature=candidate.memberSignature;
+      if(candidate.memberSignature) payload.expectedMemberSignature=candidate.memberSignature;
     }
     button.disabled=true;
     try{
