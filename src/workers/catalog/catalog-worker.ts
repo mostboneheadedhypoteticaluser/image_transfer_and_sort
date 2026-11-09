@@ -2744,29 +2744,6 @@ function listDuplicateGroups(sourceId: number, requestedLimit: number) {
     LIMIT ?
   `).all(sourceId, limit);
 
-  if (summaryOnly) {
-    return candidates.map((candidate) => ({
-      id: Number(candidate.id),
-      petClass: String(candidate.pet_class),
-      detectionCount: Number(candidate.detection_count),
-      newestPetId: Number(candidate.newest_pet_id),
-      memberSignature: "",
-      representativePetId:
-        candidate.first_pet_id === null || candidate.first_pet_id === undefined
-          ? null
-          : Number(candidate.first_pet_id),
-      averageSimilarity: Number(candidate.average_similarity),
-      minSimilarity: Number(candidate.min_similarity),
-      suggestedPetId: null,
-      suggestedPetName: null,
-      suggestedPetSimilarity: null,
-      suggestedPets: [],
-      ignoredIdentityId: null,
-      ignoredSimilarity: null,
-      pets: []
-    }));
-  }
-
   const itemQuery = db.prepare(`
     SELECT id, relative_path, extension, size_bytes
     FROM media_items
@@ -8312,6 +8289,29 @@ function listPetCandidates(
     LIMIT ?
   `).all(sourceId, limit);
 
+  if (summaryOnly) {
+    return candidates.map((candidate) => ({
+      id: Number(candidate.id),
+      petClass: String(candidate.pet_class),
+      detectionCount: Number(candidate.detection_count),
+      newestPetId: Number(candidate.newest_pet_id),
+      memberSignature: "",
+      representativePetId:
+        candidate.first_pet_id === null || candidate.first_pet_id === undefined
+          ? null
+          : Number(candidate.first_pet_id),
+      averageSimilarity: Number(candidate.average_similarity),
+      minSimilarity: Number(candidate.min_similarity),
+      suggestedPetId: null,
+      suggestedPetName: null,
+      suggestedPetSimilarity: null,
+      suggestedPets: [],
+      ignoredIdentityId: null,
+      ignoredSimilarity: null,
+      pets: []
+    }));
+  }
+
   const itemQuery = db.prepare(`
     SELECT
       pci.pet_detection_id,
@@ -10620,6 +10620,25 @@ function listPersonCandidates(
     ORDER BY face_count DESC, pc.average_similarity DESC, newest_face_id DESC
     LIMIT ?
   `).all(sourceId, limit);
+
+  if (summaryOnly) {
+    return candidates.map((candidate) => ({
+      id: Number(candidate.id),
+      faceCount: Number(candidate.face_count),
+      newestFaceId: Number(candidate.newest_face_id),
+      memberSignature: "",
+      representativeFaceId:
+        candidate.first_face_id === null || candidate.first_face_id === undefined
+          ? null
+          : Number(candidate.first_face_id),
+      averageSimilarity: Number(candidate.average_similarity),
+      minSimilarity: Number(candidate.min_similarity),
+      suggestedPersons: [],
+      ignoredIdentityId: null,
+      ignoredSimilarity: null,
+      faces: []
+    }));
+  }
 
   const memberSignatureQuery = db.prepare(`
     SELECT pcf.face_detection_id
