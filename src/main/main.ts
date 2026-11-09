@@ -103,9 +103,9 @@ let remoteWebServer: HttpServer | null = null;
 const REMOTE_WEB_SECURITY_HEADERS = {
   "Cache-Control": "no-store",
   "X-Content-Type-Options": "nosniff",
-  "Referrer-Policy": "no-referrer",
+  "Referrer-Policy": "strict-origin-when-cross-origin",
   "Content-Security-Policy":
-    "default-src 'none'; connect-src 'self'; img-src 'self' data: https://*.tile.openstreetmap.org; media-src 'self'; style-src 'unsafe-inline' https://unpkg.com; script-src 'unsafe-inline' https://unpkg.com; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"
+    "default-src 'none'; connect-src 'self'; img-src 'self' data: https://tile.openstreetmap.org; media-src 'self'; style-src 'unsafe-inline' https://unpkg.com; script-src 'unsafe-inline' https://unpkg.com; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"
 } as const;
 
 function writeRemoteJson(
