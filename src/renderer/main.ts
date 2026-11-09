@@ -1450,16 +1450,19 @@ function renderCandidateReview(): void {
   candidateReviewAssign.disabled = false;
 }
 
-function openPersonCandidateReview(
+async function openPersonCandidateReview(
   candidate: PersonOverview["candidates"][number],
   overview: PersonOverview
-): void {
+): Promise<void> {
+  progressText.textContent =
+    "Fundstellen der Personengruppe werden geladen …";
+  const faces = await window.imageSorter.people.getCandidateItems(candidate.id);
   candidateReviewState = {
     kind: "person",
     candidateId: candidate.id,
     index: 0,
     knownNames: overview.persons.map((person) => person.name),
-    items: candidate.faces.map((face) => ({
+    items: faces.map((face) => ({
       detectionId: face.faceDetectionId,
       mediaId: face.mediaId,
       relativePath: face.relativePath,
@@ -1467,24 +1470,22 @@ function openPersonCandidateReview(
       y: face.y,
       width: face.width,
       height: face.height,
-      suggestions: face.suggestedPersons.map((suggestion) => ({
-        name: suggestion.personName,
-        similarity: suggestion.similarity,
-        previewUrl:
-          suggestion.representativeFaceId === null
-            ? null
-            : faceCropUrl(suggestion.representativeFaceId)
-      }))
+      suggestions: []
     }))
   };
   renderCandidateReview();
   candidateReviewDialog.showModal();
+  progressText.textContent =
+    faces.length.toLocaleString("de-DE") + " Fundstellen geladen.";
 }
 
-function openPetCandidateReview(
+async function openPetCandidateReview(
   candidate: PetOverview["candidates"][number],
   overview: PetOverview
-): void {
+): Promise<void> {
+  progressText.textContent =
+    "Fundstellen der Haustiergruppe werden geladen …";
+  const pets = await window.imageSorter.pets.getCandidateItems(candidate.id);
   candidateReviewState = {
     kind: "pet",
     candidateId: candidate.id,
@@ -1492,7 +1493,7 @@ function openPetCandidateReview(
     knownNames: overview.pets
       .filter((pet) => pet.petClass === candidate.petClass)
       .map((pet) => pet.name),
-    items: candidate.pets.map((pet) => ({
+    items: pets.map((pet) => ({
       detectionId: pet.petDetectionId,
       mediaId: pet.mediaId,
       relativePath: pet.relativePath,
@@ -1500,18 +1501,13 @@ function openPetCandidateReview(
       y: pet.y,
       width: pet.width,
       height: pet.height,
-      suggestions: pet.suggestedPets.map((suggestion) => ({
-        name: suggestion.petName,
-        similarity: suggestion.similarity,
-        previewUrl:
-          suggestion.representativePetId === null
-            ? null
-            : petCropUrl(suggestion.representativePetId)
-      }))
+      suggestions: []
     }))
   };
   renderCandidateReview();
   candidateReviewDialog.showModal();
+  progressText.textContent =
+    pets.length.toLocaleString("de-DE") + " Fundstellen geladen.";
 }
 
 candidateReviewImage.addEventListener("load", renderCandidateReviewBox);
@@ -5715,7 +5711,7 @@ function renderGroupedPersonSuggestionBucket(
             bucket.personName,
             fallbackFaceDetectionId,
             candidate.faceCount,
-            candidate.memberSignature
+            candidate.memberSignature || undefined
           );
           confirmedGroups += 1;
           confirmedFaces += result.faceCount;
@@ -5989,6 +5985,28 @@ function renderPersonOverview(overview: PersonOverview): void {
         faceStrip.appendChild(figure);
       }
 
+      if (
+        candidate.faces.length === 0 &&
+        candidate.representativeFaceId !== null
+      ) {
+        const figure = document.createElement("figure");
+        figure.className = "person-face representative";
+        const img = document.createElement("img");
+        img.src = faceCropUrl(candidate.representativeFaceId);
+        img.alt = "";
+        img.loading = "eager";
+        const fallback = document.createElement("span");
+        fallback.className = "face-fallback";
+        fallback.textContent = "Gesicht";
+        fallback.hidden = true;
+        img.addEventListener("error", () => {
+          img.hidden = true;
+          fallback.hidden = false;
+        });
+        figure.append(img, fallback);
+        faceStrip.appendChild(figure);
+      }
+
       const body = document.createElement("div");
       body.className = "person-candidate-body";
 
@@ -6028,7 +6046,7 @@ function renderPersonOverview(overview: PersonOverview): void {
       reviewGroupButton.title =
         "Alle Fundstellen groß anzeigen und einzeln zuordnen";
       reviewGroupButton.addEventListener("click", () => {
-        openPersonCandidateReview(candidate, overview);
+        void runSafely(() => openPersonCandidateReview(candidate, overview));
       });
       heading.append(titleBlock, reviewGroupButton);
 
@@ -6129,7 +6147,7 @@ function renderPersonOverview(overview: PersonOverview): void {
             name,
             fallbackFaceDetectionId,
             candidate.faceCount,
-            candidate.memberSignature
+            candidate.memberSignature || undefined
           );
           button.textContent = "Bestätigt ✓";
           progressText.textContent =
@@ -6692,6 +6710,28 @@ function renderPetOverview(overview: PetOverview): void {
         cropStrip.appendChild(figure);
       }
 
+      if (
+        candidate.pets.length === 0 &&
+        candidate.representativePetId !== null
+      ) {
+        const figure = document.createElement("figure");
+        figure.className = "person-face pet-crop representative";
+        const img = document.createElement("img");
+        img.src = petCropUrl(candidate.representativePetId);
+        img.alt = "";
+        img.loading = "eager";
+        const fallback = document.createElement("span");
+        fallback.className = "face-fallback";
+        fallback.textContent = "Hund";
+        fallback.hidden = true;
+        img.addEventListener("error", () => {
+          img.hidden = true;
+          fallback.hidden = false;
+        });
+        figure.append(img, fallback);
+        cropStrip.appendChild(figure);
+      }
+
       const body = document.createElement("div");
       body.className = "person-candidate-body";
 
@@ -6731,7 +6771,7 @@ function renderPetOverview(overview: PetOverview): void {
       reviewGroupButton.title =
         "Alle Fundstellen groß anzeigen und einzeln zuordnen";
       reviewGroupButton.addEventListener("click", () => {
-        openPetCandidateReview(candidate, overview);
+        void runSafely(() => openPetCandidateReview(candidate, overview));
       });
       heading.append(titleBlock, reviewGroupButton);
 
@@ -6762,6 +6802,7 @@ function renderPetOverview(overview: PetOverview): void {
 
       const selectionPanel = document.createElement("section");
       selectionPanel.className = "pet-selection-panel";
+      selectionPanel.hidden = candidate.pets.length === 0;
 
       const selectionHeader = document.createElement("div");
       selectionHeader.className = "pet-selection-header";
@@ -7029,7 +7070,7 @@ function renderPetOverview(overview: PetOverview): void {
             rejectedPetId,
             fallbackPetDetectionId,
             candidate.detectionCount,
-            candidate.memberSignature
+            candidate.memberSignature || undefined
           );
 
           button.textContent = "Bestätigt ✓";
@@ -8108,6 +8149,38 @@ peopleTab.addEventListener("click", () => setView("people"));
 petsTab.addEventListener("click", () => setView("pets"));
 recycleTab.addEventListener("click", () => setView("recycle"));
 
+document.querySelector<HTMLButtonElement>("#personViewSerial")?.addEventListener("click", () => {
+  const sourceId = selectedSourceId();
+  if (sourceId === null) return;
+  void runSafely(async () => {
+    progressText.textContent = "Serielle Personenprüfung wird geladen …";
+    const overview = await window.imageSorter.people.getOverview(
+      sourceId,
+      false,
+      500,
+      0,
+      false
+    );
+    renderPersonSerialOverview(overview);
+  });
+});
+
+document.querySelector<HTMLButtonElement>("#petViewSerial")?.addEventListener("click", () => {
+  const sourceId = selectedSourceId();
+  if (sourceId === null) return;
+  void runSafely(async () => {
+    progressText.textContent = "Serielle Haustierprüfung wird geladen …";
+    const overview = await window.imageSorter.pets.getOverview(
+      sourceId,
+      false,
+      500,
+      0,
+      false
+    );
+    renderPetSerialOverview(overview);
+  });
+});
+
 refreshPeopleButton.addEventListener("click", () => {
   const sourceId = selectedSourceId();
   if (sourceId === null) return;
@@ -8731,12 +8804,8 @@ window.imageSorter.people.onUpdated(() => {
 
   void runSafely(async () => {
     await refreshIdentityTabStats();
-
-    // Neue Vorschläge dürfen im Hintergrund entstehen, aber eine laufende
-    // Eingabe wird niemals durch replaceChildren()/Neuaufbau unterbrochen.
-    if (currentView === "people" && !isEditingPersonView()) {
-      await loadPersonOverview(sourceId);
-    }
+    // Die sichtbare Reihenfolge bleibt stabil. Neue Gruppen erscheinen erst
+    // nach manueller Aktualisierung oder einer bewussten Aktion des Nutzers.
   });
 });
 
@@ -8753,10 +8822,7 @@ window.imageSorter.pets.onUpdated(() => {
 
   void runSafely(async () => {
     await refreshIdentityTabStats();
-
-    if (currentView === "pets" && !isEditingPetView()) {
-      await loadPetOverview(sourceId);
-    }
+    // Keine automatische Neuordnung der sichtbaren Gruppen im Hintergrund.
   });
 });
 
