@@ -240,12 +240,16 @@ function renderFilterSummary(filtered: GeoMediaPoint[]): void {
 function renderGallery(): void {
   const gallery = document.querySelector<HTMLElement>("#mapMediaGallery");
   const count = document.querySelector<HTMLElement>("#mapVisibleCount");
+  const heading = document.querySelector<HTMLElement>("#mapVisibleCountText");
   if (!gallery || !count) return;
 
   const visible = sortedVisiblePoints();
-  count.textContent =
-    visible.length.toLocaleString("de-DE") +
-    (visible.length === 1 ? " Medium im Ausschnitt" : " Medien im Ausschnitt");
+  count.textContent = visible.length.toLocaleString("de-DE");
+  if (heading) {
+    heading.textContent =
+      visible.length.toLocaleString("de-DE") +
+      (visible.length === 1 ? " Medium im Kartenausschnitt" : " Medien im Kartenausschnitt");
+  }
 
   if (visible.length === 0) {
     gallery.innerHTML =
