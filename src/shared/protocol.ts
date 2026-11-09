@@ -488,6 +488,7 @@ export type PetRecord = {
 };
 
 export type PetOverview = {
+  summaryOnly?: boolean;
   candidates: PetCandidate[];
   pets: PetRecord[];
   ungroupedPets: PetUngroupedItem[];
@@ -649,6 +650,7 @@ export type PersonRecord = {
 };
 
 export type PersonOverview = {
+  summaryOnly?: boolean;
   candidates: PersonCandidate[];
   persons: PersonRecord[];
   ungroupedFaces: PersonUngroupedFace[];
