@@ -1,7 +1,8 @@
 import path from "node:path";
+import { createReadStream } from "node:fs";
 import { createServer, type Server as HttpServer } from "node:http";
 import { pathToFileURL } from "node:url";
-import { readFile, readdir, rm } from "node:fs/promises";
+import { readFile, readdir, rm, stat } from "node:fs/promises";
 import { app, BrowserWindow, clipboard, dialog, ipcMain, net, protocol, shell, type OpenDialogOptions } from "electron";
 import { CatalogService } from "./catalog-service";
 import { AnalysisService } from "./analysis-service";
@@ -12,6 +13,7 @@ import { getVideoFrameJpeg, pruneVideoFrameCache } from "./video-frame-service";
 import { PersonService } from "./person-service";
 import { PetService } from "./pet-service";
 import { CatalogWatchService } from "./catalog-watch-service";
+import { REMOTE_START_PAGE } from "./remote-web-page";
 import { IMAGE_EXTENSIONS, VIDEO_EXTENSIONS, IGNORED_DIRECTORY_NAMES } from "../catalog/constants";
 import type {
   AnalysisErrorRecord,
@@ -94,17 +96,15 @@ let backgroundPauseChanging = false;
 const mediaStreamPathCache = new Map<number, string>();
 
 const REMOTE_WEB_PORT = 8787;
-const REMOTE_WEB_HOST = "::";
+const REMOTE_WEB_HOST = "127.0.0.1";
 let remoteWebServer: HttpServer | null = null;
-
-const REMOTE_START_PAGE = "<!doctype html>\n<html lang=\"de\">\n<head>\n  <meta charset=\"utf-8\">\n  <meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\n  <title>Image Sortierer – Remote-Test</title>\n  <style>\n    :root { color-scheme: dark; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif; background:#0b0d10; color:#f4f5f7; }\n    * { box-sizing:border-box; }\n    body { margin:0; min-height:100vh; background:radial-gradient(circle at top,#171b21 0,#0b0d10 52%); }\n    main { width:min(980px,calc(100% - 32px)); margin:0 auto; padding:40px 0 64px; }\n    .hero,.panel { border:1px solid #2a3039; background:rgba(20,23,28,.94); border-radius:18px; box-shadow:0 18px 60px rgba(0,0,0,.28); }\n    .hero { padding:28px; }\n    .eyebrow { display:flex; align-items:center; gap:10px; color:#aeb7c4; font-size:14px; }\n    .dot { width:11px; height:11px; border-radius:999px; background:#46d17b; box-shadow:0 0 0 5px rgba(70,209,123,.12); }\n    h1 { margin:14px 0 8px; font-size:clamp(28px,5vw,46px); line-height:1.04; }\n    .sub { margin:0; color:#aeb7c4; }\n    .grid { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:12px; margin-top:18px; }\n    .card { padding:17px; border:1px solid #2a3039; border-radius:14px; background:#111419; }\n    .value { font-size:28px; font-weight:750; letter-spacing:-.03em; }\n    .label { margin-top:5px; color:#8f99a8; font-size:13px; }\n    .panel { margin-top:18px; padding:22px; }\n    .row { display:flex; justify-content:space-between; gap:18px; padding:10px 0; border-bottom:1px solid #252a31; }\n    .row:last-child { border-bottom:0; }\n    .key { color:#8f99a8; }\n    .mono { font-family:ui-monospace,SFMono-Regular,Consolas,monospace; font-size:13px; overflow-wrap:anywhere; }\n    button { border:0; border-radius:10px; background:#f4f5f7; color:#0b0d10; padding:11px 15px; font-weight:700; cursor:pointer; }\n    button:disabled { opacity:.55; cursor:wait; }\n    .ping { display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin-top:14px; }\n    .ok { color:#69e69a; }\n    .bad { color:#ff8585; }\n    @media (max-width:760px) { .grid { grid-template-columns:repeat(2,minmax(0,1fr)); } .hero,.panel { border-radius:14px; } }\n  </style>\n</head>\n<body>\n<main>\n  <section class=\"hero\">\n    <div class=\"eyebrow\"><span class=\"dot\"></span><span id=\"connection\">Verbindung wird geprüft …</span></div>\n    <h1>Image Sortierer</h1>\n    <p class=\"sub\">Live-Test: Browser ↔ Cloudflare Tunnel ↔ lokale App ↔ Katalog-Datenbank</p>\n    <div class=\"grid\">\n      <div class=\"card\"><div class=\"value\" id=\"total\">–</div><div class=\"label\">Medien gesamt</div></div>\n      <div class=\"card\"><div class=\"value\" id=\"available\">–</div><div class=\"label\">Verfügbar</div></div>\n      <div class=\"card\"><div class=\"value\" id=\"persons\">–</div><div class=\"label\">Personen</div></div>\n      <div class=\"card\"><div class=\"value\" id=\"pets\">–</div><div class=\"label\">Haustiere</div></div>\n      <div class=\"card\"><div class=\"value\" id=\"faces\">–</div><div class=\"label\">Erkannte Gesichter</div></div>\n    </div>\n  </section>\n  <section class=\"panel\">\n    <div class=\"row\"><span class=\"key\">Serverzeit</span><span class=\"mono\" id=\"serverTime\">–</span></div>\n    <div class=\"row\"><span class=\"key\">Letzter Katalog-Scan</span><span class=\"mono\" id=\"lastScan\">–</span></div>\n    <div class=\"row\"><span class=\"key\">Hintergrundanalyse</span><span id=\"background\">–</span></div>\n    <div class=\"row\"><span class=\"key\">Letzter Abruf</span><span class=\"mono\" id=\"lastFetch\">–</span></div>\n    <div class=\"ping\">\n      <button id=\"pingButton\" type=\"button\">Testdaten senden</button>\n      <span id=\"pingResult\" class=\"mono\">Noch kein Ping gesendet.</span>\n    </div>\n  </section>\n</main>\n<script>\n  const number = new Intl.NumberFormat(\"de-DE\");\n  const ids = [\"total\",\"available\",\"persons\",\"pets\",\"faces\"];\n  function setText(id,value){ document.getElementById(id).textContent = value; }\n\n  async function refreshStatus(){\n    try {\n      const response = await fetch(\"/api/remote-status\", { cache:\"no-store\" });\n      if (!response.ok) throw new Error(\"HTTP \" + response.status);\n      const payload = await response.json();\n      const stats = payload.stats || {};\n      setText(\"connection\", payload.catalogReady ? \"Remote-Verbindung aktiv · Katalog erreichbar\" : \"Remote-Verbindung aktiv · Katalog startet\");\n      document.getElementById(\"connection\").className = payload.catalogReady ? \"ok\" : \"\";\n      setText(\"total\", Number.isFinite(stats.total) ? number.format(stats.total) : \"–\");\n      setText(\"available\", Number.isFinite(stats.available) ? number.format(stats.available) : \"–\");\n      setText(\"persons\", Number.isFinite(stats.persons) ? number.format(stats.persons) : \"–\");\n      setText(\"pets\", Number.isFinite(stats.pets) ? number.format(stats.pets) : \"–\");\n      setText(\"faces\", Number.isFinite(stats.detectedFaces) ? number.format(stats.detectedFaces) : \"–\");\n      setText(\"serverTime\", payload.serverTime ? new Date(payload.serverTime).toLocaleString(\"de-DE\") : \"–\");\n      setText(\"lastScan\", stats.lastScan ? new Date(stats.lastScan).toLocaleString(\"de-DE\") : \"noch keiner\");\n      setText(\"background\", payload.background && payload.background.paused ? \"pausiert\" : \"läuft\");\n      setText(\"lastFetch\", new Date().toLocaleTimeString(\"de-DE\"));\n    } catch (error) {\n      setText(\"connection\", \"Verbindung unterbrochen\");\n      document.getElementById(\"connection\").className = \"bad\";\n      ids.forEach((id) => setText(id,\"–\"));\n      setText(\"lastFetch\", String(error));\n    }\n  }\n\n  document.getElementById(\"pingButton\").addEventListener(\"click\", async () => {\n    const button = document.getElementById(\"pingButton\");\n    button.disabled = true;\n    const started = performance.now();\n    try {\n      const sentAt = new Date().toISOString();\n      const response = await fetch(\"/api/remote-echo\", {\n        method:\"POST\",\n        headers:{ \"Content-Type\":\"application/json\" },\n        body:JSON.stringify({ sentAt, message:\"Hallo vom Browser\" })\n      });\n      if (!response.ok) throw new Error(\"HTTP \" + response.status);\n      const payload = await response.json();\n      const roundtrip = Math.round(performance.now() - started);\n      const echo = payload.echo && payload.echo.message ? payload.echo.message : \"Antwort erhalten\";\n      setText(\"pingResult\", echo + \" · \" + roundtrip + \" ms · Server \" + new Date(payload.receivedAt).toLocaleTimeString(\"de-DE\"));\n      document.getElementById(\"pingResult\").className = \"mono ok\";\n    } catch (error) {\n      setText(\"pingResult\", \"Fehler: \" + String(error));\n      document.getElementById(\"pingResult\").className = \"mono bad\";\n    } finally {\n      button.disabled = false;\n    }\n  });\n\n  refreshStatus();\n  setInterval(refreshStatus, 3000);\n</script>\n</body>\n</html>";
 
 const REMOTE_WEB_SECURITY_HEADERS = {
   "Cache-Control": "no-store",
   "X-Content-Type-Options": "nosniff",
   "Referrer-Policy": "no-referrer",
   "Content-Security-Policy":
-    "default-src 'none'; connect-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'"
+    "default-src 'none'; connect-src 'self'; img-src 'self' data:; media-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"
 } as const;
 
 function writeRemoteJson(
@@ -136,19 +136,151 @@ async function readRemoteJsonBody(
   return JSON.parse(body);
 }
 
+function writeRemoteBytes(
+  response: import("node:http").ServerResponse,
+  statusCode: number,
+  bytes: Buffer,
+  contentType: string,
+  cacheControl = "no-store"
+): void {
+  response.writeHead(statusCode, {
+    ...REMOTE_WEB_SECURITY_HEADERS,
+    "Cache-Control": cacheControl,
+    "Content-Type": contentType,
+    "Content-Length": String(bytes.byteLength)
+  });
+  response.end(bytes);
+}
+
+function remoteMediaContentType(filePath: string): string {
+  switch (path.extname(filePath).toLowerCase()) {
+    case ".jpg":
+    case ".jpeg": return "image/jpeg";
+    case ".png": return "image/png";
+    case ".webp": return "image/webp";
+    case ".gif": return "image/gif";
+    case ".heic":
+    case ".heif": return "image/heic";
+    case ".mp4":
+    case ".m4v": return "video/mp4";
+    case ".mov": return "video/quicktime";
+    case ".webm": return "video/webm";
+    case ".avi": return "video/x-msvideo";
+    case ".mkv": return "video/x-matroska";
+    case ".mts":
+    case ".m2ts": return "video/mp2t";
+    default: return "application/octet-stream";
+  }
+}
+
+async function streamRemoteMedia(
+  request: import("node:http").IncomingMessage,
+  response: import("node:http").ServerResponse,
+  mediaId: number,
+  download: boolean
+): Promise<void> {
+  if (!catalog) throw new Error("Katalog ist noch nicht bereit.");
+
+  const info = await catalog.request<MediaPreviewInfo | null>(
+    "getMediaPreviewInfo",
+    { mediaId }
+  );
+  if (!info) {
+    writeRemoteJson(response, 404, { ok: false, error: "Medium nicht gefunden." });
+    return;
+  }
+
+  const fileStat = await stat(info.absolutePath);
+  if (!fileStat.isFile()) {
+    writeRemoteJson(response, 404, { ok: false, error: "Medium ist keine Datei." });
+    return;
+  }
+
+  const size = fileStat.size;
+  const contentType = remoteMediaContentType(info.absolutePath);
+  const fileName = path.basename(info.absolutePath);
+  const disposition = download
+    ? "attachment; filename*=UTF-8''" + encodeURIComponent(fileName)
+    : "inline";
+  const range = request.headers.range;
+
+  if (range) {
+    const match = /^bytes=(\d*)-(\d*)$/.exec(range.trim());
+    if (!match) {
+      response.writeHead(416, {
+        ...REMOTE_WEB_SECURITY_HEADERS,
+        "Content-Range": "bytes */" + size
+      });
+      response.end();
+      return;
+    }
+
+    let start: number;
+    let end: number;
+    if (!match[1] && match[2]) {
+      const suffix = Math.max(1, Math.trunc(Number(match[2])));
+      start = Math.max(0, size - suffix);
+      end = size - 1;
+    } else {
+      start = Math.max(0, Math.trunc(Number(match[1]) || 0));
+      end = match[2]
+        ? Math.min(size - 1, Math.trunc(Number(match[2])))
+        : size - 1;
+    }
+
+    if (start >= size || end < start) {
+      response.writeHead(416, {
+        ...REMOTE_WEB_SECURITY_HEADERS,
+        "Content-Range": "bytes */" + size
+      });
+      response.end();
+      return;
+    }
+
+    response.writeHead(206, {
+      ...REMOTE_WEB_SECURITY_HEADERS,
+      "Content-Type": contentType,
+      "Content-Disposition": disposition,
+      "Accept-Ranges": "bytes",
+      "Content-Range": "bytes " + start + "-" + end + "/" + size,
+      "Content-Length": String(end - start + 1)
+    });
+    if (request.method === "HEAD") {
+      response.end();
+      return;
+    }
+    const stream = createReadStream(info.absolutePath, { start, end });
+    stream.on("error", () => response.destroy());
+    stream.pipe(response);
+    return;
+  }
+
+  response.writeHead(200, {
+    ...REMOTE_WEB_SECURITY_HEADERS,
+    "Content-Type": contentType,
+    "Content-Disposition": disposition,
+    "Accept-Ranges": "bytes",
+    "Content-Length": String(size)
+  });
+  if (request.method === "HEAD") {
+    response.end();
+    return;
+  }
+  const stream = createReadStream(info.absolutePath);
+  stream.on("error", () => response.destroy());
+  stream.pipe(response);
+}
+
 function startRemoteWebServer(): Promise<void> {
   if (remoteWebServer) return Promise.resolve();
 
   return new Promise<void>((resolve, reject) => {
     const server = createServer(async (request, response) => {
       const method = request.method ?? "GET";
-      let pathname = "/";
+      let requestUrl: URL;
 
       try {
-        pathname = new URL(
-          request.url ?? "/",
-          "http://localhost"
-        ).pathname;
+        requestUrl = new URL(request.url ?? "/", "http://localhost");
       } catch {
         response.writeHead(400, {
           ...REMOTE_WEB_SECURITY_HEADERS,
@@ -158,20 +290,28 @@ function startRemoteWebServer(): Promise<void> {
         return;
       }
 
-      if ((method === "GET" || method === "HEAD") && pathname === "/") {
-        response.writeHead(200, {
-          ...REMOTE_WEB_SECURITY_HEADERS,
-          "Content-Type": "text/html; charset=utf-8"
-        });
-        response.end(method === "HEAD" ? undefined : REMOTE_START_PAGE);
-        return;
-      }
+      const pathname = requestUrl.pathname;
 
-      if ((method === "GET" || method === "HEAD") && pathname === "/api/remote-status") {
-        try {
-          const stats = catalog
-            ? await catalog.request<CatalogStats>("getStats")
-            : null;
+      try {
+        if ((method === "GET" || method === "HEAD") && pathname === "/") {
+          response.writeHead(200, {
+            ...REMOTE_WEB_SECURITY_HEADERS,
+            "Content-Type": "text/html; charset=utf-8"
+          });
+          response.end(method === "HEAD" ? undefined : REMOTE_START_PAGE);
+          return;
+        }
+
+        if ((method === "GET" || method === "HEAD") && pathname === "/api/remote-status") {
+          const [stats, moduleQueues] = catalog
+            ? await Promise.all([
+                catalog.request<CatalogStats>("getStats"),
+                catalog.request<{
+                  byModule: Record<string, AnalysisQueueStats>;
+                  petDetection: AnalysisQueueStats;
+                }>("getPipelineQueueStats")
+              ])
+            : [null, { byModule: {}, petDetection: { ...EMPTY_QUEUE } }];
 
           const payload = {
             ok: true,
@@ -180,7 +320,9 @@ function startRemoteWebServer(): Promise<void> {
             catalogReady: Boolean(catalog),
             stats,
             background: backgroundPauseState(),
-            pipeline: pipelineStatus
+            analysis: analysis?.getStatus() ?? null,
+            pipeline: pipelineStatus,
+            moduleQueues
           };
 
           if (method === "HEAD") {
@@ -192,39 +334,397 @@ function startRemoteWebServer(): Promise<void> {
           } else {
             writeRemoteJson(response, 200, payload);
           }
-        } catch (error) {
-          writeRemoteJson(response, 503, {
-            ok: false,
-            serverTime: new Date().toISOString(),
-            catalogReady: Boolean(catalog),
-            error: error instanceof Error ? error.message : String(error)
-          });
+          return;
         }
-        return;
-      }
 
-      if (method === "POST" && pathname === "/api/remote-echo") {
-        try {
+        if ((method === "GET" || method === "HEAD") && pathname === "/api/sources") {
+          if (!catalog) throw new Error("Katalog ist noch nicht bereit.");
+          const sources = await catalog.request<SourceRecord[]>("listSources");
+          if (method === "HEAD") {
+            response.writeHead(200, {
+              ...REMOTE_WEB_SECURITY_HEADERS,
+              "Content-Type": "application/json; charset=utf-8"
+            });
+            response.end();
+          } else {
+            writeRemoteJson(response, 200, sources);
+          }
+          return;
+        }
+
+        if (method === "GET" && pathname === "/api/media") {
+          if (!catalog) throw new Error("Katalog ist noch nicht bereit.");
+          const sourceId = Math.trunc(Number(requestUrl.searchParams.get("sourceId")));
+          if (!Number.isSafeInteger(sourceId) || sourceId <= 0) {
+            writeRemoteJson(response, 400, { ok: false, error: "Ungültige Quelle." });
+            return;
+          }
+          const limit = Math.max(
+            1,
+            Math.min(500, Math.trunc(Number(requestUrl.searchParams.get("limit")) || 300))
+          );
+          const rawKind = requestUrl.searchParams.get("kind");
+          const mediaKind =
+            rawKind === "image" || rawKind === "video" ? rawKind : "all";
+          const rows = await catalog.request<MediaRecord[]>("listMedia", {
+            sourceId,
+            limit,
+            mediaKind
+          });
+          for (const row of rows) {
+            if (!row.sourcePath) continue;
+            mediaStreamPathCache.set(
+              row.id,
+              path.resolve(row.sourcePath, row.relativePath)
+            );
+          }
+          writeRemoteJson(response, 200, rows);
+          return;
+        }
+
+        const detailMatch = /^\/api\/media\/(\d+)\/details$/.exec(pathname);
+        if (method === "GET" && detailMatch) {
+          if (!catalog) throw new Error("Katalog ist noch nicht bereit.");
+          const mediaId = Number(detailMatch[1]);
+          const details = await catalog.request<MediaDetails | null>(
+            "getMediaDetails",
+            { mediaId }
+          );
+          if (!details) {
+            writeRemoteJson(response, 404, { ok: false, error: "Medium nicht gefunden." });
+            return;
+          }
+          mediaStreamPathCache.set(mediaId, details.absolutePath);
+          writeRemoteJson(response, 200, details);
+          return;
+        }
+
+        const thumbMatch = /^\/api\/media\/(\d+)\/thumbnail$/.exec(pathname);
+        if (method === "GET" && thumbMatch) {
+          if (!catalog) throw new Error("Katalog ist noch nicht bereit.");
+          const mediaId = Number(thumbMatch[1]);
+          const info = await catalog.request<ThumbnailInfo | null>(
+            "getThumbnailInfo",
+            { mediaId }
+          );
+          if (!info || !isInsideDirectory(info.path, thumbnailCacheRoot)) {
+            writeRemoteJson(response, 404, { ok: false, error: "Thumbnail nicht gefunden." });
+            return;
+          }
+          const bytes = await readFile(info.path);
+          writeRemoteBytes(response, 200, bytes, "image/jpeg", "private, max-age=300");
+          return;
+        }
+
+        const previewMatch = /^\/api\/media\/(\d+)\/preview$/.exec(pathname);
+        if (method === "GET" && previewMatch) {
+          if (!catalog || !thumbnailService) throw new Error("Vorschau ist noch nicht bereit.");
+          const mediaId = Number(previewMatch[1]);
+          const info = await catalog.request<MediaPreviewInfo | null>(
+            "getMediaPreviewInfo",
+            { mediaId }
+          );
+          if (!info) {
+            writeRemoteJson(response, 404, { ok: false, error: "Medium nicht gefunden." });
+            return;
+          }
+          const preview = await thumbnailService.generatePreview(
+            info.absolutePath,
+            info.inputSha256
+          );
+          if (!isInsideDirectory(preview.path, thumbnailCacheRoot)) {
+            writeRemoteJson(response, 403, { ok: false, error: "Vorschau-Pfad abgelehnt." });
+            return;
+          }
+          writeRemoteBytes(response, 200, await readFile(preview.path), "image/jpeg");
+          return;
+        }
+
+        const faceMatch = /^\/api\/face\/(\d+)$/.exec(pathname);
+        if (method === "GET" && faceMatch) {
+          if (!catalog || !thumbnailService) throw new Error("Gesichtsvorschau ist noch nicht bereit.");
+          const faceDetectionId = Number(faceMatch[1]);
+          const info = await catalog.request<FaceCropInfo | null>(
+            "getFaceCropInfo",
+            { faceDetectionId }
+          );
+          if (!info) {
+            writeRemoteJson(response, 404, { ok: false, error: "Gesicht nicht gefunden." });
+            return;
+          }
+          const crop = await thumbnailService.generateFaceCrop(
+            info.absolutePath,
+            info.inputSha256,
+            info.faceDetectionId,
+            { x: info.x, y: info.y, width: info.width, height: info.height }
+          );
+          if (!isInsideDirectory(crop.path, thumbnailCacheRoot)) {
+            writeRemoteJson(response, 403, { ok: false, error: "Gesichtsvorschau abgelehnt." });
+            return;
+          }
+          writeRemoteBytes(response, 200, await readFile(crop.path), "image/jpeg");
+          return;
+        }
+
+        const petMatch = /^\/api\/pet\/(\d+)$/.exec(pathname);
+        if (method === "GET" && petMatch) {
+          if (!catalog || !thumbnailService) throw new Error("Tiervorschau ist noch nicht bereit.");
+          const petDetectionId = Number(petMatch[1]);
+          const info = await catalog.request<PetCropInfo | null>(
+            "getPetCropInfo",
+            { petDetectionId }
+          );
+          if (!info) {
+            writeRemoteJson(response, 404, { ok: false, error: "Tier nicht gefunden." });
+            return;
+          }
+          const crop = await thumbnailService.generatePetCrop(
+            info.absolutePath,
+            info.inputSha256,
+            info.petDetectionId,
+            { x: info.x, y: info.y, width: info.width, height: info.height }
+          );
+          if (!isInsideDirectory(crop.path, thumbnailCacheRoot)) {
+            writeRemoteJson(response, 403, { ok: false, error: "Tiervorschau abgelehnt." });
+            return;
+          }
+          writeRemoteBytes(response, 200, await readFile(crop.path), "image/jpeg");
+          return;
+        }
+
+        const frameMatch = /^\/api\/video\/(\d+)\/frame$/.exec(pathname);
+        if (method === "GET" && frameMatch) {
+          if (!catalog) throw new Error("Katalog ist noch nicht bereit.");
+          const mediaId = Number(frameMatch[1]);
+          const timestampMs = Number(requestUrl.searchParams.get("ms"));
+          const width = Math.max(
+            160,
+            Math.min(1600, Math.trunc(Number(requestUrl.searchParams.get("width")) || 720))
+          );
+          const frameIndexRaw = requestUrl.searchParams.get("i");
+          const frameIndex = frameIndexRaw === null ? null : Number(frameIndexRaw);
+          const frameHash = requestUrl.searchParams.get("h");
+          if (
+            !Number.isSafeInteger(timestampMs) ||
+            timestampMs < 0 ||
+            (frameIndex !== null && (!Number.isSafeInteger(frameIndex) || frameIndex < 0)) ||
+            (frameHash !== null && !/^[a-f0-9]{32}$/i.test(frameHash))
+          ) {
+            writeRemoteJson(response, 400, { ok: false, error: "Ungültige Szenenbild-Parameter." });
+            return;
+          }
+          const info = await catalog.request<MediaPreviewInfo | null>(
+            "getMediaPreviewInfo",
+            { mediaId }
+          );
+          if (!info) {
+            writeRemoteJson(response, 404, { ok: false, error: "Video nicht gefunden." });
+            return;
+          }
+          const jpg = await getVideoFrameJpeg(
+            info.absolutePath,
+            info.inputSha256,
+            timestampMs,
+            frameIndex,
+            frameHash,
+            width,
+            thumbnailCacheRoot
+          );
+          writeRemoteBytes(response, 200, jpg, "image/jpeg");
+          return;
+        }
+
+        const contentMatch = /^\/api\/media\/(\d+)\/content$/.exec(pathname);
+        if ((method === "GET" || method === "HEAD") && contentMatch) {
+          await streamRemoteMedia(
+            request,
+            response,
+            Number(contentMatch[1]),
+            requestUrl.searchParams.get("download") === "1"
+          );
+          return;
+        }
+
+        if (method === "GET" && pathname === "/api/people") {
+          if (!personService) throw new Error("Personenerkennung ist noch nicht bereit.");
+          const overview = await personService.getCombinedOverview(
+            requestUrl.searchParams.get("refresh") === "1"
+          );
+          writeRemoteJson(response, 200, overview);
+          return;
+        }
+
+        if (method === "GET" && pathname === "/api/pets") {
+          if (!petService) throw new Error("Tiererkennung ist noch nicht bereit.");
+          const overview = await petService.getCombinedOverview(
+            requestUrl.searchParams.get("refresh") === "1"
+          );
+          writeRemoteJson(response, 200, overview);
+          return;
+        }
+
+        if (method === "POST" && pathname === "/api/people/confirm") {
+          if (!personService) throw new Error("Personenerkennung ist noch nicht bereit.");
+          const body = await readRemoteJsonBody(request) as Record<string, unknown>;
+          const result = await personService.confirmCandidate(
+            Number(body.candidateId),
+            String(body.name ?? "")
+          );
+          schedulePersonRefresh();
+          writeRemoteJson(response, 200, result);
+          return;
+        }
+
+        if (method === "POST" && pathname === "/api/people/ignore") {
+          if (!personService) throw new Error("Personenerkennung ist noch nicht bereit.");
+          const body = await readRemoteJsonBody(request) as Record<string, unknown>;
+          const result = await personService.ignoreCandidate(Number(body.candidateId));
+          schedulePersonRefresh();
+          writeRemoteJson(response, 200, result);
+          return;
+        }
+
+        if (method === "POST" && pathname === "/api/pets/confirm") {
+          if (!petService) throw new Error("Tiererkennung ist noch nicht bereit.");
+          const body = await readRemoteJsonBody(request) as Record<string, unknown>;
+          const result = await petService.confirmCandidate(
+            Number(body.candidateId),
+            String(body.name ?? "")
+          );
+          schedulePersonRefresh();
+          writeRemoteJson(response, 200, result);
+          return;
+        }
+
+        if (method === "POST" && pathname === "/api/pets/ignore") {
+          if (!petService) throw new Error("Tiererkennung ist noch nicht bereit.");
+          const body = await readRemoteJsonBody(request) as Record<string, unknown>;
+          const result = await petService.ignoreCandidate(Number(body.candidateId));
+          schedulePersonRefresh();
+          writeRemoteJson(response, 200, result);
+          return;
+        }
+
+        if (method === "POST" && pathname === "/api/identity/assign") {
+          const body = await readRemoteJsonBody(request) as Record<string, unknown>;
+          const kind = body.kind === "pet" ? "pet" : "person";
+          const detectionId = Number(body.detectionId);
+          const name = String(body.name ?? "").trim();
+          if (!Number.isSafeInteger(detectionId) || detectionId <= 0 || !name) {
+            writeRemoteJson(response, 400, { ok: false, error: "Ungültige Zuordnung." });
+            return;
+          }
+          const result =
+            kind === "person"
+              ? await personService!.assignDetectionName(detectionId, name)
+              : await petService!.assignDetectionName(detectionId, name);
+          schedulePersonRefresh();
+          writeRemoteJson(response, 200, result);
+          return;
+        }
+
+        if (method === "POST" && pathname === "/api/video/assign") {
+          if (!catalog) throw new Error("Katalog ist noch nicht bereit.");
+          const body = await readRemoteJsonBody(request) as Record<string, unknown>;
+          const kind = body.kind === "pet" ? "pet" : "person";
+          const result = await catalog.request("assignVideoFrameIdentityName", {
+            mediaId: Number(body.mediaId),
+            timestampMs: Number(body.timestampMs),
+            kind,
+            detectionIndex: Number(body.detectionIndex),
+            petClass:
+              body.petClass === "dog" || body.petClass === "cat"
+                ? body.petClass
+                : null,
+            name: String(body.name ?? "").trim()
+          });
+          writeRemoteJson(response, 200, result);
+          return;
+        }
+
+        const confirmAllMatch = /^\/api\/media\/(\d+)\/confirm-all$/.exec(pathname);
+        if (method === "POST" && confirmAllMatch) {
+          if (!catalog || !personService || !petService) {
+            throw new Error("Identitätsdienste sind noch nicht bereit.");
+          }
+          const mediaId = Number(confirmAllMatch[1]);
+          const details = await catalog.request<MediaDetails | null>(
+            "getMediaDetails",
+            { mediaId }
+          );
+          if (!details) {
+            writeRemoteJson(response, 404, { ok: false, error: "Medium nicht gefunden." });
+            return;
+          }
+
+          let confirmed = 0;
+          for (const face of details.faces) {
+            if (!face.personName) continue;
+            await personService.assignDetectionName(face.id, face.personName);
+            confirmed += 1;
+          }
+          for (const pet of details.pets) {
+            if (!pet.petName) continue;
+            await petService.assignDetectionName(pet.id, pet.petName);
+            confirmed += 1;
+          }
+          schedulePersonRefresh();
+          writeRemoteJson(response, 200, { ok: true, confirmed });
+          return;
+        }
+
+        if (method === "POST" && pathname === "/api/analysis/boost") {
+          if (!analysis) throw new Error("Analyse ist noch nicht bereit.");
+          const body = await readRemoteJsonBody(request) as Record<string, unknown>;
+          const status = await analysis.setBoostEnabled(body.enabled === true);
+          writeRemoteJson(response, 200, status);
+          return;
+        }
+
+        if (method === "POST" && pathname === "/api/analysis/pause") {
+          const body = await readRemoteJsonBody(request) as Record<string, unknown>;
+          const state = await setBackgroundPaused(body.paused === true);
+          writeRemoteJson(response, 200, state);
+          return;
+        }
+
+        if (method === "GET" && pathname === "/api/analysis/history") {
+          if (!catalog) throw new Error("Katalog ist noch nicht bereit.");
+          const days = Math.max(
+            1,
+            Math.min(90, Math.trunc(Number(requestUrl.searchParams.get("days")) || 30))
+          );
+          const history = await catalog.request("getAnalysisHistory", { days });
+          writeRemoteJson(response, 200, history);
+          return;
+        }
+
+        if (method === "POST" && pathname === "/api/remote-echo") {
           const echo = await readRemoteJsonBody(request);
           writeRemoteJson(response, 200, {
             ok: true,
             receivedAt: new Date().toISOString(),
             echo
           });
-        } catch (error) {
-          writeRemoteJson(response, 400, {
-            ok: false,
-            error: error instanceof Error ? error.message : String(error)
-          });
+          return;
         }
-        return;
-      }
 
-      response.writeHead(404, {
-        ...REMOTE_WEB_SECURITY_HEADERS,
-        "Content-Type": "text/plain; charset=utf-8"
-      });
-      response.end("Not Found");
+        response.writeHead(404, {
+          ...REMOTE_WEB_SECURITY_HEADERS,
+          "Content-Type": "text/plain; charset=utf-8"
+        });
+        response.end("Not Found");
+      } catch (error) {
+        analysis?.logDiagnostic("REMOTE_WEB_REQUEST_ERROR", {
+          method,
+          pathname,
+          error: error instanceof Error ? error.message : String(error)
+        });
+        writeRemoteJson(response, 500, {
+          ok: false,
+          error: error instanceof Error ? error.message : String(error)
+        });
+      }
     });
 
     let settled = false;
