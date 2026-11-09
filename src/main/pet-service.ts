@@ -154,6 +154,7 @@ export class PetService {
       }>("getIdentityCandidateSummaryStats", { sourceId });
 
       return {
+        summaryOnly: true,
         candidates,
         pets: [],
         ungroupedPets: [],
@@ -283,6 +284,7 @@ export class PetService {
       .slice(normalizedOffset, normalizedOffset + normalizedLimit);
 
     return {
+      summaryOnly,
       candidates,
       pets: [...petMap.values()].sort(
         (a, b) => a.name.localeCompare(b.name, "de", { sensitivity: "base" })
