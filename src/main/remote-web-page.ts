@@ -104,6 +104,31 @@ export const REMOTE_START_PAGE = String.raw`<!doctype html>
     .candidate-actions { display:grid; grid-template-columns:1fr auto auto; gap:6px; }
     .candidate-actions input { padding:8px 9px; font-size:12px; }
     .candidate-actions .btn { padding:8px 9px; font-size:11px; }
+    .candidate-review-button { width:100%; margin-top:7px; padding:7px 9px; font-size:11px; }
+    .group-review-dialog { width:min(900px,100%); }
+    .group-review-body { padding:12px 12px 118px; }
+    .group-review-tools { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:8px; margin-bottom:10px; }
+    .group-review-tools input { padding:10px 11px; }
+    .group-review-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:7px; }
+    .group-review-item {
+      position:relative; aspect-ratio:1; padding:0; overflow:hidden;
+      border:2px solid rgba(94,221,139,.62); border-radius:10px; background:#07090b;
+    }
+    .group-review-item img { width:100%; height:100%; object-fit:cover; display:block; }
+    .group-review-item.excluded { border-color:rgba(255,123,123,.8); opacity:.55; }
+    .group-review-item.excluded::after {
+      content:"×"; position:absolute; inset:0; display:grid; place-items:center;
+      background:rgba(70,5,5,.32); color:#ff9b9b; font-size:34px; font-weight:900;
+    }
+    .group-review-more { min-height:54px; display:grid; place-items:center; color:var(--muted); font-size:11px; }
+    .group-review-footer {
+      position:fixed; left:auto; right:0; bottom:0; z-index:6; width:min(900px,100%);
+      border-top:1px solid var(--line); background:rgba(13,16,20,.97); backdrop-filter:blur(14px);
+      padding:10px 12px calc(10px + env(safe-area-inset-bottom));
+      display:grid; grid-template-columns:minmax(0,1fr) auto; gap:8px; align-items:center;
+    }
+    .group-review-footer small { color:var(--muted); display:block; margin-top:3px; }
+    .group-review-footer .btn { white-space:nowrap; }
     .candidate-pager {
       display:grid; grid-template-columns:auto minmax(0,1fr) auto; gap:8px;
       align-items:center; margin:12px 0 2px;
@@ -239,6 +264,22 @@ export const REMOTE_START_PAGE = String.raw`<!doctype html>
   <div class="detail-head"><strong>Medium</strong><div><a id="downloadLink" class="btn primary" style="text-decoration:none;display:inline-block" href="#">Download</a> <button id="detailClose" class="btn">Schließen</button></div></div>
   <div id="detailBody" class="detail-body"></div>
 </dialog>
+
+<dialog id="groupReviewDialog" class="group-review-dialog">
+  <div class="detail-head"><strong id="groupReviewTitle">Gruppe prüfen</strong><button id="groupReviewClose" class="btn">Schließen</button></div>
+  <div class="group-review-body">
+    <div class="group-review-tools">
+      <input id="groupReviewName" type="text" placeholder="Name" autocomplete="off">
+      <button id="groupReviewSelectAll" class="btn" type="button">Alle auswählen</button>
+    </div>
+    <div id="groupReviewGrid" class="group-review-grid"></div>
+    <div id="groupReviewMore" class="group-review-more"></div>
+  </div>
+  <div class="group-review-footer">
+    <div><strong id="groupReviewCount">0 ausgewählt</strong><small>Falsche Bilder antippen, um sie auszuschließen.</small></div>
+    <button id="groupReviewConfirm" class="btn good" type="button">Auswahl bestätigen</button>
+  </div>
+</dialog>
 <div id="toast" class="toast"></div>
 <datalist id="personNames"></datalist>
 <datalist id="petNames"></datalist>
@@ -250,7 +291,7 @@ export const REMOTE_START_PAGE = String.raw`<!doctype html>
     sources: [], media: [], filteredMedia: [], people: null, pets: null,
     identityOptions: null, status: null, summary: null, history: null,
     confirmMode: "people", confirmPage: {people:0,pets:0}, confirmPageSize: 10,
-    historyDays: 7, activeView: "media"
+    groupReview: null, historyDays: 7, activeView: "media"
   };
   var fmt = new Intl.NumberFormat("de-DE");
   var moduleLabels = {
@@ -488,11 +529,122 @@ export const REMOTE_START_PAGE = String.raw`<!doctype html>
       var imageUrl=isPeople?"/api/face/"+imageId:"/api/pet/"+imageId;
       var suggested=isPeople?(c.suggestedPersons&&c.suggestedPersons[0]&&c.suggestedPersons[0].personName):(c.suggestedPetName||(c.suggestedPets&&c.suggestedPets[0]&&c.suggestedPets[0].petName));
       var count=isPeople?c.faceCount:c.detectionCount;
-      return '<div class="candidate"><img loading="lazy" src="'+imageUrl+'" alt=""><div class="candidate-info"><h3>'+(suggested?escapeHtml(suggested):"Unbekannt")+'</h3><p>'+fmt.format(count||0)+' '+(isPeople?"Gesichter":"Erkennungen")+'</p><div class="candidate-actions"><input data-candidate-name="'+c.id+'" list="'+(isPeople?"personNames":"petNames")+'" value="'+escapeHtml(suggested||"")+'" placeholder="Name"><button class="btn good" data-confirm-candidate="'+c.id+'">✓</button><button class="btn bad" data-ignore-candidate="'+c.id+'">×</button></div></div></div>';
+      return '<div class="candidate"><img loading="lazy" src="'+imageUrl+'" alt=""><div class="candidate-info"><h3>'+(suggested?escapeHtml(suggested):"Unbekannt")+'</h3><p>'+fmt.format(count||0)+' '+(isPeople?"Gesichter":"Erkennungen")+'</p><div class="candidate-actions"><input data-candidate-name="'+c.id+'" list="'+(isPeople?"personNames":"petNames")+'" value="'+escapeHtml(suggested||"")+'" placeholder="Name"><button class="btn good" data-confirm-candidate="'+c.id+'">✓</button><button class="btn bad" data-ignore-candidate="'+c.id+'">×</button></div><button class="btn candidate-review-button" data-review-candidate="'+c.id+'" type="button">Alle '+fmt.format(count||0)+' prüfen</button></div></div>';
     }).join("");
     el("candidateList").querySelectorAll("[data-confirm-candidate]").forEach(function(b){b.addEventListener("click",function(){confirmCandidate(Number(b.getAttribute("data-confirm-candidate")),b);});});
     el("candidateList").querySelectorAll("[data-ignore-candidate]").forEach(function(b){b.addEventListener("click",function(){ignoreCandidate(Number(b.getAttribute("data-ignore-candidate")),b);});});
+    el("candidateList").querySelectorAll("[data-review-candidate]").forEach(function(b){b.addEventListener("click",function(){openGroupReview(Number(b.getAttribute("data-review-candidate")));});});
   }
+
+  var groupReviewObserver=null;
+  function candidateMemberIds(candidate){
+    return String(candidate&&candidate.memberSignature||"")
+      .split(",")
+      .map(function(value){return Number(value);})
+      .filter(function(value,index,array){return Number.isSafeInteger(value)&&value>0&&array.indexOf(value)===index;});
+  }
+  function candidateDefaultName(candidate,mode){
+    if(mode==="people"){
+      return candidate&&candidate.suggestedPersons&&candidate.suggestedPersons[0]
+        ? String(candidate.suggestedPersons[0].personName||"")
+        : "";
+    }
+    return candidate
+      ? String(candidate.suggestedPetName||(candidate.suggestedPets&&candidate.suggestedPets[0]&&candidate.suggestedPets[0].petName)||"")
+      : "";
+  }
+  function updateGroupReviewCount(){
+    var review=state.groupReview;
+    if(!review) return;
+    el("groupReviewCount").textContent=
+      fmt.format(review.selected.size)+" von "+fmt.format(review.ids.length)+" ausgewählt";
+    el("groupReviewConfirm").disabled=review.selected.size===0;
+  }
+  function renderGroupReview(){
+    var review=state.groupReview;
+    if(!review) return;
+    var visible=review.ids.slice(0,review.visibleCount);
+    var prefix=review.mode==="people"?"/api/face/":"/api/pet/";
+    el("groupReviewGrid").innerHTML=visible.map(function(id){
+      return '<button type="button" class="group-review-item'+(review.selected.has(id)?"":" excluded")+'" data-review-id="'+id+'"><img loading="lazy" src="'+prefix+id+'" alt=""></button>';
+    }).join("");
+    el("groupReviewGrid").querySelectorAll("[data-review-id]").forEach(function(button){
+      button.addEventListener("click",function(){
+        var id=Number(button.getAttribute("data-review-id"));
+        if(review.selected.has(id)) review.selected.delete(id); else review.selected.add(id);
+        button.classList.toggle("excluded",!review.selected.has(id));
+        updateGroupReviewCount();
+      });
+    });
+    var more=el("groupReviewMore");
+    if(review.visibleCount<review.ids.length){
+      more.textContent="Weitere Bilder werden nachgeladen …";
+      more.hidden=false;
+      if(groupReviewObserver) groupReviewObserver.disconnect();
+      groupReviewObserver=new IntersectionObserver(function(entries){
+        if(!entries.some(function(entry){return entry.isIntersecting;})) return;
+        if(!state.groupReview) return;
+        state.groupReview.visibleCount=Math.min(state.groupReview.ids.length,state.groupReview.visibleCount+24);
+        renderGroupReview();
+      },{root:el("groupReviewDialog"),rootMargin:"240px"});
+      groupReviewObserver.observe(more);
+    }else{
+      more.hidden=true;
+      if(groupReviewObserver){groupReviewObserver.disconnect();groupReviewObserver=null;}
+    }
+    updateGroupReviewCount();
+  }
+  function openGroupReview(id){
+    var candidate=currentCandidate(id);
+    if(!candidate){toast("Die Gruppe ist nicht mehr aktuell. Bitte neu laden.");return;}
+    var ids=candidateMemberIds(candidate);
+    if(!ids.length){toast("Für diese Gruppe wurden keine Fundstellen gefunden.");return;}
+    var mode=state.confirmMode;
+    state.groupReview={
+      mode:mode,
+      candidateId:id,
+      ids:ids,
+      selected:new Set(ids),
+      visibleCount:Math.min(24,ids.length)
+    };
+    el("groupReviewTitle").textContent=(mode==="people"?"Personengruppe":"Tiergruppe")+" · "+fmt.format(ids.length)+" Fundstellen";
+    el("groupReviewName").setAttribute("list",mode==="people"?"personNames":"petNames");
+    el("groupReviewName").value=candidateDefaultName(candidate,mode);
+    renderGroupReview();
+    el("groupReviewDialog").showModal();
+  }
+  el("groupReviewClose").addEventListener("click",function(){el("groupReviewDialog").close();});
+  el("groupReviewDialog").addEventListener("close",function(){
+    state.groupReview=null;
+    if(groupReviewObserver){groupReviewObserver.disconnect();groupReviewObserver=null;}
+  });
+  el("groupReviewSelectAll").addEventListener("click",function(){
+    var review=state.groupReview;if(!review)return;
+    review.selected=new Set(review.ids);
+    renderGroupReview();
+  });
+  el("groupReviewConfirm").addEventListener("click",async function(){
+    var review=state.groupReview;if(!review)return;
+    var name=el("groupReviewName").value.trim();
+    if(!name){toast("Bitte einen Namen eingeben.");el("groupReviewName").focus();return;}
+    var detectionIds=review.ids.filter(function(id){return review.selected.has(id);});
+    if(!detectionIds.length){toast("Mindestens eine Fundstelle auswählen.");return;}
+    var button=el("groupReviewConfirm");button.disabled=true;
+    try{
+      var result=await apiPost("/api/"+review.mode+"/assign-selection",{
+        candidateId:review.candidateId,
+        detectionIds:detectionIds,
+        name:name
+      });
+      state.identityOptions=null;
+      el("groupReviewDialog").close();
+      toast(review.mode==="people"
+        ? fmt.format(result.faceCount||0)+" Gesichter bestätigt."
+        : fmt.format(result.detectionCount||0)+" Fundstellen bestätigt.");
+      await loadCandidates(false);
+    }catch(e){toast(e.message);}finally{button.disabled=false;}
+  });
+
   async function changeCandidatePage(delta){
     var data=state.confirmMode==="people"?state.people:state.pets;
     var totalPages=candidateTotalPages(data);
