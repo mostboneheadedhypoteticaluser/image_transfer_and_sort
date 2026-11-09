@@ -146,15 +146,23 @@ const api = {
       sourceId: number,
       forceRefresh = false,
       candidateLimit = 10,
-      candidateOffset = 0
+      candidateOffset = 0,
+      summaryOnly = true
     ): Promise<PersonOverview> =>
       ipcRenderer.invoke(
         "people:getOverview",
         sourceId,
         forceRefresh,
         candidateLimit,
-        candidateOffset
+        candidateOffset,
+        summaryOnly
       ),
+    getCandidateItems: (
+      candidateId: number,
+      limit = 5000,
+      offset = 0
+    ): Promise<PersonOverview["candidates"][number]["faces"]> =>
+      ipcRenderer.invoke("people:getCandidateItems", candidateId, limit, offset),
     confirmCandidate: (
       candidateId: number,
       name: string,
@@ -241,15 +249,23 @@ const api = {
       sourceId: number,
       forceRefresh = false,
       candidateLimit = 10,
-      candidateOffset = 0
+      candidateOffset = 0,
+      summaryOnly = true
     ): Promise<PetOverview> =>
       ipcRenderer.invoke(
         "pets:getOverview",
         sourceId,
         forceRefresh,
         candidateLimit,
-        candidateOffset
+        candidateOffset,
+        summaryOnly
       ),
+    getCandidateItems: (
+      candidateId: number,
+      limit = 5000,
+      offset = 0
+    ): Promise<PetOverview["candidates"][number]["pets"]> =>
+      ipcRenderer.invoke("pets:getCandidateItems", candidateId, limit, offset),
     confirmCandidate: (
       candidateId: number,
       name: string,
