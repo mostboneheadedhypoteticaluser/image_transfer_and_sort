@@ -1745,39 +1745,15 @@ function getStats(sourceId: number) {
     SELECT
       (
         SELECT COUNT(*)
-        FROM (
-          SELECT pc.id
-          FROM person_candidates pc
-          JOIN person_candidate_faces pcf ON pcf.candidate_id=pc.id
-          JOIN face_detections fd ON fd.id=pcf.face_detection_id
-          JOIN media_items m ON m.id=fd.media_id
-          LEFT JOIN person_face_assignments pfa
-            ON pfa.face_detection_id=pcf.face_detection_id
-          WHERE pc.source_id=?
-            AND m.availability='AVAILABLE'
-            AND fd.input_sha256=m.sha256
-            AND pfa.face_detection_id IS NULL
-          GROUP BY pc.id
-          HAVING COUNT(DISTINCT m.sha256 || ':' || fd.detection_index) >= 2
-        )
+        FROM person_candidates pc
+        WHERE pc.source_id=?
+          AND pc.member_count>=2
       ) AS candidate_count,
       (
-        SELECT COALESCE(SUM(face_count), 0)
-        FROM (
-          SELECT COUNT(pcf.face_detection_id) AS face_count
-          FROM person_candidates pc
-          JOIN person_candidate_faces pcf ON pcf.candidate_id=pc.id
-          JOIN face_detections fd ON fd.id=pcf.face_detection_id
-          JOIN media_items m ON m.id=fd.media_id
-          LEFT JOIN person_face_assignments pfa
-            ON pfa.face_detection_id=pcf.face_detection_id
-          WHERE pc.source_id=?
-            AND m.availability='AVAILABLE'
-            AND fd.input_sha256=m.sha256
-            AND pfa.face_detection_id IS NULL
-          GROUP BY pc.id
-          HAVING COUNT(DISTINCT m.sha256 || ':' || fd.detection_index) >= 2
-        )
+        SELECT COALESCE(SUM(pc.member_count), 0)
+        FROM person_candidates pc
+        WHERE pc.source_id=?
+          AND pc.member_count>=2
       ) AS candidate_face_count,
       (
         SELECT COUNT(DISTINCT pfa.person_id)
@@ -1799,39 +1775,15 @@ function getStats(sourceId: number) {
     SELECT
       (
         SELECT COUNT(*)
-        FROM (
-          SELECT pc.id
-          FROM pet_candidates pc
-          JOIN pet_candidate_items pci ON pci.candidate_id=pc.id
-          JOIN pet_fused_detections pd ON pd.id=pci.pet_detection_id
-          JOIN media_items m ON m.id=pd.media_id
-          LEFT JOIN pet_assignments pa
-            ON pa.pet_detection_id=pci.pet_detection_id
-          WHERE pc.source_id=?
-            AND m.availability='AVAILABLE'
-            AND pd.input_sha256=m.sha256
-            AND pa.pet_detection_id IS NULL
-          GROUP BY pc.id
-          HAVING COUNT(DISTINCT m.sha256 || ':' || pd.detection_index) >= 2
-        )
+        FROM pet_candidates pc
+        WHERE pc.source_id=?
+          AND pc.member_count>=2
       ) AS candidate_count,
       (
-        SELECT COALESCE(SUM(detection_count), 0)
-        FROM (
-          SELECT COUNT(pci.pet_detection_id) AS detection_count
-          FROM pet_candidates pc
-          JOIN pet_candidate_items pci ON pci.candidate_id=pc.id
-          JOIN pet_fused_detections pd ON pd.id=pci.pet_detection_id
-          JOIN media_items m ON m.id=pd.media_id
-          LEFT JOIN pet_assignments pa
-            ON pa.pet_detection_id=pci.pet_detection_id
-          WHERE pc.source_id=?
-            AND m.availability='AVAILABLE'
-            AND pd.input_sha256=m.sha256
-            AND pa.pet_detection_id IS NULL
-          GROUP BY pc.id
-          HAVING COUNT(DISTINCT m.sha256 || ':' || pd.detection_index) >= 2
-        )
+        SELECT COALESCE(SUM(pc.member_count), 0)
+        FROM pet_candidates pc
+        WHERE pc.source_id=?
+          AND pc.member_count>=2
       ) AS candidate_detection_count,
       (
         SELECT COUNT(DISTINCT pa.pet_id)
