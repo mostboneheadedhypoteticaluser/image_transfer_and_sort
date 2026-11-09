@@ -6546,7 +6546,7 @@ async function loadPersonOverview(
       });
     }
 
-    await refreshIdentityTabStats();
+    peopleTabCount.textContent = overview.candidateTotal.toLocaleString("de-DE");
   } finally {
     refreshPeopleButton.disabled = false;
   }
@@ -7513,7 +7513,7 @@ async function loadPetOverview(
       });
     }
 
-    await refreshIdentityTabStats();
+    petsTabCount.textContent = overview.candidateTotal.toLocaleString("de-DE");
   } finally {
     refreshPetsButton.disabled = false;
   }
@@ -7877,6 +7877,9 @@ async function refreshCatalog(): Promise<void> {
     return;
   }
 
+  // Bestätigungsansichten haben bei großen Katalogen Vorrang. Sie dürfen
+  // niemals hinter der vollständigen getStats()-Abfrage warten, die über
+  // zehntausende Medien und Analysezeilen laufen kann.
   // Medienliste sofort losschicken. Sie steht damit in der Worker-Queue vor
   // den weniger wichtigen Zähler-/Statistikabfragen und kann sichtbar werden,
   // ohne auf diese Nebeninformationen zu warten.
@@ -8192,7 +8195,6 @@ refreshPeopleButton.addEventListener("click", () => {
     await loadPersonOverview(sourceId, true);
     personStatus.textContent =
       "Neugruppierung läuft im Hintergrund. Die gespeicherten Gruppen bleiben bis zum Abschluss sichtbar.";
-    await refreshIdentityTabStats();
   });
 });
 
@@ -8207,7 +8209,6 @@ refreshPetsButton.addEventListener("click", () => {
     await loadPetOverview(sourceId, true);
     petStatus.textContent =
       "Neugruppierung läuft im Hintergrund. Die gespeicherten Gruppen bleiben bis zum Abschluss sichtbar.";
-    await refreshIdentityTabStats();
   });
 });
 analysisDevLogButton.addEventListener("click", () => {
