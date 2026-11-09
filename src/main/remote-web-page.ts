@@ -104,6 +104,13 @@ export const REMOTE_START_PAGE = String.raw`<!doctype html>
     .candidate-actions { display:grid; grid-template-columns:1fr auto auto; gap:6px; }
     .candidate-actions input { padding:8px 9px; font-size:12px; }
     .candidate-actions .btn { padding:8px 9px; font-size:11px; }
+    .candidate-pager {
+      display:grid; grid-template-columns:auto minmax(0,1fr) auto; gap:8px;
+      align-items:center; margin:12px 0 2px;
+    }
+    .candidate-pager .btn { min-width:92px; }
+    .candidate-page-info { text-align:center; color:var(--muted); font-size:11px; line-height:1.35; }
+    .candidate-page-info strong { display:block; color:#fff; font-size:12px; }
     .subtabs { display:flex; gap:7px; overflow:auto; margin-bottom:12px; }
     .subtabs .btn.active { background:#f4f5f7; color:#0b0d10; border-color:#f4f5f7; }
     .history-bars { display:flex; align-items:flex-end; gap:7px; height:150px; padding:16px 10px 8px; overflow-x:auto; }
@@ -181,6 +188,11 @@ export const REMOTE_START_PAGE = String.raw`<!doctype html>
       <div class="subtabs"><button class="btn active" data-confirm-mode="people">Personen</button><button class="btn" data-confirm-mode="pets">Tiere</button></div>
       <div id="candidateSummary" class="metric-grid"></div>
       <div id="candidateList" class="candidate-list"></div>
+      <div id="candidatePager" class="candidate-pager" hidden>
+        <button id="candidatePrev" class="btn" type="button">← Zurück</button>
+        <div id="candidatePageInfo" class="candidate-page-info"></div>
+        <button id="candidateNext" class="btn" type="button">Weiter →</button>
+      </div>
     </section>
 
     <section id="view-analysis" class="view">
@@ -236,7 +248,9 @@ export const REMOTE_START_PAGE = String.raw`<!doctype html>
   "use strict";
   var state = {
     sources: [], media: [], filteredMedia: [], people: null, pets: null,
-    status: null, summary: null, history: null, confirmMode: "people", historyDays: 7, activeView: "media"
+    identityOptions: null, status: null, summary: null, history: null,
+    confirmMode: "people", confirmPage: {people:0,pets:0}, confirmPageSize: 10,
+    historyDays: 7, activeView: "media"
   };
   var fmt = new Intl.NumberFormat("de-DE");
   var moduleLabels = {
@@ -352,14 +366,12 @@ export const REMOTE_START_PAGE = String.raw`<!doctype html>
   el("mediaRefresh").addEventListener("click",function(){loadMedia().catch(function(e){toast(e.message);});});
 
   function nameLists(){
-    var people=state.people&&state.people.persons?state.people.persons:[];
-    var pets=state.pets&&state.pets.pets?state.pets.pets:[];
+    var options=state.identityOptions||{}, people=options.people||[], pets=options.pets||[];
     el("personNames").innerHTML=people.map(function(p){return '<option value="'+escapeHtml(p.name)+'"></option>';}).join("");
     el("petNames").innerHTML=pets.map(function(p){return '<option value="'+escapeHtml(p.name)+'"></option>';}).join("");
   }
-  async function ensureIdentityLists(){
-    if(!state.people) state.people=await api("/api/people");
-    if(!state.pets) state.pets=await api("/api/pets");
+  async function ensureIdentityLists(force){
+    if(force||!state.identityOptions) state.identityOptions=await api("/api/identity-options");
     nameLists();
   }
   function identityRows(details){
@@ -414,7 +426,7 @@ export const REMOTE_START_PAGE = String.raw`<!doctype html>
       var kind=b.getAttribute("data-assign-kind"), id=Number(b.getAttribute("data-detection-id"));
       var input=document.querySelector('[data-identity-name="'+kind+'-'+id+'"]');
       var name=input&&input.value?input.value.trim():""; if(!name){toast("Bitte einen Namen eingeben.");return;}
-      b.disabled=true; try{await apiPost("/api/identity/assign",{kind:kind,detectionId:id,name:name}); state.people=null;state.pets=null;toast("Zuordnung gespeichert.");}catch(e){toast(e.message);}finally{b.disabled=false;}
+      b.disabled=true; try{await apiPost("/api/identity/assign",{kind:kind,detectionId:id,name:name}); state.identityOptions=null;toast("Zuordnung gespeichert.");}catch(e){toast(e.message);}finally{b.disabled=false;}
     });});
     document.querySelectorAll("[data-video-assign]").forEach(function(b){b.addEventListener("click",async function(){
       var mediaId=Number(b.getAttribute("data-media-id")), time=Number(b.getAttribute("data-time")), kind=b.getAttribute("data-kind"), index=Number(b.getAttribute("data-index"));
@@ -428,26 +440,50 @@ export const REMOTE_START_PAGE = String.raw`<!doctype html>
   }
   el("detailClose").addEventListener("click",function(){el("detailDialog").close();});
 
-  async function loadCandidates(force){
+  function candidatePage(){
+    return Math.max(0,Number(state.confirmPage[state.confirmMode])||0);
+  }
+  function candidateTotalPages(data){
+    var total=Math.max(0,Number(data&&data.candidateTotal)||0);
+    return Math.max(1,Math.ceil(total/state.confirmPageSize));
+  }
+  async function loadCandidates(refreshGrouping){
+    var mode=state.confirmMode, page=candidatePage(), offset=page*state.confirmPageSize;
     el("candidateList").innerHTML='<div class="empty">Bestätigungen werden geladen …</div>';
-    if(force){state.people=null;state.pets=null;}
-    if(state.confirmMode==="people"){
-      state.people=await api("/api/people"+(force?"?refresh=1":""));
-      renderCandidates();
-    }else{
-      state.pets=await api("/api/pets"+(force?"?refresh=1":""));
-      renderCandidates();
+    el("candidatePager").hidden=true;
+    var query="?limit="+state.confirmPageSize+"&offset="+offset+(refreshGrouping?"&refresh=1":"");
+    var data=await api("/api/"+mode+query);
+    if(mode==="people") state.people=data; else state.pets=data;
+
+    var totalPages=candidateTotalPages(data);
+    if(page>=totalPages && page>0){
+      state.confirmPage[mode]=totalPages-1;
+      return loadCandidates(false);
     }
-    nameLists();
+    renderCandidates();
+    if(!state.identityOptions) {
+      ensureIdentityLists(false).catch(function(){});
+    }
   }
   function renderCandidates(){
     var isPeople=state.confirmMode==="people", data=isPeople?state.people:state.pets;
     var candidates=data&&data.candidates?data.candidates:[];
     var ungrouped=isPeople?(data?data.ungroupedFaceTotal:0):(data?data.ungroupedDetectionTotal:0);
-    var total=isPeople?(data?data.candidateFaceTotal:0):(data?data.candidateDetectionTotal:0);
-    el("candidateSummary").innerHTML='<div class="metric"><strong>'+fmt.format(candidates.length)+'</strong><span>Gruppen offen</span></div><div class="metric"><strong>'+fmt.format(total||0)+'</strong><span>Erkennungen in Gruppen</span></div><div class="metric"><strong>'+fmt.format(ungrouped||0)+'</strong><span>Noch ungruppiert</span></div><div class="metric"><strong>'+(data&&data.clusteringPending?"ja":"nein")+'</strong><span>Gruppierung läuft</span></div>';
+    var detections=isPeople?(data?data.candidateFaceTotal:0):(data?data.candidateDetectionTotal:0);
+    var groupTotal=Math.max(0,Number(data&&data.candidateTotal)||0);
+    var page=candidatePage(), totalPages=candidateTotalPages(data);
+    el("candidateSummary").innerHTML='<div class="metric"><strong>'+fmt.format(groupTotal)+'</strong><span>Gruppen offen</span></div><div class="metric"><strong>'+fmt.format(detections||0)+'</strong><span>Erkennungen in Gruppen</span></div><div class="metric"><strong>'+fmt.format(ungrouped||0)+'</strong><span>Noch ungruppiert</span></div><div class="metric"><strong>'+(data&&data.clusteringPending?"ja":"nein")+'</strong><span>Gruppierung läuft</span></div>';
+
+    var pager=el("candidatePager");
+    pager.hidden=groupTotal===0;
+    el("candidatePrev").disabled=page<=0;
+    el("candidateNext").disabled=page>=totalPages-1;
+    var first=groupTotal===0?0:page*state.confirmPageSize+1;
+    var last=Math.min(groupTotal,page*state.confirmPageSize+candidates.length);
+    el("candidatePageInfo").innerHTML='<strong>Seite '+fmt.format(page+1)+' / '+fmt.format(totalPages)+'</strong>'+fmt.format(first)+'–'+fmt.format(last)+' von '+fmt.format(groupTotal)+' Gruppen';
+
     if(!candidates.length){el("candidateList").innerHTML='<div class="empty">Aktuell keine Kandidaten zu bestätigen.</div>';return;}
-    el("candidateList").innerHTML=candidates.slice(0,120).map(function(c){
+    el("candidateList").innerHTML=candidates.map(function(c){
       var imageId=isPeople?(c.representativeFaceId||c.newestFaceId):(c.representativePetId||c.newestPetId);
       var imageUrl=isPeople?"/api/face/"+imageId:"/api/pet/"+imageId;
       var suggested=isPeople?(c.suggestedPersons&&c.suggestedPersons[0]&&c.suggestedPersons[0].personName):(c.suggestedPetName||(c.suggestedPets&&c.suggestedPets[0]&&c.suggestedPets[0].petName));
@@ -457,18 +493,60 @@ export const REMOTE_START_PAGE = String.raw`<!doctype html>
     el("candidateList").querySelectorAll("[data-confirm-candidate]").forEach(function(b){b.addEventListener("click",function(){confirmCandidate(Number(b.getAttribute("data-confirm-candidate")),b);});});
     el("candidateList").querySelectorAll("[data-ignore-candidate]").forEach(function(b){b.addEventListener("click",function(){ignoreCandidate(Number(b.getAttribute("data-ignore-candidate")),b);});});
   }
+  async function changeCandidatePage(delta){
+    var data=state.confirmMode==="people"?state.people:state.pets;
+    var totalPages=candidateTotalPages(data);
+    var next=Math.max(0,Math.min(totalPages-1,candidatePage()+delta));
+    if(next===candidatePage()) return;
+    state.confirmPage[state.confirmMode]=next;
+    await loadCandidates(false);
+    window.scrollTo({top:0,behavior:"smooth"});
+  }
   async function confirmCandidate(id,button){
     var input=document.querySelector('[data-candidate-name="'+id+'"]'), name=input&&input.value?input.value.trim():"";
     if(!name){toast("Bitte einen Namen eingeben.");return;}
-    button.disabled=true; try{await apiPost("/api/"+state.confirmMode+"/confirm",{candidateId:id,name:name});toast("Bestätigt.");await loadCandidates(true);}catch(e){toast(e.message);}finally{button.disabled=false;}
+    button.disabled=true;
+    try{
+      await apiPost("/api/"+state.confirmMode+"/confirm",{candidateId:id,name:name});
+      state.identityOptions=null;
+      toast("Bestätigt.");
+      await loadCandidates(false);
+    }catch(e){toast(e.message);}finally{button.disabled=false;}
   }
   async function ignoreCandidate(id,button){
-    button.disabled=true; try{await apiPost("/api/"+state.confirmMode+"/ignore",{candidateId:id});toast("Kandidat ignoriert.");await loadCandidates(true);}catch(e){toast(e.message);}finally{button.disabled=false;}
+    button.disabled=true;
+    try{
+      await apiPost("/api/"+state.confirmMode+"/ignore",{candidateId:id});
+      toast("Kandidat ignoriert.");
+      await loadCandidates(false);
+    }catch(e){toast(e.message);}finally{button.disabled=false;}
   }
   document.querySelectorAll("[data-confirm-mode]").forEach(function(b){b.addEventListener("click",function(){
-    state.confirmMode=b.getAttribute("data-confirm-mode");document.querySelectorAll("[data-confirm-mode]").forEach(function(x){x.classList.toggle("active",x===b);});loadCandidates(false).catch(function(e){toast(e.message);});
+    state.confirmMode=b.getAttribute("data-confirm-mode");
+    state.confirmPage[state.confirmMode]=0;
+    document.querySelectorAll("[data-confirm-mode]").forEach(function(x){x.classList.toggle("active",x===b);});
+    loadCandidates(false).catch(function(e){toast(e.message);});
   });});
-  el("confirmRefresh").addEventListener("click",function(){loadCandidates(true).catch(function(e){toast(e.message);});});
+  el("candidatePrev").addEventListener("click",function(){changeCandidatePage(-1).catch(function(e){toast(e.message);});});
+  el("candidateNext").addEventListener("click",function(){changeCandidatePage(1).catch(function(e){toast(e.message);});});
+  el("confirmRefresh").addEventListener("click",function(){
+    state.confirmPage[state.confirmMode]=0;
+    loadCandidates(true).catch(function(e){toast(e.message);});
+  });
+
+  var candidateTouchStart=null;
+  el("candidateList").addEventListener("touchstart",function(event){
+    if(!event.touches||event.touches.length!==1) return;
+    candidateTouchStart={x:event.touches[0].clientX,y:event.touches[0].clientY};
+  },{passive:true});
+  el("candidateList").addEventListener("touchend",function(event){
+    if(!candidateTouchStart||!event.changedTouches||event.changedTouches.length!==1) return;
+    var dx=event.changedTouches[0].clientX-candidateTouchStart.x;
+    var dy=event.changedTouches[0].clientY-candidateTouchStart.y;
+    candidateTouchStart=null;
+    if(Math.abs(dx)<70||Math.abs(dx)<=Math.abs(dy)*1.25) return;
+    changeCandidatePage(dx<0?1:-1).catch(function(e){toast(e.message);});
+  },{passive:true});
 
   function queueTotals(moduleQueues){
     var out={pending:0,running:0,done:0,failed:0,unavailable:0};
