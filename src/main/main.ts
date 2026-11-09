@@ -105,7 +105,7 @@ const REMOTE_WEB_SECURITY_HEADERS = {
   "X-Content-Type-Options": "nosniff",
   "Referrer-Policy": "no-referrer",
   "Content-Security-Policy":
-    "default-src 'none'; connect-src 'self'; img-src 'self' data:; media-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"
+    "default-src 'none'; connect-src 'self'; img-src 'self' data: https://*.tile.openstreetmap.org; media-src 'self'; style-src 'unsafe-inline' https://unpkg.com; script-src 'unsafe-inline' https://unpkg.com; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"
 } as const;
 
 function writeRemoteJson(
@@ -375,15 +375,27 @@ function startRemoteWebServer(): Promise<void> {
           }
           const limit = Math.max(
             1,
-            Math.min(500, Math.trunc(Number(requestUrl.searchParams.get("limit")) || 300))
+            Math.min(2000, Math.trunc(Number(requestUrl.searchParams.get("limit")) || 300))
           );
           const rawKind = requestUrl.searchParams.get("kind");
           const mediaKind =
             rawKind === "image" || rawKind === "video" ? rawKind : "all";
-          const rows = await catalog.request<MediaRecord[]>("listMedia", {
+          const personId = Math.trunc(Number(requestUrl.searchParams.get("personId")));
+          const petId = Math.trunc(Number(requestUrl.searchParams.get("petId")));
+          const filter: SearchFilter = {
+            personIds: Number.isSafeInteger(personId) && personId > 0 ? [personId] : [],
+            petIds: Number.isSafeInteger(petId) && petId > 0 ? [petId] : [],
+            objectLabels: [],
+            minDogs: 0,
+            minCats: 0,
+            semanticQuery: "",
+            semanticMinProbability: 0
+          };
+          const rows = await catalog.request<MediaRecord[]>("searchMedia", {
             sourceId,
             limit,
-            mediaKind
+            mediaKind,
+            filter
           });
           for (const row of rows) {
             if (!row.sourcePath) continue;
@@ -392,6 +404,16 @@ function startRemoteWebServer(): Promise<void> {
               path.resolve(row.sourcePath, row.relativePath)
             );
           }
+          writeRemoteJson(response, 200, rows);
+          return;
+        }
+
+        if (method === "GET" && pathname === "/api/geo-media") {
+          if (!catalog) throw new Error("Katalog ist noch nicht bereit.");
+          const sourceId = Math.trunc(Number(requestUrl.searchParams.get("sourceId")));
+          const payload =
+            Number.isSafeInteger(sourceId) && sourceId > 0 ? { sourceId } : {};
+          const rows = await catalog.request<GeoMediaPoint[]>("listGeoMedia", payload);
           writeRemoteJson(response, 200, rows);
           return;
         }
