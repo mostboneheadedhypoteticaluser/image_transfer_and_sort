@@ -8681,8 +8681,12 @@ function ignorePetCandidate(
   const members = db.prepare(`
     SELECT pci.pet_detection_id
     FROM pet_candidate_items pci
+    JOIN pet_fused_detections pd ON pd.id=pci.pet_detection_id
+    JOIN media_items m ON m.id=pd.media_id
     LEFT JOIN pet_assignments pa ON pa.pet_detection_id=pci.pet_detection_id
     WHERE pci.candidate_id=?
+      AND m.availability='AVAILABLE'
+      AND pd.input_sha256=m.sha256
       AND pa.pet_detection_id IS NULL
     ORDER BY pci.pet_detection_id
   `).all(resolvedCandidateId);
@@ -11272,9 +11276,13 @@ function ignorePersonCandidate(
   const members = db.prepare(`
     SELECT pcf.face_detection_id
     FROM person_candidate_faces pcf
+    JOIN face_detections fd ON fd.id=pcf.face_detection_id
+    JOIN media_items m ON m.id=fd.media_id
     LEFT JOIN person_face_assignments pfa
       ON pfa.face_detection_id=pcf.face_detection_id
     WHERE pcf.candidate_id=?
+      AND m.availability='AVAILABLE'
+      AND fd.input_sha256=m.sha256
       AND pfa.face_detection_id IS NULL
     ORDER BY pcf.face_detection_id
   `).all(resolvedCandidateId);
