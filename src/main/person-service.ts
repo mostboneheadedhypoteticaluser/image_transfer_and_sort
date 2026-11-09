@@ -148,15 +148,26 @@ export class PersonService {
       }
     );
     if (summaryOnly) {
-      const stats = await this.catalog.request<{
-        personCandidates: number;
-        personCandidateFaces: number;
-      }>("getIdentityCandidateSummaryStats", { sourceId });
+      // Nur Namen, Zähler und repräsentative Vorschau laden. Damit bleiben
+      // Autovervollständigung und vorhandene Identitäten verfügbar, ohne die
+      // vollständigen Personen-Medienlisten wieder aufzubauen.
+      const [stats, persons] = await Promise.all([
+        this.catalog.request<{
+          personCandidates: number;
+          personCandidateFaces: number;
+        }>("getIdentityCandidateSummaryStats", { sourceId }),
+        includeSupporting
+          ? this.catalog.request<PersonRecord[]>("listPersons", {
+              sourceId,
+              summaryOnly: true
+            })
+          : Promise.resolve([] as PersonRecord[])
+      ]);
 
       return {
         summaryOnly: true,
         candidates,
-        persons: [],
+        persons,
         ungroupedFaces: [],
         clusteringPending,
         candidateTotal: stats.personCandidates,
