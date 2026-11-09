@@ -98,8 +98,14 @@ declare global {
           sourceId: number,
           forceRefresh?: boolean,
           candidateLimit?: number,
-          candidateOffset?: number
+          candidateOffset?: number,
+          summaryOnly?: boolean
         ): Promise<PersonOverview>;
+        getCandidateItems(
+          candidateId: number,
+          limit?: number,
+          offset?: number
+        ): Promise<PersonOverview["candidates"][number]["faces"]>;
         confirmCandidate(
           candidateId: number,
           name: string,
@@ -150,8 +156,14 @@ declare global {
           sourceId: number,
           forceRefresh?: boolean,
           candidateLimit?: number,
-          candidateOffset?: number
+          candidateOffset?: number,
+          summaryOnly?: boolean
         ): Promise<PetOverview>;
+        getCandidateItems(
+          candidateId: number,
+          limit?: number,
+          offset?: number
+        ): Promise<PetOverview["candidates"][number]["pets"]>;
         confirmCandidate(
           candidateId: number,
           name: string,
