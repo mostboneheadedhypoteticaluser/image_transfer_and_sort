@@ -669,6 +669,204 @@ ensureColumn("analysis_jobs", "result_json", "TEXT");
 ensureColumn("analysis_jobs", "error_message", "TEXT");
 ensureColumn("analysis_jobs", "started_at", "TEXT");
 ensureColumn("analysis_jobs", "finished_at", "TEXT");
+ensureColumn("person_candidates", "member_count", "INTEGER NOT NULL DEFAULT 0");
+ensureColumn("person_candidates", "newest_face_id", "INTEGER");
+ensureColumn("pet_candidates", "member_count", "INTEGER NOT NULL DEFAULT 0");
+ensureColumn("pet_candidates", "newest_pet_id", "INTEGER");
+
+const identitySummaryMigrationKey = "identity-candidate-summary-v1";
+const identitySummaryMigration = db.prepare(
+  "SELECT 1 FROM catalog_migrations WHERE migration_key=?"
+).get(identitySummaryMigrationKey);
+
+if (!identitySummaryMigration) {
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    db.exec(`
+      UPDATE person_candidates
+      SET
+        member_count=(
+          SELECT COUNT(*)
+          FROM person_candidate_faces pcf
+          WHERE pcf.candidate_id=person_candidates.id
+        ),
+        newest_face_id=(
+          SELECT MAX(pcf.face_detection_id)
+          FROM person_candidate_faces pcf
+          WHERE pcf.candidate_id=person_candidates.id
+        );
+
+      UPDATE pet_candidates
+      SET
+        member_count=(
+          SELECT COUNT(*)
+          FROM pet_candidate_items pci
+          WHERE pci.candidate_id=pet_candidates.id
+        ),
+        newest_pet_id=(
+          SELECT MAX(pci.pet_detection_id)
+          FROM pet_candidate_items pci
+          WHERE pci.candidate_id=pet_candidates.id
+        );
+
+      CREATE INDEX IF NOT EXISTS idx_person_candidate_source_count
+        ON person_candidates(source_id, member_count DESC, average_similarity DESC, newest_face_id DESC);
+      CREATE INDEX IF NOT EXISTS idx_pet_candidate_source_count
+        ON pet_candidates(source_id, member_count DESC, average_similarity DESC, newest_pet_id DESC);
+      CREATE INDEX IF NOT EXISTS idx_person_candidate_face_detection
+        ON person_candidate_faces(face_detection_id, candidate_id);
+      CREATE INDEX IF NOT EXISTS idx_pet_candidate_item_detection
+        ON pet_candidate_items(pet_detection_id, candidate_id);
+
+      CREATE TRIGGER IF NOT EXISTS trg_person_candidate_face_insert_summary
+      AFTER INSERT ON person_candidate_faces
+      BEGIN
+        UPDATE person_candidates
+        SET
+          member_count=member_count+1,
+          newest_face_id=CASE
+            WHEN newest_face_id IS NULL OR NEW.face_detection_id>newest_face_id
+              THEN NEW.face_detection_id
+            ELSE newest_face_id
+          END
+        WHERE id=NEW.candidate_id;
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS trg_person_candidate_face_delete_summary
+      AFTER DELETE ON person_candidate_faces
+      BEGIN
+        UPDATE person_candidates
+        SET
+          member_count=(
+            SELECT COUNT(*)
+            FROM person_candidate_faces pcf
+            WHERE pcf.candidate_id=OLD.candidate_id
+          ),
+          newest_face_id=(
+            SELECT MAX(pcf.face_detection_id)
+            FROM person_candidate_faces pcf
+            WHERE pcf.candidate_id=OLD.candidate_id
+          )
+        WHERE id=OLD.candidate_id;
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS trg_pet_candidate_item_insert_summary
+      AFTER INSERT ON pet_candidate_items
+      BEGIN
+        UPDATE pet_candidates
+        SET
+          member_count=member_count+1,
+          newest_pet_id=CASE
+            WHEN newest_pet_id IS NULL OR NEW.pet_detection_id>newest_pet_id
+              THEN NEW.pet_detection_id
+            ELSE newest_pet_id
+          END
+        WHERE id=NEW.candidate_id;
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS trg_pet_candidate_item_delete_summary
+      AFTER DELETE ON pet_candidate_items
+      BEGIN
+        UPDATE pet_candidates
+        SET
+          member_count=(
+            SELECT COUNT(*)
+            FROM pet_candidate_items pci
+            WHERE pci.candidate_id=OLD.candidate_id
+          ),
+          newest_pet_id=(
+            SELECT MAX(pci.pet_detection_id)
+            FROM pet_candidate_items pci
+            WHERE pci.candidate_id=OLD.candidate_id
+          )
+        WHERE id=OLD.candidate_id;
+      END;
+    `);
+
+    db.prepare(
+      "INSERT INTO catalog_migrations(migration_key) VALUES(?)"
+    ).run(identitySummaryMigrationKey);
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+} else {
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_person_candidate_source_count
+      ON person_candidates(source_id, member_count DESC, average_similarity DESC, newest_face_id DESC);
+    CREATE INDEX IF NOT EXISTS idx_pet_candidate_source_count
+      ON pet_candidates(source_id, member_count DESC, average_similarity DESC, newest_pet_id DESC);
+    CREATE INDEX IF NOT EXISTS idx_person_candidate_face_detection
+      ON person_candidate_faces(face_detection_id, candidate_id);
+    CREATE INDEX IF NOT EXISTS idx_pet_candidate_item_detection
+      ON pet_candidate_items(pet_detection_id, candidate_id);
+
+    CREATE TRIGGER IF NOT EXISTS trg_person_candidate_face_insert_summary
+    AFTER INSERT ON person_candidate_faces
+    BEGIN
+      UPDATE person_candidates
+      SET
+        member_count=member_count+1,
+        newest_face_id=CASE
+          WHEN newest_face_id IS NULL OR NEW.face_detection_id>newest_face_id
+            THEN NEW.face_detection_id
+          ELSE newest_face_id
+        END
+      WHERE id=NEW.candidate_id;
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_person_candidate_face_delete_summary
+    AFTER DELETE ON person_candidate_faces
+    BEGIN
+      UPDATE person_candidates
+      SET
+        member_count=(
+          SELECT COUNT(*)
+          FROM person_candidate_faces pcf
+          WHERE pcf.candidate_id=OLD.candidate_id
+        ),
+        newest_face_id=(
+          SELECT MAX(pcf.face_detection_id)
+          FROM person_candidate_faces pcf
+          WHERE pcf.candidate_id=OLD.candidate_id
+        )
+      WHERE id=OLD.candidate_id;
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_pet_candidate_item_insert_summary
+    AFTER INSERT ON pet_candidate_items
+    BEGIN
+      UPDATE pet_candidates
+      SET
+        member_count=member_count+1,
+        newest_pet_id=CASE
+          WHEN newest_pet_id IS NULL OR NEW.pet_detection_id>newest_pet_id
+            THEN NEW.pet_detection_id
+          ELSE newest_pet_id
+        END
+      WHERE id=NEW.candidate_id;
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_pet_candidate_item_delete_summary
+    AFTER DELETE ON pet_candidate_items
+    BEGIN
+      UPDATE pet_candidates
+      SET
+        member_count=(
+          SELECT COUNT(*)
+          FROM pet_candidate_items pci
+          WHERE pci.candidate_id=OLD.candidate_id
+        ),
+        newest_pet_id=(
+          SELECT MAX(pci.pet_detection_id)
+          FROM pet_candidate_items pci
+          WHERE pci.candidate_id=OLD.candidate_id
+        )
+      WHERE id=OLD.candidate_id;
+    END;
+  `);
+}
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS media_video_analysis (
@@ -1489,6 +1687,33 @@ async function resolveSourceRoot(sourceId: number): Promise<string> {
 
   progress(sourceId, 0, `Quellordner umbenannt erkannt: ${oldPath} → ${renamedPath}`);
   return renamedPath;
+}
+
+function getIdentityCandidateSummaryStats(sourceId: number) {
+  const people = db.prepare(`
+    SELECT
+      COUNT(*) AS candidate_count,
+      COALESCE(SUM(member_count),0) AS member_count
+    FROM person_candidates
+    WHERE source_id=?
+      AND member_count>=2
+  `).get(sourceId);
+
+  const pets = db.prepare(`
+    SELECT
+      COUNT(*) AS candidate_count,
+      COALESCE(SUM(member_count),0) AS member_count
+    FROM pet_candidates
+    WHERE source_id=?
+      AND member_count>=2
+  `).get(sourceId);
+
+  return {
+    personCandidates: Number(people?.candidate_count ?? 0),
+    personCandidateFaces: Number(people?.member_count ?? 0),
+    petCandidates: Number(pets?.candidate_count ?? 0),
+    petCandidateDetections: Number(pets?.member_count ?? 0)
+  };
 }
 
 function getStats(sourceId: number) {
@@ -8263,31 +8488,51 @@ function listPetCandidates(
 ) {
   const limit = Math.max(1, Math.min(2000, Math.trunc(requestedLimit || 500)));
 
-  const candidates = db.prepare(`
-    SELECT
-      pc.id,
-      pc.pet_class,
-      pc.representative_pet_id,
-      pc.average_similarity,
-      pc.min_similarity,
-      COUNT(pci.pet_detection_id) AS detection_count,
-      MIN(pci.pet_detection_id) AS first_pet_id,
-      MAX(pci.pet_detection_id) AS newest_pet_id
-    FROM pet_candidates pc
-    JOIN pet_candidate_items pci ON pci.candidate_id=pc.id
-    JOIN pet_fused_detections pd ON pd.id=pci.pet_detection_id
-    JOIN media_items m ON m.id=pd.media_id
-    LEFT JOIN pet_assignments pa
-      ON pa.pet_detection_id=pci.pet_detection_id
-    WHERE pc.source_id=?
-      AND m.availability='AVAILABLE'
-      AND pd.input_sha256=m.sha256
-      AND pa.pet_detection_id IS NULL
-    GROUP BY pc.id
-    HAVING COUNT(DISTINCT m.sha256 || ':' || pd.detection_index) >= 2
-    ORDER BY detection_count DESC, pc.average_similarity DESC, newest_pet_id DESC
-    LIMIT ?
-  `).all(sourceId, limit);
+  const candidates = summaryOnly
+    ? db.prepare(`
+        SELECT
+          pc.id,
+          pc.pet_class,
+          pc.representative_pet_id,
+          pc.average_similarity,
+          pc.min_similarity,
+          pc.member_count AS detection_count,
+          pc.representative_pet_id AS first_pet_id,
+          pc.newest_pet_id
+        FROM pet_candidates pc
+        WHERE pc.source_id=?
+          AND pc.member_count>=2
+        ORDER BY
+          pc.member_count DESC,
+          pc.average_similarity DESC,
+          pc.newest_pet_id DESC
+        LIMIT ?
+      `).all(sourceId, limit)
+    : db.prepare(`
+        SELECT
+          pc.id,
+          pc.pet_class,
+          pc.representative_pet_id,
+          pc.average_similarity,
+          pc.min_similarity,
+          COUNT(pci.pet_detection_id) AS detection_count,
+          MIN(pci.pet_detection_id) AS first_pet_id,
+          MAX(pci.pet_detection_id) AS newest_pet_id
+        FROM pet_candidates pc
+        JOIN pet_candidate_items pci ON pci.candidate_id=pc.id
+        JOIN pet_fused_detections pd ON pd.id=pci.pet_detection_id
+        JOIN media_items m ON m.id=pd.media_id
+        LEFT JOIN pet_assignments pa
+          ON pa.pet_detection_id=pci.pet_detection_id
+        WHERE pc.source_id=?
+          AND m.availability='AVAILABLE'
+          AND pd.input_sha256=m.sha256
+          AND pa.pet_detection_id IS NULL
+        GROUP BY pc.id
+        HAVING COUNT(DISTINCT m.sha256 || ':' || pd.detection_index) >= 2
+        ORDER BY detection_count DESC, pc.average_similarity DESC, newest_pet_id DESC
+        LIMIT ?
+      `).all(sourceId, limit);
 
   if (summaryOnly) {
     return candidates.map((candidate) => ({
@@ -10577,30 +10822,49 @@ function listPersonCandidates(
 ) {
   const limit = Math.max(1, Math.min(2000, Math.trunc(requestedLimit || 500)));
 
-  const candidates = db.prepare(`
-    SELECT
-      pc.id,
-      pc.representative_face_id,
-      pc.average_similarity,
-      pc.min_similarity,
-      COUNT(pcf.face_detection_id) AS face_count,
-      MIN(pcf.face_detection_id) AS first_face_id,
-      MAX(pcf.face_detection_id) AS newest_face_id
-    FROM person_candidates pc
-    JOIN person_candidate_faces pcf ON pcf.candidate_id=pc.id
-    JOIN face_detections fd ON fd.id=pcf.face_detection_id
-    JOIN media_items m ON m.id=fd.media_id
-    LEFT JOIN person_face_assignments pfa
-      ON pfa.face_detection_id=pcf.face_detection_id
-    WHERE pc.source_id=?
-      AND m.availability='AVAILABLE'
-      AND fd.input_sha256=m.sha256
-      AND pfa.face_detection_id IS NULL
-    GROUP BY pc.id
-    HAVING COUNT(DISTINCT m.sha256 || ':' || fd.detection_index) >= 2
-    ORDER BY face_count DESC, pc.average_similarity DESC, newest_face_id DESC
-    LIMIT ?
-  `).all(sourceId, limit);
+  const candidates = summaryOnly
+    ? db.prepare(`
+        SELECT
+          pc.id,
+          pc.representative_face_id,
+          pc.average_similarity,
+          pc.min_similarity,
+          pc.member_count AS face_count,
+          pc.representative_face_id AS first_face_id,
+          pc.newest_face_id
+        FROM person_candidates pc
+        WHERE pc.source_id=?
+          AND pc.member_count>=2
+        ORDER BY
+          pc.member_count DESC,
+          pc.average_similarity DESC,
+          pc.newest_face_id DESC
+        LIMIT ?
+      `).all(sourceId, limit)
+    : db.prepare(`
+        SELECT
+          pc.id,
+          pc.representative_face_id,
+          pc.average_similarity,
+          pc.min_similarity,
+          COUNT(pcf.face_detection_id) AS face_count,
+          MIN(pcf.face_detection_id) AS first_face_id,
+          MAX(pcf.face_detection_id) AS newest_face_id
+        FROM person_candidates pc
+        JOIN person_candidate_faces pcf ON pcf.candidate_id=pc.id
+        JOIN face_detections fd ON fd.id=pcf.face_detection_id
+        JOIN media_items m ON m.id=fd.media_id
+        LEFT JOIN person_face_assignments pfa
+          ON pfa.face_detection_id=pcf.face_detection_id
+        WHERE pc.source_id=?
+          AND m.availability='AVAILABLE'
+          AND fd.input_sha256=m.sha256
+          AND pfa.face_detection_id IS NULL
+        GROUP BY pc.id
+        HAVING COUNT(DISTINCT m.sha256 || ':' || fd.detection_index) >= 2
+        ORDER BY face_count DESC, pc.average_similarity DESC, newest_face_id DESC
+        LIMIT ?
+      `).all(sourceId, limit);
 
   if (summaryOnly) {
     return candidates.map((candidate) => ({
@@ -13511,6 +13775,10 @@ async function dispatch(method: CatalogMethod, payload: Record<string, unknown> 
       return disableSource(asNumber(payload.sourceId, "sourceId"));
     case "getStats":
       return getStats(asNumber(payload.sourceId, "sourceId"));
+    case "getIdentityCandidateSummaryStats":
+      return getIdentityCandidateSummaryStats(
+        asNumber(payload.sourceId, "sourceId")
+      );
     case "getRemoteSummary":
       return getRemoteSummary();
     case "listMedia":
