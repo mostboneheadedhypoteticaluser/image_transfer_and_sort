@@ -94,7 +94,12 @@ declare global {
         onPipelineStatus(listener: (status: PipelineStatus) => void): () => void;
       };
       people: {
-        getOverview(sourceId: number, forceRefresh?: boolean): Promise<PersonOverview>;
+        getOverview(
+          sourceId: number,
+          forceRefresh?: boolean,
+          candidateLimit?: number,
+          candidateOffset?: number
+        ): Promise<PersonOverview>;
         confirmCandidate(
           candidateId: number,
           name: string,
@@ -141,7 +146,12 @@ declare global {
         onUpdated(listener: () => void): () => void;
       };
       pets: {
-        getOverview(sourceId: number, forceRefresh?: boolean): Promise<PetOverview>;
+        getOverview(
+          sourceId: number,
+          forceRefresh?: boolean,
+          candidateLimit?: number,
+          candidateOffset?: number
+        ): Promise<PetOverview>;
         confirmCandidate(
           candidateId: number,
           name: string,
