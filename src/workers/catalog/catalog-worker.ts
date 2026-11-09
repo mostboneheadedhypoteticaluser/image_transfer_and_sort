@@ -1526,7 +1526,12 @@ function getStats(sourceId: number) {
           JOIN person_candidate_faces pcf ON pcf.candidate_id=pc.id
           JOIN face_detections fd ON fd.id=pcf.face_detection_id
           JOIN media_items m ON m.id=fd.media_id
+          LEFT JOIN person_face_assignments pfa
+            ON pfa.face_detection_id=pcf.face_detection_id
           WHERE pc.source_id=?
+            AND m.availability='AVAILABLE'
+            AND fd.input_sha256=m.sha256
+            AND pfa.face_detection_id IS NULL
           GROUP BY pc.id
           HAVING COUNT(DISTINCT m.sha256 || ':' || fd.detection_index) >= 2
         )
@@ -1539,7 +1544,12 @@ function getStats(sourceId: number) {
           JOIN person_candidate_faces pcf ON pcf.candidate_id=pc.id
           JOIN face_detections fd ON fd.id=pcf.face_detection_id
           JOIN media_items m ON m.id=fd.media_id
+          LEFT JOIN person_face_assignments pfa
+            ON pfa.face_detection_id=pcf.face_detection_id
           WHERE pc.source_id=?
+            AND m.availability='AVAILABLE'
+            AND fd.input_sha256=m.sha256
+            AND pfa.face_detection_id IS NULL
           GROUP BY pc.id
           HAVING COUNT(DISTINCT m.sha256 || ':' || fd.detection_index) >= 2
         )
@@ -1570,7 +1580,12 @@ function getStats(sourceId: number) {
           JOIN pet_candidate_items pci ON pci.candidate_id=pc.id
           JOIN pet_fused_detections pd ON pd.id=pci.pet_detection_id
           JOIN media_items m ON m.id=pd.media_id
+          LEFT JOIN pet_assignments pa
+            ON pa.pet_detection_id=pci.pet_detection_id
           WHERE pc.source_id=?
+            AND m.availability='AVAILABLE'
+            AND pd.input_sha256=m.sha256
+            AND pa.pet_detection_id IS NULL
           GROUP BY pc.id
           HAVING COUNT(DISTINCT m.sha256 || ':' || pd.detection_index) >= 2
         )
@@ -1583,7 +1598,12 @@ function getStats(sourceId: number) {
           JOIN pet_candidate_items pci ON pci.candidate_id=pc.id
           JOIN pet_fused_detections pd ON pd.id=pci.pet_detection_id
           JOIN media_items m ON m.id=pd.media_id
+          LEFT JOIN pet_assignments pa
+            ON pa.pet_detection_id=pci.pet_detection_id
           WHERE pc.source_id=?
+            AND m.availability='AVAILABLE'
+            AND pd.input_sha256=m.sha256
+            AND pa.pet_detection_id IS NULL
           GROUP BY pc.id
           HAVING COUNT(DISTINCT m.sha256 || ':' || pd.detection_index) >= 2
         )
@@ -8255,10 +8275,14 @@ function listPetCandidates(
     JOIN pet_candidate_items pci ON pci.candidate_id=pc.id
     JOIN pet_fused_detections pd ON pd.id=pci.pet_detection_id
     JOIN media_items m ON m.id=pd.media_id
+    LEFT JOIN pet_assignments pa
+      ON pa.pet_detection_id=pci.pet_detection_id
     WHERE pc.source_id=?
       AND m.availability='AVAILABLE'
       AND pd.input_sha256=m.sha256
+      AND pa.pet_detection_id IS NULL
     GROUP BY pc.id
+    HAVING COUNT(DISTINCT m.sha256 || ':' || pd.detection_index) >= 2
     ORDER BY detection_count DESC, pc.average_similarity DESC, newest_pet_id DESC
     LIMIT ?
   `).all(sourceId, limit);
@@ -8276,9 +8300,12 @@ function listPetCandidates(
     FROM pet_candidate_items pci
     JOIN pet_fused_detections pd ON pd.id=pci.pet_detection_id
     JOIN media_items m ON m.id=pd.media_id
+    LEFT JOIN pet_assignments pa
+      ON pa.pet_detection_id=pci.pet_detection_id
     WHERE pci.candidate_id=?
       AND m.availability='AVAILABLE'
       AND pd.input_sha256=m.sha256
+      AND pa.pet_detection_id IS NULL
     ORDER BY
       CASE WHEN pci.pet_detection_id=? THEN 0 ELSE 1 END,
       pci.similarity DESC,
@@ -8291,9 +8318,12 @@ function listPetCandidates(
     FROM pet_candidate_items pci
     JOIN pet_fused_detections pd ON pd.id=pci.pet_detection_id
     JOIN media_items m ON m.id=pd.media_id
+    LEFT JOIN pet_assignments pa
+      ON pa.pet_detection_id=pci.pet_detection_id
     WHERE pci.candidate_id=?
       AND m.availability='AVAILABLE'
       AND pd.input_sha256=m.sha256
+      AND pa.pet_detection_id IS NULL
     ORDER BY pci.pet_detection_id
   `);
 
@@ -8304,8 +8334,11 @@ function listPetCandidates(
       pe.vector_blob
     FROM pet_candidate_items pci
     JOIN pet_embeddings pe ON pe.pet_detection_id=pci.pet_detection_id
+    LEFT JOIN pet_assignments pa
+      ON pa.pet_detection_id=pci.pet_detection_id
     WHERE pci.candidate_id=?
       AND pe.model_version='DogReID DINOv2-B14 0.2.0'
+      AND pa.pet_detection_id IS NULL
     ORDER BY pci.pet_detection_id
   `);
 
@@ -8344,9 +8377,17 @@ function listPetCandidates(
 
   return candidates.map((candidate) => {
     const candidateId = Number(candidate.id);
-    const representativePetId = candidate.representative_pet_id === null
+    const memberIds = memberSignatureQuery
+      .all(candidateId)
+      .map((row) => Number(row.pet_detection_id));
+    const storedRepresentativePetId = candidate.representative_pet_id === null
       ? null
       : Number(candidate.representative_pet_id);
+    const representativePetId =
+      storedRepresentativePetId !== null &&
+      memberIds.includes(storedRepresentativePetId)
+        ? storedRepresentativePetId
+        : (memberIds[0] ?? null);
 
     const embeddingRows = embeddingQuery.all(candidateId);
     const candidateVectors = embeddingRows.map((row) =>
@@ -8404,10 +8445,7 @@ function listPetCandidates(
       petClass: String(candidate.pet_class),
       detectionCount: Number(candidate.detection_count),
       newestPetId: Number(candidate.newest_pet_id),
-      memberSignature: memberSignatureQuery
-        .all(candidateId)
-        .map((row) => Number(row.pet_detection_id))
-        .join(","),
+      memberSignature: memberIds.join(","),
       representativePetId,
       averageSimilarity: Number(candidate.average_similarity),
       minSimilarity: Number(candidate.min_similarity),
@@ -10457,17 +10495,26 @@ function listPersonCandidates(
     JOIN person_candidate_faces pcf ON pcf.candidate_id=pc.id
     JOIN face_detections fd ON fd.id=pcf.face_detection_id
     JOIN media_items m ON m.id=fd.media_id
+    LEFT JOIN person_face_assignments pfa
+      ON pfa.face_detection_id=pcf.face_detection_id
     WHERE pc.source_id=?
+      AND m.availability='AVAILABLE'
+      AND fd.input_sha256=m.sha256
+      AND pfa.face_detection_id IS NULL
     GROUP BY pc.id
+    HAVING COUNT(DISTINCT m.sha256 || ':' || fd.detection_index) >= 2
     ORDER BY face_count DESC, pc.average_similarity DESC, newest_face_id DESC
     LIMIT ?
   `).all(sourceId, limit);
 
   const memberSignatureQuery = db.prepare(`
     SELECT face_detection_id
-    FROM person_candidate_faces
-    WHERE candidate_id=?
-    ORDER BY face_detection_id
+    FROM person_candidate_faces pcf
+    LEFT JOIN person_face_assignments pfa
+      ON pfa.face_detection_id=pcf.face_detection_id
+    WHERE pcf.candidate_id=?
+      AND pfa.face_detection_id IS NULL
+    ORDER BY pcf.face_detection_id
   `);
 
   const faceQuery = db.prepare(`
@@ -10483,7 +10530,12 @@ function listPersonCandidates(
     FROM person_candidate_faces pcf
     JOIN face_detections fd ON fd.id=pcf.face_detection_id
     JOIN media_items m ON m.id=fd.media_id
+    LEFT JOIN person_face_assignments pfa
+      ON pfa.face_detection_id=pcf.face_detection_id
     WHERE pcf.candidate_id=?
+      AND m.availability='AVAILABLE'
+      AND fd.input_sha256=m.sha256
+      AND pfa.face_detection_id IS NULL
     ORDER BY
       CASE WHEN pcf.face_detection_id=? THEN 0 ELSE 1 END,
       pcf.similarity DESC,
@@ -10498,8 +10550,11 @@ function listPersonCandidates(
       fe.vector_blob
     FROM person_candidate_faces pcf
     JOIN face_embeddings fe ON fe.face_detection_id=pcf.face_detection_id
+    LEFT JOIN person_face_assignments pfa
+      ON pfa.face_detection_id=pcf.face_detection_id
     WHERE pcf.candidate_id=?
       AND fe.model_version='SFace 2021dec'
+      AND pfa.face_detection_id IS NULL
     ORDER BY pcf.face_detection_id
   `);
 
@@ -10538,9 +10593,17 @@ function listPersonCandidates(
 
   return candidates.map((candidate) => {
     const candidateId = Number(candidate.id);
-    const representativeFaceId = candidate.representative_face_id === null
+    const memberIds = memberSignatureQuery
+      .all(candidateId)
+      .map((row) => Number(row.face_detection_id));
+    const storedRepresentativeFaceId = candidate.representative_face_id === null
       ? null
       : Number(candidate.representative_face_id);
+    const representativeFaceId =
+      storedRepresentativeFaceId !== null &&
+      memberIds.includes(storedRepresentativeFaceId)
+        ? storedRepresentativeFaceId
+        : (memberIds[0] ?? null);
 
     const embeddingRows = embeddingQuery.all(candidateId);
     const vectors = embeddingRows.map((row) =>
@@ -10590,10 +10653,7 @@ function listPersonCandidates(
       id: candidateId,
       faceCount: Number(candidate.face_count),
       newestFaceId: Number(candidate.newest_face_id),
-      memberSignature: memberSignatureQuery
-        .all(candidateId)
-        .map((row) => Number(row.face_detection_id))
-        .join(","),
+      memberSignature: memberIds.join(","),
       representativeFaceId,
       averageSimilarity: Number(candidate.average_similarity),
       minSimilarity: Number(candidate.min_similarity),
