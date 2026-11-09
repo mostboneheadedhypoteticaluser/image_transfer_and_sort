@@ -7987,8 +7987,11 @@ refreshPeopleButton.addEventListener("click", () => {
   if (sourceId === null) return;
 
   void runSafely(async () => {
-    personStatus.textContent = "Personenvorschläge werden neu berechnet …";
+    personStatus.textContent =
+      "Neugruppierung wird im Hintergrund gestartet. Der bisherige Stand bleibt sichtbar …";
     await loadPersonOverview(sourceId, true);
+    personStatus.textContent =
+      "Neugruppierung läuft im Hintergrund. Die gespeicherten Gruppen bleiben bis zum Abschluss sichtbar.";
     await refreshIdentityTabStats();
   });
 });
@@ -7998,8 +8001,11 @@ refreshPetsButton.addEventListener("click", () => {
   if (sourceId === null) return;
 
   void runSafely(async () => {
-    petStatus.textContent = "Hundegruppen werden neu berechnet …";
+    petStatus.textContent =
+      "Neugruppierung wird im Hintergrund gestartet. Der bisherige Stand bleibt sichtbar …";
     await loadPetOverview(sourceId, true);
+    petStatus.textContent =
+      "Neugruppierung läuft im Hintergrund. Die gespeicherten Gruppen bleiben bis zum Abschluss sichtbar.";
     await refreshIdentityTabStats();
   });
 });
