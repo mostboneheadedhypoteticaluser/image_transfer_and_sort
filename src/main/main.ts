@@ -82,6 +82,7 @@ let thumbnailCacheRoot = "";
 let personRefreshTimer: NodeJS.Timeout | null = null;
 let personRefreshRunning = false;
 let personRefreshRescheduleRequested = false;
+let personRefreshForceRequested = false;
 let lifeAreaRuleRefreshTimer: NodeJS.Timeout | null = null;
 const groupedFaceEmbeddingCounts = new Map<number, number>();
 const groupedPetEmbeddingCounts = new Map<number, number>();
@@ -571,11 +572,14 @@ function startRemoteWebServer(): Promise<void> {
             0,
             Math.trunc(Number(requestUrl.searchParams.get("offset")) || 0)
           );
+          const forceRefresh = requestUrl.searchParams.get("refresh") === "1";
+          if (forceRefresh) schedulePersonRefresh(true, 0);
           const overview = await personService.getCombinedOverview(
-            requestUrl.searchParams.get("refresh") === "1",
+            false,
             limit,
             offset,
-            false
+            false,
+            true
           );
           writeRemoteJson(response, 200, overview);
           return;
@@ -591,11 +595,14 @@ function startRemoteWebServer(): Promise<void> {
             0,
             Math.trunc(Number(requestUrl.searchParams.get("offset")) || 0)
           );
+          const forceRefresh = requestUrl.searchParams.get("refresh") === "1";
+          if (forceRefresh) schedulePersonRefresh(true, 0);
           const overview = await petService.getCombinedOverview(
-            requestUrl.searchParams.get("refresh") === "1",
+            false,
             limit,
             offset,
-            false
+            false,
+            true
           );
           writeRemoteJson(response, 200, overview);
           return;
@@ -606,7 +613,12 @@ function startRemoteWebServer(): Promise<void> {
           const body = await readRemoteJsonBody(request) as Record<string, unknown>;
           const result = await personService.confirmCandidate(
             Number(body.candidateId),
-            String(body.name ?? "")
+            String(body.name ?? ""),
+            Number(body.fallbackFaceDetectionId) || undefined,
+            Number(body.expectedFaceCount) || undefined,
+            typeof body.expectedMemberSignature === "string"
+              ? body.expectedMemberSignature
+              : undefined
           );
           schedulePersonRefresh();
           writeRemoteJson(response, 200, result);
@@ -616,7 +628,15 @@ function startRemoteWebServer(): Promise<void> {
         if (method === "POST" && pathname === "/api/people/ignore") {
           if (!personService) throw new Error("Personenerkennung ist noch nicht bereit.");
           const body = await readRemoteJsonBody(request) as Record<string, unknown>;
-          const result = await personService.ignoreCandidate(Number(body.candidateId));
+          const result = await personService.ignoreCandidate(
+            Number(body.candidateId),
+            Number(body.fallbackFaceDetectionId) || undefined,
+            Number(body.expectedFaceCount) || undefined,
+            typeof body.expectedMemberSignature === "string"
+              ? body.expectedMemberSignature
+              : undefined,
+            Number(body.ignoredIdentityId) || undefined
+          );
           schedulePersonRefresh();
           writeRemoteJson(response, 200, result);
           return;
@@ -627,7 +647,13 @@ function startRemoteWebServer(): Promise<void> {
           const body = await readRemoteJsonBody(request) as Record<string, unknown>;
           const result = await petService.confirmCandidate(
             Number(body.candidateId),
-            String(body.name ?? "")
+            String(body.name ?? ""),
+            Number(body.rejectedPetId) || undefined,
+            Number(body.fallbackPetDetectionId) || undefined,
+            Number(body.expectedDetectionCount) || undefined,
+            typeof body.expectedMemberSignature === "string"
+              ? body.expectedMemberSignature
+              : undefined
           );
           schedulePersonRefresh();
           writeRemoteJson(response, 200, result);
@@ -637,7 +663,15 @@ function startRemoteWebServer(): Promise<void> {
         if (method === "POST" && pathname === "/api/pets/ignore") {
           if (!petService) throw new Error("Tiererkennung ist noch nicht bereit.");
           const body = await readRemoteJsonBody(request) as Record<string, unknown>;
-          const result = await petService.ignoreCandidate(Number(body.candidateId));
+          const result = await petService.ignoreCandidate(
+            Number(body.candidateId),
+            Number(body.fallbackPetDetectionId) || undefined,
+            Number(body.expectedDetectionCount) || undefined,
+            typeof body.expectedMemberSignature === "string"
+              ? body.expectedMemberSignature
+              : undefined,
+            Number(body.ignoredIdentityId) || undefined
+          );
           schedulePersonRefresh();
           writeRemoteJson(response, 200, result);
           return;
@@ -975,28 +1009,34 @@ async function waitForIdentityRefreshIdle(timeoutMs = 15000): Promise<void> {
   }
 }
 
-function schedulePersonRefresh(): void {
+function schedulePersonRefresh(
+  forceRefresh = false,
+  delayMs = 30000
+): void {
+  if (forceRefresh) {
+    personRefreshForceRequested = true;
+  }
+
   if (
     isQuitting ||
     shutdownInProgress ||
     backgroundPaused ||
-    (!personService && !petService) ||
-    personRefreshTimer
+    (!personService && !petService)
   ) {
     return;
   }
 
   if (personRefreshRunning) {
-    // Do not start another global clustering request in parallel. Remember the
-    // invalidation instead and run one fresh pass after the active pass ends.
     personRefreshRescheduleRequested = true;
     return;
   }
 
-  // Kandidaten werden weiterhin während der Fast-Lane nachgezogen, aber nicht
-  // mehr wegen jedes abgeschlossenen Embedding-Jobs. Jobs ohne Gesicht/Hund
-  // erhöhen nur den DONE-Zähler und dürfen kein komplettes Re-Clustering aller
-  // vorhandenen Identitäten auslösen.
+  if (personRefreshTimer) {
+    if (!forceRefresh && delayMs >= 30000) return;
+    clearTimeout(personRefreshTimer);
+    personRefreshTimer = null;
+  }
+
   personRefreshTimer = setTimeout(() => {
     personRefreshTimer = null;
     if (
@@ -1014,13 +1054,12 @@ function schedulePersonRefresh(): void {
     }
 
     personRefreshRunning = true;
+    const forceThisRun = personRefreshForceRequested;
+    personRefreshForceRequested = false;
 
     void (async () => {
       const counts = await getIdentityEmbeddingCounts();
 
-      // Der Katalogaufruf kann bei großen Importen einige Sekunden warten.
-      // Falls in dieser Zeit der App-Shutdown begonnen hat, darf danach weder
-      // Clustering noch ein neuer Python-Request gestartet werden.
       if (shutdownInProgress || isQuitting || backgroundPaused) {
         return;
       }
@@ -1033,6 +1072,7 @@ function schedulePersonRefresh(): void {
         pipelineStatus.petEmbeddings.running === 0;
 
       const faceChangedSources = counts.filter((entry) => {
+        if (forceThisRun) return true;
         const previous = groupedFaceEmbeddingCounts.get(entry.sourceId) ?? 0;
         const delta = entry.faces - previous;
         return (
@@ -1043,6 +1083,7 @@ function schedulePersonRefresh(): void {
       });
 
       const petChangedSources = counts.filter((entry) => {
+        if (forceThisRun) return true;
         const previous = groupedPetEmbeddingCounts.get(entry.sourceId) ?? 0;
         const delta = entry.dogs - previous;
         return (
@@ -1062,6 +1103,7 @@ function schedulePersonRefresh(): void {
       );
 
       analysis?.logDiagnostic("IDENTITY_REFRESH_BEGIN", {
+        forced: forceThisRun,
         faceSources: faceChangedSources.map((entry) => ({
           sourceId: entry.sourceId,
           embeddings: entry.faces,
@@ -1074,21 +1116,19 @@ function schedulePersonRefresh(): void {
         }))
       });
 
-      // Gruppierung läuft jetzt als normaler paralleler Python-Job mit.
-      // Sie darf die Bild-/Video-Lanes nicht mehr exklusiv anhalten.
       try {
         if (shutdownInProgress || isQuitting || backgroundPaused) return;
 
         if (personService) {
           for (const entry of faceChangedSources) {
-            // Nur die tatsächlich geänderte Quelle prüfen. forceRefresh=false
-            // verhindert beim App-Start einen teuren Neuaufbau, wenn die
-            // gespeicherte Cluster-Revision bereits exakt aktuell ist.
             await personService.getOverview(
               entry.sourceId,
-              false,
+              forceThisRun,
               true,
-              true
+              true,
+              1,
+              false,
+              false
             );
             groupedFaceEmbeddingCounts.set(entry.sourceId, entry.faces);
             if (shutdownInProgress || isQuitting || backgroundPaused) return;
@@ -1102,9 +1142,12 @@ function schedulePersonRefresh(): void {
           for (const entry of petChangedSources) {
             await petService.getOverview(
               entry.sourceId,
-              false,
+              forceThisRun,
               true,
-              true
+              true,
+              1,
+              false,
+              false
             );
             groupedPetEmbeddingCounts.set(entry.sourceId, entry.dogs);
             if (shutdownInProgress || isQuitting || backgroundPaused) return;
@@ -1123,14 +1166,11 @@ function schedulePersonRefresh(): void {
         }
       } finally {
         analysis?.setIdentityGroupingActivity(false, false);
-        // Kein exklusiver Maintenance-Stopp mehr nötig.
       }
     })()
       .catch((error) => {
-        // Bei einem temporären Clusterfehler bleiben die Embedding-Zähler
-        // unverändert. Ein Retry wird explizit vorgemerkt, statt darauf zu
-        // hoffen, dass zufällig noch ein weiterer Pipeline-Statuswechsel kommt.
         personRefreshRescheduleRequested = true;
+        if (forceThisRun) personRefreshForceRequested = true;
         analysis?.logDiagnostic("IDENTITY_REFRESH_ERROR", {
           error: error instanceof Error ? error.message : String(error)
         });
@@ -1138,12 +1178,14 @@ function schedulePersonRefresh(): void {
       .finally(() => {
         personRefreshRunning = false;
 
-        if (personRefreshRescheduleRequested) {
+        if (personRefreshRescheduleRequested || personRefreshForceRequested) {
+          const forceNext = personRefreshForceRequested;
           personRefreshRescheduleRequested = false;
-          schedulePersonRefresh();
+    personRefreshForceRequested = false;
+          schedulePersonRefresh(forceNext, forceNext ? 0 : 30000);
         }
       });
-  }, 30000);
+  }, Math.max(0, Math.trunc(delayMs)));
   personRefreshTimer.unref();
 }
 
@@ -2365,8 +2407,10 @@ function registerIpc(): void {
 
   ipcMain.handle(
     "people:getOverview",
-    (_event, _sourceId: number, forceRefresh = false): Promise<PersonOverview> =>
-      personService!.getCombinedOverview(Boolean(forceRefresh))
+    async (_event, _sourceId: number, forceRefresh = false): Promise<PersonOverview> => {
+      if (forceRefresh) schedulePersonRefresh(true, 0);
+      return personService!.getCombinedOverview(false, 500, 0, true, true);
+    }
   );
 
   ipcMain.handle(
@@ -2480,8 +2524,10 @@ function registerIpc(): void {
 
   ipcMain.handle(
     "pets:getOverview",
-    (_event, _sourceId: number, forceRefresh = false): Promise<PetOverview> =>
-      petService!.getCombinedOverview(Boolean(forceRefresh))
+    async (_event, _sourceId: number, forceRefresh = false): Promise<PetOverview> => {
+      if (forceRefresh) schedulePersonRefresh(true, 0);
+      return petService!.getCombinedOverview(false, 500, 0, true, true);
+    }
   );
 
   ipcMain.handle(
@@ -2990,6 +3036,7 @@ app.whenReady().then(() => {
   void analysis.start().then(() => {
     if (analysis?.getStatus().state === "READY") {
       void analysisCoordinator?.start();
+      schedulePersonRefresh(false, 1500);
     }
   });
 
