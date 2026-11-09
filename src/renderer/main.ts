@@ -264,6 +264,9 @@ let personConfirmationMediaFilter: ConfirmationMediaFilter = "all";
 let petConfirmationMediaFilter: ConfirmationMediaFilter = "all";
 let lastPersonOverview: PersonOverview | null = null;
 let lastPetOverview: PetOverview | null = null;
+const IDENTITY_CANDIDATE_PAGE_SIZE = 10;
+let personCandidatePage = 0;
+let petCandidatePage = 0;
 
 type CandidateReviewSuggestion = {
   name: string;
@@ -5590,7 +5593,7 @@ function renderGroupedPersonSuggestionBucket(
     const faces = document.createElement("div");
     faces.className = "person-suggestion-face-strip";
 
-    for (const face of candidate.faces.slice(0, 8)) {
+    for (const face of candidate.faces) {
       const image = document.createElement("img");
       image.src = faceCropUrl(face.faceDetectionId);
       image.alt = "";
@@ -5739,6 +5742,55 @@ function renderGroupedPersonSuggestionBucket(
   card.append(header, list, actions);
   updateSelection();
   return card;
+}
+
+function appendIdentityCandidatePager(
+  container: HTMLElement,
+  total: number,
+  page: number,
+  onPageChange: (page: number) => void
+): void {
+  const totalPages = Math.max(
+    1,
+    Math.ceil(Math.max(0, total) / IDENTITY_CANDIDATE_PAGE_SIZE)
+  );
+  if (total <= IDENTITY_CANDIDATE_PAGE_SIZE) return;
+
+  const pager = document.createElement("div");
+  pager.className = "identity-candidate-pager";
+
+  const previous = document.createElement("button");
+  previous.type = "button";
+  previous.className = "ghost";
+  previous.textContent = "← Zurück";
+  previous.disabled = page <= 0;
+  previous.addEventListener("click", () => {
+    if (page <= 0) return;
+    onPageChange(page - 1);
+  });
+
+  const info = document.createElement("span");
+  const first = page * IDENTITY_CANDIDATE_PAGE_SIZE + 1;
+  const last = Math.min(total, first + IDENTITY_CANDIDATE_PAGE_SIZE - 1);
+  info.textContent =
+    "Seite " + (page + 1).toLocaleString("de-DE") +
+    " / " + totalPages.toLocaleString("de-DE") +
+    " · " + first.toLocaleString("de-DE") +
+    "–" + last.toLocaleString("de-DE") +
+    " von " + total.toLocaleString("de-DE") + " Gruppen";
+
+  const next = document.createElement("button");
+  next.type = "button";
+  next.className = "ghost";
+  next.textContent = "Weiter →";
+  next.disabled = page >= totalPages - 1;
+  next.addEventListener("click", () => {
+    if (page >= totalPages - 1) return;
+    onPageChange(page + 1);
+  });
+
+  pager.append(previous, info, next);
+  container.appendChild(pager);
 }
 
 function renderPersonOverview(overview: PersonOverview): void {
@@ -6165,6 +6217,20 @@ function renderPersonOverview(overview: PersonOverview): void {
     personCandidates.appendChild(fragment);
   }
 
+  if (personConfirmationMediaFilter !== "video") {
+    appendIdentityCandidatePager(
+      personCandidates,
+      overview.candidateTotal,
+      personCandidatePage,
+      (page) => {
+        personCandidatePage = page;
+        const sourceId = selectedSourceId();
+        if (sourceId === null) return;
+        void runSafely(() => loadPersonOverview(sourceId));
+      }
+    );
+  }
+
   if (visiblePersons.length === 0) {
     const empty = document.createElement("div");
     empty.className = "person-empty compact";
@@ -6417,10 +6483,27 @@ async function loadPersonOverview(
     : "Personendaten werden geladen …";
 
   try {
-    const overview = await window.imageSorter.people.getOverview(
+    let overview = await window.imageSorter.people.getOverview(
       sourceId,
-      forceRefresh
+      forceRefresh,
+      IDENTITY_CANDIDATE_PAGE_SIZE,
+      personCandidatePage * IDENTITY_CANDIDATE_PAGE_SIZE
     );
+    if (
+      overview.candidateTotal > 0 &&
+      personCandidatePage * IDENTITY_CANDIDATE_PAGE_SIZE >= overview.candidateTotal
+    ) {
+      personCandidatePage = Math.max(
+        0,
+        Math.ceil(overview.candidateTotal / IDENTITY_CANDIDATE_PAGE_SIZE) - 1
+      );
+      overview = await window.imageSorter.people.getOverview(
+        sourceId,
+        false,
+        IDENTITY_CANDIDATE_PAGE_SIZE,
+        personCandidatePage * IDENTITY_CANDIDATE_PAGE_SIZE
+      );
+    }
     lastPersonOverview = overview;
     renderPersonOverview(overview);
 
@@ -7038,6 +7121,20 @@ function renderPetOverview(overview: PetOverview): void {
     petCandidates.appendChild(fragment);
   }
 
+  if (petConfirmationMediaFilter !== "video") {
+    appendIdentityCandidatePager(
+      petCandidates,
+      overview.candidateTotal,
+      petCandidatePage,
+      (page) => {
+        petCandidatePage = page;
+        const sourceId = selectedSourceId();
+        if (sourceId === null) return;
+        void runSafely(() => loadPetOverview(sourceId));
+      }
+    );
+  }
+
   if (visiblePets.length === 0) {
     const empty = document.createElement("div");
     empty.className = "person-empty compact";
@@ -7330,10 +7427,27 @@ async function loadPetOverview(
     : "Haustierdaten werden geladen …";
 
   try {
-    const overview = await window.imageSorter.pets.getOverview(
+    let overview = await window.imageSorter.pets.getOverview(
       sourceId,
-      forceRefresh
+      forceRefresh,
+      IDENTITY_CANDIDATE_PAGE_SIZE,
+      petCandidatePage * IDENTITY_CANDIDATE_PAGE_SIZE
     );
+    if (
+      overview.candidateTotal > 0 &&
+      petCandidatePage * IDENTITY_CANDIDATE_PAGE_SIZE >= overview.candidateTotal
+    ) {
+      petCandidatePage = Math.max(
+        0,
+        Math.ceil(overview.candidateTotal / IDENTITY_CANDIDATE_PAGE_SIZE) - 1
+      );
+      overview = await window.imageSorter.pets.getOverview(
+        sourceId,
+        false,
+        IDENTITY_CANDIDATE_PAGE_SIZE,
+        petCandidatePage * IDENTITY_CANDIDATE_PAGE_SIZE
+      );
+    }
     lastPetOverview = overview;
     renderPetOverview(overview);
 
@@ -7987,6 +8101,7 @@ refreshPeopleButton.addEventListener("click", () => {
   if (sourceId === null) return;
 
   void runSafely(async () => {
+    personCandidatePage = 0;
     personStatus.textContent =
       "Neugruppierung wird im Hintergrund gestartet. Der bisherige Stand bleibt sichtbar …";
     await loadPersonOverview(sourceId, true);
@@ -8001,6 +8116,7 @@ refreshPetsButton.addEventListener("click", () => {
   if (sourceId === null) return;
 
   void runSafely(async () => {
+    petCandidatePage = 0;
     petStatus.textContent =
       "Neugruppierung wird im Hintergrund gestartet. Der bisherige Stand bleibt sichtbar …";
     await loadPetOverview(sourceId, true);
@@ -8377,6 +8493,8 @@ window.addEventListener("focus", () => {
 });
 
 sourceSelect.addEventListener("change", () => {
+  personCandidatePage = 0;
+  petCandidatePage = 0;
   renderCatalogWatchState();
   scheduleSelectedPipelineRefresh();
 
