@@ -732,9 +732,30 @@ def gps_coordinate(values: Any, reference: Any) -> float | None:
     if degrees is None or minutes is None or seconds is None:
         return None
 
-    coordinate = degrees + minutes / 60.0 + seconds / 3600.0
-    ref = str(reference or "").upper()
+    # Pillow can return GPSLatitudeRef/GPSLongitudeRef either as text or bytes.
+    # str(b"W") would become "B'W'" and previously lost the west/south sign,
+    # which mirrored coordinates into the wrong hemisphere.
+    if isinstance(reference, (bytes, bytearray)):
+        try:
+            ref = bytes(reference).decode("ascii", errors="ignore")
+        except Exception:
+            ref = ""
+    else:
+        ref = str(reference or "")
+    ref = ref.strip().upper()
 
+    if ref not in {"N", "S", "E", "W"}:
+        return None
+    if degrees < 0 or minutes < 0 or minutes >= 60 or seconds < 0 or seconds >= 60:
+        return None
+
+    max_degrees = 90.0 if ref in {"N", "S"} else 180.0
+    if degrees > max_degrees:
+        return None
+    if degrees == max_degrees and (minutes > 0 or seconds > 0):
+        return None
+
+    coordinate = degrees + minutes / 60.0 + seconds / 3600.0
     if ref in {"S", "W"}:
         coordinate *= -1
 
