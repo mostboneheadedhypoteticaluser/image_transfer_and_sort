@@ -48,7 +48,8 @@ export class PersonService {
     rebuildIfNeeded = true,
     candidateLimit = 500,
     includeSupporting = true,
-    readOnly = false
+    readOnly = false,
+    summaryOnly = false
   ): Promise<PersonOverview> {
     const queue = await this.catalog.request<AnalysisQueueStats>(
       "getAnalysisQueueStats",
@@ -142,7 +143,8 @@ export class PersonService {
         sourceId,
         limit: normalizedCandidateLimit,
         ignoreDefiniteThreshold: CLUSTER_THRESHOLD,
-        ignoreDoubtThreshold: VERIFICATION_THRESHOLD
+        ignoreDoubtThreshold: VERIFICATION_THRESHOLD,
+        summaryOnly
       }
     );
     const [persons, stats, ungroupedFaces] = await Promise.all([
@@ -177,7 +179,8 @@ export class PersonService {
     candidateLimit = 500,
     candidateOffset = 0,
     includeSupporting = true,
-    readOnly = false
+    readOnly = false,
+    summaryOnly = false
   ): Promise<PersonOverview> {
     const sources = await this.catalog.request<Array<{
       id: number;
@@ -209,7 +212,8 @@ export class PersonService {
           forceRefresh,
           sourceWindow,
           includeSupporting,
-          readOnly
+          readOnly,
+          summaryOnly
         )
       );
     }
@@ -303,6 +307,17 @@ export class PersonService {
       if (!source.enabled) continue;
       await this.getOverview(source.id, incremental, incremental);
     }
+  }
+
+  async listCandidateItems(
+    candidateId: number,
+    limit = 5000,
+    offset = 0
+  ): Promise<PersonCandidate["faces"]> {
+    return this.catalog.request<PersonCandidate["faces"]>(
+      "listPersonCandidateItems",
+      { candidateId, limit, offset }
+    );
   }
 
   async confirmCandidate(
