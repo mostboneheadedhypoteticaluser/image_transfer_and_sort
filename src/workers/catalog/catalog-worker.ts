@@ -8338,25 +8338,6 @@ function listPetCandidates(
     LIMIT 200
   `);
 
-  if (summaryOnly) {
-    return candidates.map((candidate) => ({
-      id: Number(candidate.id),
-      faceCount: Number(candidate.face_count),
-      newestFaceId: Number(candidate.newest_face_id),
-      memberSignature: "",
-      representativeFaceId:
-        candidate.first_face_id === null || candidate.first_face_id === undefined
-          ? null
-          : Number(candidate.first_face_id),
-      averageSimilarity: Number(candidate.average_similarity),
-      minSimilarity: Number(candidate.min_similarity),
-      suggestedPersons: [],
-      ignoredIdentityId: null,
-      ignoredSimilarity: null,
-      faces: []
-    }));
-  }
-
   const memberSignatureQuery = db.prepare(`
     SELECT pci.pet_detection_id
     FROM pet_candidate_items pci
