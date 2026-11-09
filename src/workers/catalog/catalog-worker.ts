@@ -858,40 +858,45 @@ function normalizeHistoricalUnavailableJobs(): void {
 
 normalizeHistoricalUnavailableJobs();
 
-db.prepare(`
-  INSERT OR IGNORE INTO analysis_job_history(
-    analysis_job_id,
-    media_id,
-    source_id,
-    module,
-    status,
-    attempts,
-    input_sha256,
-    started_at,
-    finished_at,
-    duration_ms
-  )
-  SELECT
-    j.id,
-    j.media_id,
-    m.source_id,
-    j.module,
-    j.status,
-    j.attempts,
-    j.input_sha256,
-    j.started_at,
-    j.finished_at,
-    CASE
-      WHEN j.started_at IS NULL THEN NULL
-      ELSE CAST(ROUND(
-        (julianday(j.finished_at)-julianday(j.started_at))*86400000
-      ) AS INTEGER)
-    END
-  FROM analysis_jobs j
-  LEFT JOIN media_items m ON m.id=j.media_id
-  WHERE j.status IN ('DONE','FAILED','UNAVAILABLE')
-    AND j.finished_at IS NOT NULL
-`).run();
+runOneTimeCatalogMigration(
+  "2026-11-09-analysis-history-seed-v1",
+  () => {
+    db.prepare(`
+      INSERT OR IGNORE INTO analysis_job_history(
+        analysis_job_id,
+        media_id,
+        source_id,
+        module,
+        status,
+        attempts,
+        input_sha256,
+        started_at,
+        finished_at,
+        duration_ms
+      )
+      SELECT
+        j.id,
+        j.media_id,
+        m.source_id,
+        j.module,
+        j.status,
+        j.attempts,
+        j.input_sha256,
+        j.started_at,
+        j.finished_at,
+        CASE
+          WHEN j.started_at IS NULL THEN NULL
+          ELSE CAST(ROUND(
+            (julianday(j.finished_at)-julianday(j.started_at))*86400000
+          ) AS INTEGER)
+        END
+      FROM analysis_jobs j
+      LEFT JOIN media_items m ON m.id=j.media_id
+      WHERE j.status IN ('DONE','FAILED','UNAVAILABLE')
+        AND j.finished_at IS NOT NULL
+    `).run();
+  }
+);
 
 function runOneTimeCatalogMigration(
   migrationKey: string,
