@@ -148,15 +148,23 @@ export class PetService {
       }
     );
     if (summaryOnly) {
-      const stats = await this.catalog.request<{
-        petCandidates: number;
-        petCandidateDetections: number;
-      }>("getIdentityCandidateSummaryStats", { sourceId });
+      const [stats, pets] = await Promise.all([
+        this.catalog.request<{
+          petCandidates: number;
+          petCandidateDetections: number;
+        }>("getIdentityCandidateSummaryStats", { sourceId }),
+        includeSupporting
+          ? this.catalog.request<PetRecord[]>("listPets", {
+              sourceId,
+              summaryOnly: true
+            })
+          : Promise.resolve([] as PetRecord[])
+      ]);
 
       return {
         summaryOnly: true,
         candidates,
-        pets: [],
+        pets,
         ungroupedPets: [],
         clusteringPending,
         candidateTotal: stats.petCandidates,
