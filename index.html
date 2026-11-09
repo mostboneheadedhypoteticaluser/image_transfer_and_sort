@@ -950,30 +950,77 @@
 
         <section class="workspace-page map-workspace-page" data-workspace-page="map" hidden>
           <div class="workspace-page-heading map-page-heading">
-            <div><span class="section-kicker">Geodaten</span><h1>Karte</h1></div>
-            <p><strong id="mapGeoCount">0</strong> georeferenzierte Medien · Galerie und Punkte folgen dem aktuellen Kartenausschnitt.</p>
-          </div>
-          <section class="panel map-panel">
-            <div class="map-browser-grid">
-              <section class="map-browser-map">
-                <div id="mapEmptyState" class="map-empty-state">Noch keine Medien mit GPS-Koordinaten im Katalog.</div>
-                <div id="mediaMap" class="media-map" aria-label="Karte der Aufnahmeorte"></div>
-              </section>
-              <section class="map-browser-gallery">
-                <div class="map-gallery-toolbar">
-                  <strong id="mapVisibleCount">0 Medien im Ausschnitt</strong>
-                  <label>
-                    <span>Sortierung</span>
-                    <select id="mapMediaSort">
-                      <option value="newest">Neueste zuerst</option>
-                      <option value="oldest">Älteste zuerst</option>
-                      <option value="name">Dateiname</option>
-                    </select>
-                  </label>
-                </div>
-                <div id="mapMediaGallery" class="map-media-gallery"></div>
-              </section>
+            <div>
+              <span class="section-kicker">Geodaten</span>
+              <h1>Karte</h1>
+              <p>Aufnahmeorte durchsuchen, eingrenzen und die Bilder des aktuellen Kartenausschnitts ansehen.</p>
             </div>
+            <div class="map-heading-stats" aria-label="Kartenstatistik">
+              <span><strong id="mapGeoCount">0</strong><small>mit GPS</small></span>
+              <span><strong id="mapFilteredCount">0</strong><small>nach Filter</small></span>
+              <span><strong id="mapVisibleCount">0</strong><small>im Ausschnitt</small></span>
+            </div>
+          </div>
+
+          <section class="panel map-filter-panel" aria-label="Kartenfilter">
+            <div class="map-filter-grid">
+              <label class="map-filter-search">
+                <span>Datei oder Ordner</span>
+                <input id="mapTextFilter" type="search" placeholder="z. B. Urlaub, DRK, IMG_2026 …" autocomplete="off" />
+              </label>
+              <label>
+                <span>Quelle</span>
+                <select id="mapSourceFilter">
+                  <option value="">Alle Quellen</option>
+                </select>
+              </label>
+              <label>
+                <span>Medientyp</span>
+                <select id="mapMediaTypeFilter">
+                  <option value="all">Fotos &amp; Videos</option>
+                  <option value="image">Nur Fotos</option>
+                  <option value="video">Nur Videos</option>
+                </select>
+              </label>
+              <label>
+                <span>Von</span>
+                <input id="mapDateFrom" type="date" />
+              </label>
+              <label>
+                <span>Bis</span>
+                <input id="mapDateTo" type="date" />
+              </label>
+              <div class="map-filter-actions">
+                <button id="mapFitFiltered" class="secondary" type="button">Treffer fokussieren</button>
+                <button id="mapFilterReset" class="ghost" type="button">Filter zurücksetzen</button>
+              </div>
+            </div>
+            <div id="mapFilterState" class="map-filter-state">Alle georeferenzierten Medien</div>
+          </section>
+
+          <section class="panel map-panel">
+            <div class="map-browser-map map-browser-map-full">
+              <div id="mapEmptyState" class="map-empty-state">Noch keine Medien mit GPS-Koordinaten im Katalog.</div>
+              <div id="mediaMap" class="media-map" aria-label="Karte der Aufnahmeorte"></div>
+            </div>
+          </section>
+
+          <section class="panel map-gallery-panel">
+            <div class="map-gallery-toolbar">
+              <div>
+                <strong id="mapVisibleCountText">Medien im Kartenausschnitt</strong>
+                <small>Die Galerie aktualisiert sich beim Verschieben und Zoomen der Karte.</small>
+              </div>
+              <label>
+                <span>Sortierung</span>
+                <select id="mapMediaSort">
+                  <option value="newest">Neueste zuerst</option>
+                  <option value="oldest">Älteste zuerst</option>
+                  <option value="name">Dateiname</option>
+                </select>
+              </label>
+            </div>
+            <div id="mapMediaGallery" class="map-media-gallery"></div>
           </section>
         </section>
       </main>
