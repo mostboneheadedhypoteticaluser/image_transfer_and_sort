@@ -1724,6 +1724,38 @@ function getStats(sourceId: number) {
   };
 }
 
+function getRemoteSummary() {
+  const media = db.prepare(`
+    SELECT
+      COUNT(*) AS total,
+      COALESCE(SUM(CASE WHEN availability='AVAILABLE' THEN 1 ELSE 0 END), 0) AS available,
+      COALESCE(SUM(CASE WHEN availability='MISSING' THEN 1 ELSE 0 END), 0) AS missing
+    FROM media_items
+  `).get();
+
+  const identities = db.prepare(`
+    SELECT
+      (SELECT COUNT(*) FROM persons) AS person_count,
+      (SELECT COUNT(*) FROM pets) AS pet_count
+  `).get();
+
+  const lastScan = db.prepare(`
+    SELECT MAX(finished_at) AS finished_at
+    FROM scans
+    WHERE finished_at IS NOT NULL
+  `).get();
+
+  return {
+    total: Number(media?.total ?? 0),
+    available: Number(media?.available ?? 0),
+    missing: Number(media?.missing ?? 0),
+    persons: Number(identities?.person_count ?? 0),
+    pets: Number(identities?.pet_count ?? 0),
+    lastScan: lastScan?.finished_at ? String(lastScan.finished_at) : null
+  };
+}
+
+
 function normalizeSearchFilter(raw: SearchFilter | undefined): SearchFilter | undefined {
   if (!raw || typeof raw !== "object") return undefined;
 
@@ -13233,6 +13265,8 @@ async function dispatch(method: CatalogMethod, payload: Record<string, unknown> 
       return disableSource(asNumber(payload.sourceId, "sourceId"));
     case "getStats":
       return getStats(asNumber(payload.sourceId, "sourceId"));
+    case "getRemoteSummary":
+      return getRemoteSummary();
     case "listMedia":
       return listMedia(
         asNumber(payload.sourceId, "sourceId"),
