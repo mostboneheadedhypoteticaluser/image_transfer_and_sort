@@ -52,6 +52,17 @@ export const REMOTE_START_PAGE = String.raw`<!doctype html>
       background:var(--panel); color:#fff; padding:11px 12px; outline:none;
     }
     input:focus,select:focus { border-color:#697586; }
+    .autocomplete-menu {
+      position:fixed; z-index:120; overflow:auto; max-height:min(280px,42dvh);
+      border:1px solid #46515f; border-radius:11px; background:#171c22;
+      box-shadow:0 16px 42px rgba(0,0,0,.48); padding:5px;
+    }
+    .autocomplete-option {
+      width:100%; border:0; border-radius:8px; background:transparent; color:#fff;
+      padding:10px 11px; text-align:left; font-weight:650;
+    }
+    .autocomplete-option:hover,.autocomplete-option:focus { background:#2a323d; outline:none; }
+    .autocomplete-empty { padding:10px 11px; color:var(--muted); font-size:11px; }
     .btn {
       border:1px solid var(--line); border-radius:11px; padding:10px 13px;
       background:var(--panel2); color:#fff; font-weight:700;
@@ -454,6 +465,105 @@ export const REMOTE_START_PAGE = String.raw`<!doctype html>
     el("personNames").innerHTML=people.map(function(p){return '<option value="'+escapeHtml(p.name)+'"></option>';}).join("");
     el("petNames").innerHTML=pets.map(function(p){return '<option value="'+escapeHtml(p.name)+'"></option>';}).join("");
   }
+  var autocompleteMenu=null;
+  var autocompleteInput=null;
+  function autocompleteNames(kind){
+    var options=state.identityOptions||{};
+    var rows=kind==="person"?(options.people||[]):(options.pets||[]);
+    var seen={};
+    return rows.map(function(row){return String(row&&row.name||"").trim();})
+      .filter(function(name){
+        var key=name.toLocaleLowerCase("de-DE");
+        if(!name||seen[key]) return false;
+        seen[key]=true;
+        return true;
+      })
+      .sort(function(a,b){return a.localeCompare(b,"de",{sensitivity:"base"});});
+  }
+  function closeAutocomplete(){
+    if(autocompleteMenu){autocompleteMenu.remove();autocompleteMenu=null;}
+    autocompleteInput=null;
+  }
+  function positionAutocomplete(input,menu){
+    var rect=input.getBoundingClientRect();
+    menu.style.left=Math.max(8,rect.left)+"px";
+    menu.style.width=Math.max(180,Math.min(rect.width,window.innerWidth-16))+"px";
+    menu.style.top=(rect.bottom+4)+"px";
+    requestAnimationFrame(function(){
+      if(!menu.isConnected) return;
+      var height=Math.min(menu.offsetHeight,280);
+      if(rect.bottom+4+height>window.innerHeight-8 && rect.top>height+12){
+        menu.style.top=Math.max(8,rect.top-height-4)+"px";
+      }
+    });
+  }
+  function renderAutocomplete(input){
+    if(!input||!input.isConnected) return closeAutocomplete();
+    var kind=input.getAttribute("data-autocomplete-kind");
+    if(kind!=="person"&&kind!=="pet") return closeAutocomplete();
+    var query=String(input.value||"").trim().toLocaleLowerCase("de-DE");
+    var names=autocompleteNames(kind);
+    var matching=names.filter(function(name){
+      return !query||name.toLocaleLowerCase("de-DE").indexOf(query)>=0;
+    }).sort(function(a,b){
+      if(!query) return a.localeCompare(b,"de",{sensitivity:"base"});
+      var al=a.toLocaleLowerCase("de-DE"), bl=b.toLocaleLowerCase("de-DE");
+      var as=al.indexOf(query)===0?0:1, bs=bl.indexOf(query)===0?0:1;
+      return as-bs||a.localeCompare(b,"de",{sensitivity:"base"});
+    }).slice(0,16);
+    var parent=input.closest("dialog")||document.body;
+    if(!autocompleteMenu||autocompleteMenu.parentNode!==parent){
+      closeAutocomplete();
+      autocompleteMenu=document.createElement("div");
+      autocompleteMenu.className="autocomplete-menu";
+      parent.appendChild(autocompleteMenu);
+    }
+    autocompleteInput=input;
+    autocompleteMenu.innerHTML=matching.length
+      ? matching.map(function(name){return '<button type="button" class="autocomplete-option" data-autocomplete-value="'+escapeHtml(name)+'">'+escapeHtml(name)+'</button>';}).join("")
+      : '<div class="autocomplete-empty">Keine passenden Namen.</div>';
+    autocompleteMenu.querySelectorAll("[data-autocomplete-value]").forEach(function(button){
+      button.addEventListener("pointerdown",function(event){event.preventDefault();});
+      button.addEventListener("click",function(){
+        input.value=button.getAttribute("data-autocomplete-value")||"";
+        input.dispatchEvent(new Event("input",{bubbles:true}));
+        closeAutocomplete();
+        input.focus();
+      });
+    });
+    positionAutocomplete(input,autocompleteMenu);
+  }
+  async function openAutocomplete(input){
+    autocompleteInput=input;
+    if(!state.identityOptions){
+      var parent=input.closest("dialog")||document.body;
+      closeAutocomplete();
+      autocompleteInput=input;
+      autocompleteMenu=document.createElement("div");
+      autocompleteMenu.className="autocomplete-menu";
+      autocompleteMenu.innerHTML='<div class="autocomplete-empty">Vorschläge werden geladen …</div>';
+      parent.appendChild(autocompleteMenu);
+      positionAutocomplete(input,autocompleteMenu);
+      try{await ensureIdentityLists(false);}catch(e){closeAutocomplete();return;}
+      if(document.activeElement!==input) return closeAutocomplete();
+    }
+    renderAutocomplete(input);
+  }
+  document.addEventListener("focusin",function(event){
+    var input=event.target&&event.target.closest?event.target.closest("[data-autocomplete-kind]"):null;
+    if(input) openAutocomplete(input);
+  });
+  document.addEventListener("input",function(event){
+    var input=event.target&&event.target.closest?event.target.closest("[data-autocomplete-kind]"):null;
+    if(input) renderAutocomplete(input);
+  });
+  document.addEventListener("pointerdown",function(event){
+    if(!autocompleteMenu||!autocompleteInput) return;
+    if(event.target===autocompleteInput||autocompleteMenu.contains(event.target)) return;
+    closeAutocomplete();
+  });
+  window.addEventListener("resize",function(){if(autocompleteInput&&autocompleteMenu) positionAutocomplete(autocompleteInput,autocompleteMenu);});
+  window.addEventListener("scroll",function(){if(autocompleteInput&&autocompleteMenu) positionAutocomplete(autocompleteInput,autocompleteMenu);},true);
   async function ensureIdentityLists(force){
     if(force||!state.identityOptions) state.identityOptions=await api("/api/identity-options");
     nameLists();
@@ -462,11 +572,11 @@ export const REMOTE_START_PAGE = String.raw`<!doctype html>
     var rows=[];
     (details.faces||[]).forEach(function(f){
       var suggestion=f.personName || (f.suggestedPersons&&f.suggestedPersons[0]&&f.suggestedPersons[0].personName) || "";
-      rows.push('<div class="identity-row"><img src="/api/face/'+f.id+'" alt=""><div><strong>Person</strong><div style="color:var(--muted);font-size:10px;margin-top:2px">'+(f.personName?escapeHtml(f.personName):"noch nicht bestätigt")+'</div><div class="identity-control"><input data-identity-name="person-'+f.id+'" list="personNames" value="'+escapeHtml(suggestion)+'" placeholder="Name"><button class="btn good" data-assign-kind="person" data-detection-id="'+f.id+'">Speichern</button></div></div></div>');
+      rows.push('<div class="identity-row"><img src="/api/face/'+f.id+'" alt=""><div><strong>Person</strong><div style="color:var(--muted);font-size:10px;margin-top:2px">'+(f.personName?escapeHtml(f.personName):"noch nicht bestätigt")+'</div><div class="identity-control"><input data-identity-name="person-'+f.id+'" data-autocomplete-kind="person" autocomplete="off" value="'+escapeHtml(suggestion)+'" placeholder="Name"><button class="btn good" data-assign-kind="person" data-detection-id="'+f.id+'">Speichern</button></div></div></div>');
     });
     (details.pets||[]).forEach(function(p){
       var suggestion=p.petName || (p.suggestedPets&&p.suggestedPets[0]&&p.suggestedPets[0].petName) || "";
-      rows.push('<div class="identity-row"><img src="/api/pet/'+p.id+'" alt=""><div><strong>'+(p.petClass==="cat"?"Katze":"Hund")+'</strong><div style="color:var(--muted);font-size:10px;margin-top:2px">'+(p.petName?escapeHtml(p.petName):"noch nicht bestätigt")+'</div><div class="identity-control"><input data-identity-name="pet-'+p.id+'" list="petNames" value="'+escapeHtml(suggestion)+'" placeholder="Name"><button class="btn good" data-assign-kind="pet" data-detection-id="'+p.id+'">Speichern</button></div></div></div>');
+      rows.push('<div class="identity-row"><img src="/api/pet/'+p.id+'" alt=""><div><strong>'+(p.petClass==="cat"?"Katze":"Hund")+'</strong><div style="color:var(--muted);font-size:10px;margin-top:2px">'+(p.petName?escapeHtml(p.petName):"noch nicht bestätigt")+'</div><div class="identity-control"><input data-identity-name="pet-'+p.id+'" data-autocomplete-kind="pet" autocomplete="off" value="'+escapeHtml(suggestion)+'" placeholder="Name"><button class="btn good" data-assign-kind="pet" data-detection-id="'+p.id+'">Speichern</button></div></div></div>');
     });
     return rows.join("");
   }
@@ -479,8 +589,8 @@ export const REMOTE_START_PAGE = String.raw`<!doctype html>
       if(frame.frameIndex!=null) query+="&i="+frame.frameIndex;
       if(frame.frameHash) query+="&h="+encodeURIComponent(frame.frameHash);
       var controls=frame.detections.map(function(d){
-        var list=d.kind==="person"?"personNames":"petNames";
-        return '<div class="identity-control"><input list="'+list+'" data-video-name="'+details.mediaId+'-'+frame.timestampMs+'-'+d.kind+'-'+d.detectionIndex+'" value="'+escapeHtml(d.name||"")+'" placeholder="'+(d.kind==="person"?"Person":"Tier")+'"><button class="btn good" data-video-assign="1" data-media-id="'+details.mediaId+'" data-time="'+frame.timestampMs+'" data-kind="'+d.kind+'" data-index="'+d.detectionIndex+'" data-pet-class="'+escapeHtml(d.petClass||"")+'">Speichern</button></div>';
+        var autocompleteKind=d.kind==="person"?"person":"pet";
+        return '<div class="identity-control"><input data-autocomplete-kind="'+autocompleteKind+'" autocomplete="off" data-video-name="'+details.mediaId+'-'+frame.timestampMs+'-'+d.kind+'-'+d.detectionIndex+'" value="'+escapeHtml(d.name||"")+'" placeholder="'+(d.kind==="person"?"Person":"Tier")+'"><button class="btn good" data-video-assign="1" data-media-id="'+details.mediaId+'" data-time="'+frame.timestampMs+'" data-kind="'+d.kind+'" data-index="'+d.detectionIndex+'" data-pet-class="'+escapeHtml(d.petClass||"")+'">Speichern</button></div>';
       }).join("");
       return '<div class="scene"><img loading="lazy" src="/api/video/'+details.mediaId+'/frame?'+query+'" alt=""><div class="scene-time">'+Math.round(frame.timestampMs/100)/10+' s</div>'+controls+'</div>';
     }).join("");
@@ -522,7 +632,7 @@ export const REMOTE_START_PAGE = String.raw`<!doctype html>
       all.disabled=true; try{var result=await apiPost("/api/media/"+all.getAttribute("data-media-id")+"/confirm-all",{});toast(fmt.format(result.confirmed)+" Zuordnungen bestätigt.");}catch(e){toast(e.message);}finally{all.disabled=false;}
     });
   }
-  el("detailClose").addEventListener("click",function(){el("detailDialog").close();});
+  el("detailClose").addEventListener("click",function(){closeAutocomplete();el("detailDialog").close();});
 
   function candidatePage(){
     return Math.max(0,Number(state.confirmPage[state.confirmMode])||0);
@@ -572,7 +682,7 @@ export const REMOTE_START_PAGE = String.raw`<!doctype html>
       var imageUrl=isPeople?"/api/face/"+imageId:"/api/pet/"+imageId;
       var suggested=isPeople?(c.suggestedPersons&&c.suggestedPersons[0]&&c.suggestedPersons[0].personName):(c.suggestedPetName||(c.suggestedPets&&c.suggestedPets[0]&&c.suggestedPets[0].petName));
       var count=isPeople?c.faceCount:c.detectionCount;
-      return '<div class="candidate"><img loading="lazy" src="'+imageUrl+'" alt=""><div class="candidate-info"><h3>'+(suggested?escapeHtml(suggested):"Unbekannt")+'</h3><p>'+fmt.format(count||0)+' '+(isPeople?"Gesichter":"Erkennungen")+'</p><div class="candidate-actions"><input data-candidate-name="'+c.id+'" list="'+(isPeople?"personNames":"petNames")+'" value="'+escapeHtml(suggested||"")+'" placeholder="Name"><button class="btn good" data-confirm-candidate="'+c.id+'">✓</button><button class="btn bad" data-ignore-candidate="'+c.id+'">×</button></div><button class="btn candidate-review-button" data-review-candidate="'+c.id+'" type="button">Alle '+fmt.format(count||0)+' prüfen</button></div></div>';
+      return '<div class="candidate"><img loading="lazy" src="'+imageUrl+'" alt=""><div class="candidate-info"><h3>'+(suggested?escapeHtml(suggested):"Unbekannt")+'</h3><p>'+fmt.format(count||0)+' '+(isPeople?"Gesichter":"Erkennungen")+'</p><div class="candidate-actions"><input data-candidate-name="'+c.id+'" data-autocomplete-kind="'+(isPeople?"person":"pet")+'" autocomplete="off" value="'+escapeHtml(suggested||"")+'" placeholder="Name"><button class="btn good" data-confirm-candidate="'+c.id+'">✓</button><button class="btn bad" data-ignore-candidate="'+c.id+'">×</button></div><button class="btn candidate-review-button" data-review-candidate="'+c.id+'" type="button">Alle '+fmt.format(count||0)+' prüfen</button></div></div>';
     }).join("");
     el("candidateList").querySelectorAll("[data-confirm-candidate]").forEach(function(b){b.addEventListener("click",function(){confirmCandidate(Number(b.getAttribute("data-confirm-candidate")),b);});});
     el("candidateList").querySelectorAll("[data-ignore-candidate]").forEach(function(b){b.addEventListener("click",function(){ignoreCandidate(Number(b.getAttribute("data-ignore-candidate")),b);});});
@@ -652,7 +762,8 @@ export const REMOTE_START_PAGE = String.raw`<!doctype html>
     el("groupReviewTitle").textContent=(mode==="people"?"Personengruppe":"Tiergruppe")+" · wird geladen …";
     el("groupReviewGrid").innerHTML='<div class="empty" style="grid-column:1/-1">Fundstellen werden geladen …</div>';
     el("groupReviewMore").hidden=true;
-    el("groupReviewName").setAttribute("list",mode==="people"?"personNames":"petNames");
+    el("groupReviewName").setAttribute("data-autocomplete-kind",mode==="people"?"person":"pet");
+    el("groupReviewName").removeAttribute("list");
     el("groupReviewName").value=candidateDefaultName(candidate,mode);
     if(!el("groupReviewDialog").open) el("groupReviewDialog").showModal();
 
@@ -748,6 +859,7 @@ export const REMOTE_START_PAGE = String.raw`<!doctype html>
   },{passive:true});
   el("groupReviewClose").addEventListener("click",function(){el("groupReviewDialog").close();});
   el("groupReviewDialog").addEventListener("close",function(){
+    closeAutocomplete();
     if(el("groupImageDialog").open) el("groupImageDialog").close();
     state.groupReview=null;
     if(groupReviewObserver){groupReviewObserver.disconnect();groupReviewObserver=null;}
