@@ -586,6 +586,7 @@ function startRemoteWebServer(): Promise<void> {
             limit,
             offset,
             false,
+            true,
             true
           );
           writeRemoteJson(response, 200, overview);
@@ -609,9 +610,30 @@ function startRemoteWebServer(): Promise<void> {
             limit,
             offset,
             false,
+            true,
             true
           );
           writeRemoteJson(response, 200, overview);
+          return;
+        }
+
+        const peopleItemsMatch = /^\/api\/people\/(\d+)\/items$/.exec(pathname);
+        if (method === "GET" && peopleItemsMatch) {
+          if (!personService) throw new Error("Personenerkennung ist noch nicht bereit.");
+          const limit = Math.max(
+            1,
+            Math.min(5000, Math.trunc(Number(requestUrl.searchParams.get("limit")) || 5000))
+          );
+          const offset = Math.max(
+            0,
+            Math.trunc(Number(requestUrl.searchParams.get("offset")) || 0)
+          );
+          const items = await personService.listCandidateItems(
+            Number(peopleItemsMatch[1]),
+            limit,
+            offset
+          );
+          writeRemoteJson(response, 200, { items });
           return;
         }
 
@@ -672,6 +694,26 @@ function startRemoteWebServer(): Promise<void> {
           );
           schedulePersonRefresh();
           writeRemoteJson(response, 200, result);
+          return;
+        }
+
+        const petItemsMatch = /^\/api\/pets\/(\d+)\/items$/.exec(pathname);
+        if (method === "GET" && petItemsMatch) {
+          if (!petService) throw new Error("Tiererkennung ist noch nicht bereit.");
+          const limit = Math.max(
+            1,
+            Math.min(5000, Math.trunc(Number(requestUrl.searchParams.get("limit")) || 5000))
+          );
+          const offset = Math.max(
+            0,
+            Math.trunc(Number(requestUrl.searchParams.get("offset")) || 0)
+          );
+          const items = await petService.listCandidateItems(
+            Number(petItemsMatch[1]),
+            limit,
+            offset
+          );
+          writeRemoteJson(response, 200, { items });
           return;
         }
 
@@ -2472,7 +2514,8 @@ function registerIpc(): void {
       _sourceId: number,
       forceRefresh = false,
       candidateLimit = 10,
-      candidateOffset = 0
+      candidateOffset = 0,
+      summaryOnly = true
     ): Promise<PersonOverview> => {
       if (forceRefresh) schedulePersonRefresh(true, 0);
       return personService!.getCombinedOverview(
@@ -2480,9 +2523,20 @@ function registerIpc(): void {
         candidateLimit,
         candidateOffset,
         true,
-        true
+        true,
+        summaryOnly
       );
     }
+  );
+
+  ipcMain.handle(
+    "people:getCandidateItems",
+    (
+      _event,
+      candidateId: number,
+      limit = 5000,
+      offset = 0
+    ) => personService!.listCandidateItems(candidateId, limit, offset)
   );
 
   ipcMain.handle(
@@ -2601,7 +2655,8 @@ function registerIpc(): void {
       _sourceId: number,
       forceRefresh = false,
       candidateLimit = 10,
-      candidateOffset = 0
+      candidateOffset = 0,
+      summaryOnly = true
     ): Promise<PetOverview> => {
       if (forceRefresh) schedulePersonRefresh(true, 0);
       return petService!.getCombinedOverview(
@@ -2609,9 +2664,20 @@ function registerIpc(): void {
         candidateLimit,
         candidateOffset,
         true,
-        true
+        true,
+        summaryOnly
       );
     }
+  );
+
+  ipcMain.handle(
+    "pets:getCandidateItems",
+    (
+      _event,
+      candidateId: number,
+      limit = 5000,
+      offset = 0
+    ) => petService!.listCandidateItems(candidateId, limit, offset)
   );
 
   ipcMain.handle(
