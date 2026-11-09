@@ -311,6 +311,13 @@ function startRemoteWebServer(): Promise<void> {
             catalogReady: Boolean(catalog),
             background: backgroundPauseState(),
             analysis: analysis?.getStatus() ?? null,
+            identityGrouping: {
+              running: personRefreshRunning,
+              queued:
+                Boolean(personRefreshTimer) ||
+                personRefreshRescheduleRequested ||
+                personRefreshForceRequested
+            },
             pipeline: pipelineStatus
           };
 
