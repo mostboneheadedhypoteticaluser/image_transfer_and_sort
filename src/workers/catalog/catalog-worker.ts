@@ -167,6 +167,64 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_analysis_module_status_priority
     ON analysis_jobs(module, status, priority, media_id);
 
+  CREATE TABLE IF NOT EXISTS analysis_job_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    analysis_job_id INTEGER NOT NULL,
+    media_id INTEGER NOT NULL,
+    source_id INTEGER,
+    module TEXT NOT NULL,
+    status TEXT NOT NULL,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    input_sha256 TEXT,
+    started_at TEXT,
+    finished_at TEXT NOT NULL,
+    duration_ms INTEGER,
+    recorded_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(analysis_job_id, finished_at, status)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_analysis_history_finished
+    ON analysis_job_history(finished_at);
+  CREATE INDEX IF NOT EXISTS idx_analysis_history_module_finished
+    ON analysis_job_history(module, finished_at);
+
+  CREATE TRIGGER IF NOT EXISTS trg_analysis_job_terminal_history
+  AFTER UPDATE OF status ON analysis_jobs
+  WHEN NEW.status IN ('DONE','FAILED','UNAVAILABLE')
+    AND OLD.status<>NEW.status
+    AND NEW.finished_at IS NOT NULL
+  BEGIN
+    INSERT OR IGNORE INTO analysis_job_history(
+      analysis_job_id,
+      media_id,
+      source_id,
+      module,
+      status,
+      attempts,
+      input_sha256,
+      started_at,
+      finished_at,
+      duration_ms
+    )
+    VALUES(
+      NEW.id,
+      NEW.media_id,
+      (SELECT source_id FROM media_items WHERE id=NEW.media_id),
+      NEW.module,
+      NEW.status,
+      NEW.attempts,
+      NEW.input_sha256,
+      NEW.started_at,
+      NEW.finished_at,
+      CASE
+        WHEN NEW.started_at IS NULL THEN NULL
+        ELSE CAST(ROUND(
+          (julianday(NEW.finished_at)-julianday(NEW.started_at))*86400000
+        ) AS INTEGER)
+      END
+    );
+  END;
+
   CREATE TABLE IF NOT EXISTS catalog_migrations (
     migration_key TEXT PRIMARY KEY,
     applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -799,6 +857,41 @@ function normalizeHistoricalUnavailableJobs(): void {
 }
 
 normalizeHistoricalUnavailableJobs();
+
+db.prepare(`
+  INSERT OR IGNORE INTO analysis_job_history(
+    analysis_job_id,
+    media_id,
+    source_id,
+    module,
+    status,
+    attempts,
+    input_sha256,
+    started_at,
+    finished_at,
+    duration_ms
+  )
+  SELECT
+    j.id,
+    j.media_id,
+    m.source_id,
+    j.module,
+    j.status,
+    j.attempts,
+    j.input_sha256,
+    j.started_at,
+    j.finished_at,
+    CASE
+      WHEN j.started_at IS NULL THEN NULL
+      ELSE CAST(ROUND(
+        (julianday(j.finished_at)-julianday(j.started_at))*86400000
+      ) AS INTEGER)
+    END
+  FROM analysis_jobs j
+  LEFT JOIN media_items m ON m.id=j.media_id
+  WHERE j.status IN ('DONE','FAILED','UNAVAILABLE')
+    AND j.finished_at IS NOT NULL
+`).run();
 
 function runOneTimeCatalogMigration(
   migrationKey: string,
@@ -3554,6 +3647,39 @@ function getPetDetectionQueueStats(sourceId?: number) {
     done: Number(row?.done ?? 0),
     failed: Number(row?.failed ?? 0),
     unavailable: Number(row?.unavailable ?? 0)
+  };
+}
+
+
+function getAnalysisHistory(days = 30) {
+  const normalizedDays = Math.max(1, Math.min(90, Math.trunc(Number(days) || 30)));
+  const modifier = "-" + Math.max(0, normalizedDays - 1) + " days";
+
+  const rows = db.prepare(`
+    SELECT
+      date(finished_at, 'localtime') AS day,
+      module,
+      status,
+      COUNT(*) AS count,
+      CAST(ROUND(AVG(duration_ms)) AS INTEGER) AS avg_duration_ms
+    FROM analysis_job_history
+    WHERE date(finished_at, 'localtime') >= date('now', 'localtime', ?)
+    GROUP BY date(finished_at, 'localtime'), module, status
+    ORDER BY day DESC, module ASC, status ASC
+  `).all(modifier);
+
+  return {
+    days: normalizedDays,
+    rows: rows.map((row: any) => ({
+      day: String(row.day ?? ""),
+      module: String(row.module ?? ""),
+      status: String(row.status ?? ""),
+      count: Number(row.count ?? 0),
+      avgDurationMs:
+        row.avg_duration_ms === null || row.avg_duration_ms === undefined
+          ? null
+          : Number(row.avg_duration_ms)
+    }))
   };
 }
 
@@ -13202,6 +13328,10 @@ async function dispatch(method: CatalogMethod, payload: Record<string, unknown> 
       );
     case "getPipelineQueueStats":
       return getPipelineQueueStats();
+    case "getAnalysisHistory":
+      return getAnalysisHistory(
+        payload.days === undefined ? 30 : asNumber(payload.days, "days")
+      );
     case "getPetDetectionQueueStats":
       return getPetDetectionQueueStats(
         payload.sourceId === undefined ? undefined : asNumber(payload.sourceId, "sourceId")
