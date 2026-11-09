@@ -5593,25 +5593,37 @@ function renderGroupedPersonSuggestionBucket(
     const faces = document.createElement("div");
     faces.className = "person-suggestion-face-strip";
 
-    for (const face of candidate.faces) {
+    const faceById = new Map(
+      candidate.faces.map((face) => [face.faceDetectionId, face] as const)
+    );
+    const memberFaceIds = String(candidate.memberSignature || "")
+      .split(",")
+      .map((value) => Number(value))
+      .filter((value) => Number.isSafeInteger(value) && value > 0);
+
+    for (const faceDetectionId of memberFaceIds) {
+      const face = faceById.get(faceDetectionId);
       const image = document.createElement("img");
-      image.src = faceCropUrl(face.faceDetectionId);
+      image.src = faceCropUrl(faceDetectionId);
       image.alt = "";
       image.loading = "lazy";
-      image.title =
-        face.relativePath +
-        "\nÄhnlichkeit zur Kandidatengruppe: " +
-        face.similarity.toFixed(3);
-      makePreviewable(image, face.mediaId, face.relativePath);
+      image.title = face
+        ? face.relativePath +
+          "\nÄhnlichkeit zur Kandidatengruppe: " +
+          face.similarity.toFixed(3)
+        : "Gesicht #" + faceDetectionId.toLocaleString("de-DE");
+      if (face) {
+        makePreviewable(image, face.mediaId, face.relativePath);
+      }
       faces.appendChild(image);
     }
 
-    if (candidate.faceCount > candidate.faces.length) {
+    if (candidate.faceCount > memberFaceIds.length) {
       const more = document.createElement("span");
       more.className = "person-suggestion-more";
       more.textContent =
         "+" +
-        (candidate.faceCount - candidate.faces.length).toLocaleString("de-DE");
+        (candidate.faceCount - memberFaceIds.length).toLocaleString("de-DE");
       faces.appendChild(more);
     }
 
