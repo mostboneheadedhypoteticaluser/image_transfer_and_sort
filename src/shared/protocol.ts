@@ -1028,6 +1028,7 @@ export type CatalogMethod =
   | "enqueueAnalysisJobs"
   | "getAnalysisQueueStats"
   | "getPipelineQueueStats"
+  | "getAnalysisHistory"
   | "getPetDetectionQueueStats"
   | "getIdentityEmbeddingCounts"
   | "listAnalysisErrors"
