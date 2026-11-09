@@ -110,11 +110,18 @@ export const REMOTE_START_PAGE = String.raw`<!doctype html>
     .group-review-tools { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:8px; margin-bottom:10px; }
     .group-review-tools input { padding:10px 11px; }
     .group-review-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:7px; }
+    .group-review-tile { position:relative; aspect-ratio:1; min-width:0; }
     .group-review-item {
-      position:relative; aspect-ratio:1; padding:0; overflow:hidden;
+      position:relative; width:100%; height:100%; padding:0; overflow:hidden;
       border:2px solid rgba(94,221,139,.62); border-radius:10px; background:#07090b;
     }
     .group-review-item img { width:100%; height:100%; object-fit:cover; display:block; }
+    .group-review-preview {
+      position:absolute; top:5px; right:5px; z-index:3; width:32px; height:32px; padding:0;
+      border:1px solid rgba(255,255,255,.28); border-radius:999px;
+      background:rgba(5,7,9,.78); color:#fff; font-size:18px; line-height:30px;
+      display:grid; place-items:center; backdrop-filter:blur(8px);
+    }
     .group-review-item.excluded { border-color:rgba(255,123,123,.8); opacity:.55; }
     .group-review-item.excluded::after {
       content:"×"; position:absolute; inset:0; display:grid; place-items:center;
@@ -129,6 +136,24 @@ export const REMOTE_START_PAGE = String.raw`<!doctype html>
     }
     .group-review-footer small { color:var(--muted); display:block; margin-top:3px; }
     .group-review-footer .btn { white-space:nowrap; }
+    .group-image-dialog { width:min(980px,100%); }
+    .group-image-body { padding:12px 12px 92px; }
+    .group-image-stage {
+      min-height:50dvh; display:grid; place-items:center; overflow:hidden;
+      border:1px solid var(--line); border-radius:13px; background:#050607;
+    }
+    .group-image-stage img {
+      display:block; width:100%; height:auto; max-height:calc(100dvh - 190px);
+      object-fit:contain; touch-action:pan-y pinch-zoom;
+    }
+    .group-image-footer {
+      position:fixed; right:0; bottom:0; z-index:7; width:min(980px,100%);
+      border-top:1px solid var(--line); background:rgba(13,16,20,.97); backdrop-filter:blur(14px);
+      padding:9px 12px calc(9px + env(safe-area-inset-bottom));
+      display:grid; grid-template-columns:auto minmax(0,1fr) auto; gap:8px; align-items:center;
+    }
+    .group-image-info { text-align:center; min-width:0; color:var(--muted); font-size:11px; }
+    .group-image-info strong { display:block; color:#fff; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     .candidate-pager {
       display:grid; grid-template-columns:auto minmax(0,1fr) auto; gap:8px;
       align-items:center; margin:12px 0 2px;
@@ -280,6 +305,24 @@ export const REMOTE_START_PAGE = String.raw`<!doctype html>
     <button id="groupReviewConfirm" class="btn good" type="button">Auswahl bestätigen</button>
   </div>
 </dialog>
+
+<dialog id="groupImageDialog" class="group-image-dialog">
+  <div class="detail-head">
+    <strong id="groupImageTitle">Gesamtbild</strong>
+    <div>
+      <button id="groupImageSelection" class="btn good" type="button">Ausgewählt</button>
+      <button id="groupImageClose" class="btn" type="button">Schließen</button>
+    </div>
+  </div>
+  <div class="group-image-body">
+    <div class="group-image-stage"><img id="groupImagePreview" alt="Gesamtbild"></div>
+  </div>
+  <div class="group-image-footer">
+    <button id="groupImagePrev" class="btn" type="button">←</button>
+    <div id="groupImageInfo" class="group-image-info"></div>
+    <button id="groupImageNext" class="btn" type="button">→</button>
+  </div>
+</dialog>
 <div id="toast" class="toast"></div>
 <datalist id="personNames"></datalist>
 <datalist id="petNames"></datalist>
@@ -291,7 +334,7 @@ export const REMOTE_START_PAGE = String.raw`<!doctype html>
     sources: [], media: [], filteredMedia: [], people: null, pets: null,
     identityOptions: null, status: null, summary: null, history: null,
     confirmMode: "people", confirmPage: {people:0,pets:0}, confirmPageSize: 10,
-    groupReview: null, historyDays: 7, activeView: "media"
+    groupReview: null, groupImageIndex: 0, historyDays: 7, activeView: "media"
   };
   var fmt = new Intl.NumberFormat("de-DE");
   var moduleLabels = {
@@ -565,10 +608,11 @@ export const REMOTE_START_PAGE = String.raw`<!doctype html>
   function renderGroupReview(){
     var review=state.groupReview;
     if(!review) return;
-    var visible=review.ids.slice(0,review.visibleCount);
+    var visible=review.items.slice(0,review.visibleCount);
     var prefix=review.mode==="people"?"/api/face/":"/api/pet/";
-    el("groupReviewGrid").innerHTML=visible.map(function(id){
-      return '<button type="button" class="group-review-item'+(review.selected.has(id)?"":" excluded")+'" data-review-id="'+id+'"><img loading="lazy" src="'+prefix+id+'" alt=""></button>';
+    el("groupReviewGrid").innerHTML=visible.map(function(item){
+      var id=item.id;
+      return '<div class="group-review-tile"><button type="button" class="group-review-item'+(review.selected.has(id)?"":" excluded")+'" data-review-id="'+id+'"><img loading="lazy" src="'+prefix+id+'" alt=""></button><button type="button" class="group-review-preview" data-review-preview-id="'+id+'" aria-label="Gesamtbild anzeigen" title="Gesamtbild anzeigen">⛶</button></div>';
     }).join("");
     el("groupReviewGrid").querySelectorAll("[data-review-id]").forEach(function(button){
       button.addEventListener("click",function(){
@@ -576,6 +620,11 @@ export const REMOTE_START_PAGE = String.raw`<!doctype html>
         if(review.selected.has(id)) review.selected.delete(id); else review.selected.add(id);
         button.classList.toggle("excluded",!review.selected.has(id));
         updateGroupReviewCount();
+      });
+    });
+    el("groupReviewGrid").querySelectorAll("[data-review-preview-id]").forEach(function(button){
+      button.addEventListener("click",function(){
+        openGroupImage(Number(button.getAttribute("data-review-preview-id")));
       });
     });
     var more=el("groupReviewMore");
@@ -608,12 +657,20 @@ export const REMOTE_START_PAGE = String.raw`<!doctype html>
     if(!el("groupReviewDialog").open) el("groupReviewDialog").showModal();
 
     var result=await api("/api/"+mode+"/"+id+"/items?limit=5000&offset=0");
-    var items=result&&result.items?result.items:[];
-    var ids=items.map(function(item){
-      return Number(mode==="people"?item.faceDetectionId:item.petDetectionId);
-    }).filter(function(value,index,array){
-      return Number.isSafeInteger(value)&&value>0&&array.indexOf(value)===index;
+    var rawItems=result&&result.items?result.items:[];
+    var seen={};
+    var items=rawItems.map(function(item){
+      return {
+        id:Number(mode==="people"?item.faceDetectionId:item.petDetectionId),
+        mediaId:Number(item.mediaId),
+        relativePath:String(item.relativePath||"")
+      };
+    }).filter(function(item){
+      if(!Number.isSafeInteger(item.id)||item.id<=0||seen[item.id]) return false;
+      seen[item.id]=true;
+      return true;
     });
+    var ids=items.map(function(item){return item.id;});
     if(!ids.length){
       el("groupReviewDialog").close();
       toast("Für diese Gruppe wurden keine Fundstellen gefunden.");
@@ -622,6 +679,7 @@ export const REMOTE_START_PAGE = String.raw`<!doctype html>
     state.groupReview={
       mode:mode,
       candidateId:id,
+      items:items,
       ids:ids,
       selected:new Set(ids),
       visibleCount:Math.min(24,ids.length)
@@ -629,8 +687,68 @@ export const REMOTE_START_PAGE = String.raw`<!doctype html>
     el("groupReviewTitle").textContent=(mode==="people"?"Personengruppe":"Tiergruppe")+" · "+fmt.format(ids.length)+" Fundstellen";
     renderGroupReview();
   }
+  function currentGroupImageItem(){
+    var review=state.groupReview;
+    if(!review||!review.items||!review.items.length) return null;
+    var index=Math.max(0,Math.min(review.items.length-1,Number(state.groupImageIndex)||0));
+    state.groupImageIndex=index;
+    return review.items[index]||null;
+  }
+  function renderGroupImage(){
+    var review=state.groupReview, item=currentGroupImageItem();
+    if(!review||!item) return;
+    el("groupImagePreview").src=Number.isSafeInteger(item.mediaId)&&item.mediaId>0
+      ? "/api/media/"+item.mediaId+"/preview"
+      : (review.mode==="people"?"/api/face/":"/api/pet/")+item.id;
+    el("groupImageTitle").textContent="Gesamtbild";
+    el("groupImageInfo").innerHTML='<strong>'+escapeHtml(basename(item.relativePath)||"Bild")+'</strong>'+fmt.format(state.groupImageIndex+1)+' / '+fmt.format(review.items.length);
+    var selected=review.selected.has(item.id);
+    el("groupImageSelection").textContent=selected?"Aus Auswahl entfernen":"Zur Auswahl hinzufügen";
+    el("groupImageSelection").className="btn "+(selected?"bad":"good");
+    el("groupImagePrev").disabled=state.groupImageIndex<=0;
+    el("groupImageNext").disabled=state.groupImageIndex>=review.items.length-1;
+  }
+  function openGroupImage(id){
+    var review=state.groupReview;
+    if(!review||!review.items) return;
+    var index=review.items.findIndex(function(item){return item.id===id;});
+    if(index<0) return;
+    state.groupImageIndex=index;
+    renderGroupImage();
+    if(!el("groupImageDialog").open) el("groupImageDialog").showModal();
+  }
+  function changeGroupImage(delta){
+    var review=state.groupReview;
+    if(!review||!review.items||!review.items.length) return;
+    state.groupImageIndex=Math.max(0,Math.min(review.items.length-1,state.groupImageIndex+delta));
+    renderGroupImage();
+  }
+  el("groupImageClose").addEventListener("click",function(){el("groupImageDialog").close();});
+  el("groupImagePrev").addEventListener("click",function(){changeGroupImage(-1);});
+  el("groupImageNext").addEventListener("click",function(){changeGroupImage(1);});
+  el("groupImageSelection").addEventListener("click",function(){
+    var review=state.groupReview, item=currentGroupImageItem();
+    if(!review||!item) return;
+    if(review.selected.has(item.id)) review.selected.delete(item.id); else review.selected.add(item.id);
+    renderGroupReview();
+    renderGroupImage();
+  });
+  var groupImageTouchStart=null;
+  el("groupImageDialog").addEventListener("touchstart",function(event){
+    if(!event.touches||event.touches.length!==1) return;
+    groupImageTouchStart={x:event.touches[0].clientX,y:event.touches[0].clientY};
+  },{passive:true});
+  el("groupImageDialog").addEventListener("touchend",function(event){
+    if(!groupImageTouchStart||!event.changedTouches||event.changedTouches.length!==1) return;
+    var dx=event.changedTouches[0].clientX-groupImageTouchStart.x;
+    var dy=event.changedTouches[0].clientY-groupImageTouchStart.y;
+    groupImageTouchStart=null;
+    if(Math.abs(dx)<70||Math.abs(dx)<=Math.abs(dy)*1.25) return;
+    changeGroupImage(dx<0?1:-1);
+  },{passive:true});
   el("groupReviewClose").addEventListener("click",function(){el("groupReviewDialog").close();});
   el("groupReviewDialog").addEventListener("close",function(){
+    if(el("groupImageDialog").open) el("groupImageDialog").close();
     state.groupReview=null;
     if(groupReviewObserver){groupReviewObserver.disconnect();groupReviewObserver=null;}
   });
