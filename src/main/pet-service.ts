@@ -48,7 +48,8 @@ export class PetService {
     allowWhilePending = false,
     rebuildIfNeeded = true,
     candidateLimit = 500,
-    includeSupporting = true
+    includeSupporting = true,
+    readOnly = false
   ): Promise<PetOverview> {
     const queue = await this.catalog.request<AnalysisQueueStats>(
       "getAnalysisQueueStats",
@@ -61,6 +62,7 @@ export class PetService {
     const clusteringPending = queue.pending > 0 || queue.running > 0;
 
     if (
+      !readOnly &&
       (!clusteringPending || allowWhilePending) &&
       this.analysis.getStatus().state === "READY"
     ) {
@@ -174,7 +176,8 @@ export class PetService {
     forceRefresh = false,
     candidateLimit = 500,
     candidateOffset = 0,
-    includeSupporting = true
+    includeSupporting = true,
+    readOnly = false
   ): Promise<PetOverview> {
     const sources = await this.catalog.request<SourceRecord[]>("listSources");
     const enabledSources = sources.filter((source) => source.enabled);
@@ -197,7 +200,8 @@ export class PetService {
           false,
           forceRefresh,
           sourceWindow,
-          includeSupporting
+          includeSupporting,
+          readOnly
         )
       );
     }
