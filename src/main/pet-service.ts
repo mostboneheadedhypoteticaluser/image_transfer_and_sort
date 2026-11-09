@@ -46,7 +46,9 @@ export class PetService {
     sourceId: number,
     forceRefresh = false,
     allowWhilePending = false,
-    rebuildIfNeeded = true
+    rebuildIfNeeded = true,
+    candidateLimit = 500,
+    includeSupporting = true
   ): Promise<PetOverview> {
     const queue = await this.catalog.request<AnalysisQueueStats>(
       "getAnalysisQueueStats",
@@ -128,22 +130,30 @@ export class PetService {
       await this.catalog.request("autoAssignKnownPetCandidates", { sourceId });
     }
 
+    const normalizedCandidateLimit = Math.max(
+      1,
+      Math.min(2000, Math.trunc(candidateLimit || 500))
+    );
     const candidates = await this.catalog.request<PetCandidate[]>(
       "listPetCandidates",
       {
         sourceId,
-        limit: 500,
+        limit: normalizedCandidateLimit,
         ignoreDefiniteThreshold: CLUSTER_THRESHOLD,
         ignoreDoubtThreshold: VERIFICATION_THRESHOLD
       }
     );
     const [pets, stats, ungroupedPets] = await Promise.all([
-      this.catalog.request<PetRecord[]>("listPets", { sourceId }),
+      includeSupporting
+        ? this.catalog.request<PetRecord[]>("listPets", { sourceId })
+        : Promise.resolve([] as PetRecord[]),
       this.catalog.request<CatalogStats>("getStats", { sourceId }),
-      this.catalog.request<PetOverview["ungroupedPets"]>(
-        "listUngroupedPetDetections",
-        { sourceId, limit: 1000 }
-      )
+      includeSupporting
+        ? this.catalog.request<PetOverview["ungroupedPets"]>(
+            "listUngroupedPetDetections",
+            { sourceId, limit: 1000 }
+          )
+        : Promise.resolve([] as PetOverview["ungroupedPets"])
     ]);
 
     return {
@@ -160,16 +170,35 @@ export class PetService {
     };
   }
 
-  async getCombinedOverview(forceRefresh = false): Promise<PetOverview> {
+  async getCombinedOverview(
+    forceRefresh = false,
+    candidateLimit = 500,
+    candidateOffset = 0,
+    includeSupporting = true
+  ): Promise<PetOverview> {
     const sources = await this.catalog.request<SourceRecord[]>("listSources");
     const enabledSources = sources.filter((source) => source.enabled);
+
+    const normalizedLimit = Math.max(
+      1,
+      Math.min(100, Math.trunc(candidateLimit || 10))
+    );
+    const normalizedOffset = Math.max(0, Math.trunc(candidateOffset || 0));
+    const sourceWindow = Math.min(2000, normalizedOffset + normalizedLimit);
 
     const overviews: PetOverview[] = [];
     for (const source of enabledSources) {
       // Normales Öffnen ist read-only; nur explizites Aktualisieren oder ein
       // Algorithmuswechsel darf synchron neu gruppieren.
       overviews.push(
-        await this.getOverview(source.id, forceRefresh, false, forceRefresh)
+        await this.getOverview(
+          source.id,
+          forceRefresh,
+          false,
+          forceRefresh,
+          sourceWindow,
+          includeSupporting
+        )
       );
     }
 
@@ -226,7 +255,7 @@ export class PetService {
           b.averageSimilarity - a.averageSimilarity ||
           b.newestPetId - a.newestPetId
       )
-      .slice(0, 500);
+      .slice(normalizedOffset, normalizedOffset + normalizedLimit);
 
     return {
       candidates,
