@@ -632,6 +632,32 @@ function startRemoteWebServer(): Promise<void> {
           return;
         }
 
+        if (method === "POST" && pathname === "/api/people/assign-selection") {
+          if (!personService) throw new Error("Personenerkennung ist noch nicht bereit.");
+          const body = await readRemoteJsonBody(request) as Record<string, unknown>;
+          const faceDetectionIds = Array.isArray(body.detectionIds)
+            ? body.detectionIds
+                .map((value) => Number(value))
+                .filter((value) => Number.isSafeInteger(value) && value > 0)
+            : [];
+          const name = String(body.name ?? "").trim();
+          if (faceDetectionIds.length === 0 || !name) {
+            writeRemoteJson(response, 400, {
+              ok: false,
+              error: "Keine gültigen Gesichter oder kein Name ausgewählt."
+            });
+            return;
+          }
+          const result = await personService.assignCandidateSelection(
+            Number(body.candidateId),
+            faceDetectionIds,
+            name
+          );
+          schedulePersonRefresh();
+          writeRemoteJson(response, 200, result);
+          return;
+        }
+
         if (method === "POST" && pathname === "/api/people/ignore") {
           if (!personService) throw new Error("Personenerkennung ist noch nicht bereit.");
           const body = await readRemoteJsonBody(request) as Record<string, unknown>;
@@ -661,6 +687,32 @@ function startRemoteWebServer(): Promise<void> {
             typeof body.expectedMemberSignature === "string"
               ? body.expectedMemberSignature
               : undefined
+          );
+          schedulePersonRefresh();
+          writeRemoteJson(response, 200, result);
+          return;
+        }
+
+        if (method === "POST" && pathname === "/api/pets/assign-selection") {
+          if (!petService) throw new Error("Tiererkennung ist noch nicht bereit.");
+          const body = await readRemoteJsonBody(request) as Record<string, unknown>;
+          const petDetectionIds = Array.isArray(body.detectionIds)
+            ? body.detectionIds
+                .map((value) => Number(value))
+                .filter((value) => Number.isSafeInteger(value) && value > 0)
+            : [];
+          const name = String(body.name ?? "").trim();
+          if (petDetectionIds.length === 0 || !name) {
+            writeRemoteJson(response, 400, {
+              ok: false,
+              error: "Keine gültigen Fundstellen oder kein Name ausgewählt."
+            });
+            return;
+          }
+          const result = await petService.assignCandidateSelection(
+            Number(body.candidateId),
+            petDetectionIds,
+            name
           );
           schedulePersonRefresh();
           writeRemoteJson(response, 200, result);
