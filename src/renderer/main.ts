@@ -833,13 +833,17 @@ function renderAnalysisStatus(status: AnalysisWorkerStatus): void {
   latestAnalysisStatus = status;
   renderAnalysisBoostState(status);
   analysisWorkerState.className = "analysis-state";
+  const thumbnailPending = latestPipelineStatus?.thumbnails.pending ?? 0;
+  const thumbnailRunning = latestPipelineStatus?.thumbnails.running ?? 0;
+  const displayedQueuedJobs = status.queuedJobs + thumbnailPending;
+  const displayedActiveJobs = status.activeJobs + thumbnailRunning;
 
   switch (status.state) {
     case "READY":
-      if (status.activeJobs > 0) {
+      if (displayedActiveJobs > 0) {
         analysisWorkerState.classList.add("running");
         analysisWorkerState.textContent =
-          `Läuft · ${status.activeJobs} ${status.activeJobs === 1 ? "Job" : "Jobs"}`;
+          `Läuft · ${displayedActiveJobs} ${displayedActiveJobs === 1 ? "Job" : "Jobs"}`;
       } else {
         analysisWorkerState.classList.add("ready");
         analysisWorkerState.textContent = "Bereit";
@@ -866,8 +870,8 @@ function renderAnalysisStatus(status: AnalysisWorkerStatus): void {
   if (document.activeElement !== analysisParallelSelect) {
     analysisParallelSelect.value = String(status.maxConcurrentJobs);
   }
-  analysisQueue.textContent = status.queuedJobs.toLocaleString("de-DE");
-  analysisActive.textContent = status.activeJobs.toLocaleString("de-DE");
+  analysisQueue.textContent = displayedQueuedJobs.toLocaleString("de-DE");
+  analysisActive.textContent = displayedActiveJobs.toLocaleString("de-DE");
   analysisMessage.textContent = status.message;
 
   if (latestPipelineStatus) {
@@ -988,6 +992,9 @@ function renderLivePipelineActivity(status: PipelineStatus): void {
 
 function renderPipelineStatus(status: PipelineStatus): void {
   latestPipelineStatus = status;
+  if (latestAnalysisStatus) {
+    renderAnalysisStatus(latestAnalysisStatus);
+  }
   renderLivePipelineActivity(status);
   renderStage(technicalStageState, technicalStageCounts, status.technical);
   renderStage(thumbnailStageState, thumbnailStageCounts, status.thumbnails);
