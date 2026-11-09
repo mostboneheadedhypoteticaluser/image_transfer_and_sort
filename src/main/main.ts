@@ -551,10 +551,31 @@ function startRemoteWebServer(): Promise<void> {
           return;
         }
 
+        if (method === "GET" && pathname === "/api/identity-options") {
+          if (!catalog) throw new Error("Katalog ist noch nicht bereit.");
+          const facets = await catalog.request<SearchFacets>("getSearchFacets");
+          writeRemoteJson(response, 200, {
+            people: facets.persons,
+            pets: facets.pets
+          });
+          return;
+        }
+
         if (method === "GET" && pathname === "/api/people") {
           if (!personService) throw new Error("Personenerkennung ist noch nicht bereit.");
+          const limit = Math.max(
+            1,
+            Math.min(50, Math.trunc(Number(requestUrl.searchParams.get("limit")) || 10))
+          );
+          const offset = Math.max(
+            0,
+            Math.trunc(Number(requestUrl.searchParams.get("offset")) || 0)
+          );
           const overview = await personService.getCombinedOverview(
-            requestUrl.searchParams.get("refresh") === "1"
+            requestUrl.searchParams.get("refresh") === "1",
+            limit,
+            offset,
+            false
           );
           writeRemoteJson(response, 200, overview);
           return;
@@ -562,8 +583,19 @@ function startRemoteWebServer(): Promise<void> {
 
         if (method === "GET" && pathname === "/api/pets") {
           if (!petService) throw new Error("Tiererkennung ist noch nicht bereit.");
+          const limit = Math.max(
+            1,
+            Math.min(50, Math.trunc(Number(requestUrl.searchParams.get("limit")) || 10))
+          );
+          const offset = Math.max(
+            0,
+            Math.trunc(Number(requestUrl.searchParams.get("offset")) || 0)
+          );
           const overview = await petService.getCombinedOverview(
-            requestUrl.searchParams.get("refresh") === "1"
+            requestUrl.searchParams.get("refresh") === "1",
+            limit,
+            offset,
+            false
           );
           writeRemoteJson(response, 200, overview);
           return;
