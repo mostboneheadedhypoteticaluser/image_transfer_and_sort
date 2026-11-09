@@ -1145,6 +1145,32 @@ runOneTimeCatalogMigration(
 );
 
 runOneTimeCatalogMigration(
+  "2026-11-09-recheck-gps-after-hemisphere-fix-v1",
+  () => {
+    // Re-read only image metadata for files that already had GPS data.
+    // Downstream face/pet/semantic jobs stay untouched.
+    db.prepare(`
+      UPDATE analysis_jobs
+      SET
+        status='PENDING',
+        attempts=0,
+        result_json=NULL,
+        error_message=NULL,
+        started_at=NULL,
+        finished_at=NULL,
+        updated_at=CURRENT_TIMESTAMP
+      WHERE module='image-metadata-v1'
+        AND media_id IN (
+          SELECT media_id
+          FROM media_image_metadata
+          WHERE gps_latitude IS NOT NULL
+            AND gps_longitude IS NOT NULL
+        )
+    `).run();
+  }
+);
+
+runOneTimeCatalogMigration(
   "2026-11-04-video-frame-identities-v1",
   () => {
     db.prepare(`
