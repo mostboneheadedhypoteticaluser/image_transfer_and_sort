@@ -110,6 +110,7 @@ export class AnalysisService {
   private readonly pending = new Map<string, Pending>();
   private stdinWriteChain: Promise<void> = Promise.resolve();
   private stopping = false;
+  private devLogWriteCount = 0;
   private qwenServerPid: number | null = null;
   private workerCapabilities: Record<string, unknown> = {};
   private qwen3vl4bAvailable = false;
@@ -190,6 +191,11 @@ export class AnalysisService {
 
   private appendDevLogRecord(record: Record<string, unknown>): void {
     try {
+      // Nicht nur beim Start rotieren: bei 200 MB Dauerbetrieb sonst keine Grenze.
+      // Prüfungen gebündelt durchführen, damit nicht jeder Logeintrag ein stat()
+      // auslöst. Die zweite Datei .1 wird zyklisch ersetzt (ca. 16 MB gesamt).
+      this.devLogWriteCount += 1;
+      if (this.devLogWriteCount % 128 === 0) this.prepareDevLog();
       appendFileSync(this.devLogPath, JSON.stringify(record) + "\n", "utf8");
     } catch {
       // Diagnose darf die Anwendung nicht beeinflussen.
