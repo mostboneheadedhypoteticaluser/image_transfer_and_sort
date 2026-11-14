@@ -2439,6 +2439,12 @@ function registerIpc(): void {
   );
 
   ipcMain.handle(
+    "analysis:retrySample",
+    (_event, filter: AnalysisErrorPageFilter): Promise<RetryAnalysisResult> =>
+      catalog!.request<RetryAnalysisResult>("retryErrorSample", filter ?? {})
+  );
+
+  ipcMain.handle(
     "analysis:countErrors",
     (_event, sourceId?: number): Promise<number> =>
       catalog!.request<number>("countAnalysisErrors", { sourceId })
