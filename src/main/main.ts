@@ -17,6 +17,10 @@ import { REMOTE_START_PAGE } from "./remote-web-page";
 import { IMAGE_EXTENSIONS, VIDEO_EXTENSIONS, IGNORED_DIRECTORY_NAMES } from "../catalog/constants";
 import type {
   AnalysisErrorRecord,
+  AnalysisErrorOverview,
+  AnalysisErrorPage,
+  AnalysisErrorPageFilter,
+  DiagnosticLogEntry,
   AnalysisQueueStats,
   AssignPersonSelectionResult,
   AnalysisWorkerStatus,
@@ -2414,6 +2418,24 @@ function registerIpc(): void {
         sourceId,
         limit
       })
+  );
+
+  ipcMain.handle(
+    "analysis:errorOverview",
+    (_event, sourceId?: number): Promise<AnalysisErrorOverview> =>
+      catalog!.request<AnalysisErrorOverview>("getAnalysisErrorOverview", {sourceId})
+  );
+
+  ipcMain.handle(
+    "analysis:errorPage",
+    (_event, filter: AnalysisErrorPageFilter): Promise<AnalysisErrorPage> =>
+      catalog!.request<AnalysisErrorPage>("listAnalysisErrorPage", filter ?? {})
+  );
+
+  ipcMain.handle(
+    "analysis:recentLog",
+    (_event, limit = 250, onlyProblems = false): DiagnosticLogEntry[] =>
+      analysis?.readRecentDevLog(limit, onlyProblems) ?? []
   );
 
   ipcMain.handle(
