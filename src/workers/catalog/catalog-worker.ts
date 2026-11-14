@@ -167,6 +167,64 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_analysis_module_status_priority
     ON analysis_jobs(module, status, priority, media_id);
 
+  CREATE TABLE IF NOT EXISTS analysis_job_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    analysis_job_id INTEGER NOT NULL,
+    media_id INTEGER NOT NULL,
+    source_id INTEGER,
+    module TEXT NOT NULL,
+    status TEXT NOT NULL,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    input_sha256 TEXT,
+    started_at TEXT,
+    finished_at TEXT NOT NULL,
+    duration_ms INTEGER,
+    recorded_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(analysis_job_id, finished_at, status)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_analysis_history_finished
+    ON analysis_job_history(finished_at);
+  CREATE INDEX IF NOT EXISTS idx_analysis_history_module_finished
+    ON analysis_job_history(module, finished_at);
+
+  CREATE TRIGGER IF NOT EXISTS trg_analysis_job_terminal_history
+  AFTER UPDATE OF status ON analysis_jobs
+  WHEN NEW.status IN ('DONE','FAILED','UNAVAILABLE')
+    AND OLD.status<>NEW.status
+    AND NEW.finished_at IS NOT NULL
+  BEGIN
+    INSERT OR IGNORE INTO analysis_job_history(
+      analysis_job_id,
+      media_id,
+      source_id,
+      module,
+      status,
+      attempts,
+      input_sha256,
+      started_at,
+      finished_at,
+      duration_ms
+    )
+    VALUES(
+      NEW.id,
+      NEW.media_id,
+      (SELECT source_id FROM media_items WHERE id=NEW.media_id),
+      NEW.module,
+      NEW.status,
+      NEW.attempts,
+      NEW.input_sha256,
+      NEW.started_at,
+      NEW.finished_at,
+      CASE
+        WHEN NEW.started_at IS NULL THEN NULL
+        ELSE CAST(ROUND(
+          (julianday(NEW.finished_at)-julianday(NEW.started_at))*86400000
+        ) AS INTEGER)
+      END
+    );
+  END;
+
   CREATE TABLE IF NOT EXISTS catalog_migrations (
     migration_key TEXT PRIMARY KEY,
     applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -611,6 +669,204 @@ ensureColumn("analysis_jobs", "result_json", "TEXT");
 ensureColumn("analysis_jobs", "error_message", "TEXT");
 ensureColumn("analysis_jobs", "started_at", "TEXT");
 ensureColumn("analysis_jobs", "finished_at", "TEXT");
+ensureColumn("person_candidates", "member_count", "INTEGER NOT NULL DEFAULT 0");
+ensureColumn("person_candidates", "newest_face_id", "INTEGER");
+ensureColumn("pet_candidates", "member_count", "INTEGER NOT NULL DEFAULT 0");
+ensureColumn("pet_candidates", "newest_pet_id", "INTEGER");
+
+const identitySummaryMigrationKey = "identity-candidate-summary-v1";
+const identitySummaryMigration = db.prepare(
+  "SELECT 1 FROM catalog_migrations WHERE migration_key=?"
+).get(identitySummaryMigrationKey);
+
+if (!identitySummaryMigration) {
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    db.exec(`
+      UPDATE person_candidates
+      SET
+        member_count=(
+          SELECT COUNT(*)
+          FROM person_candidate_faces pcf
+          WHERE pcf.candidate_id=person_candidates.id
+        ),
+        newest_face_id=(
+          SELECT MAX(pcf.face_detection_id)
+          FROM person_candidate_faces pcf
+          WHERE pcf.candidate_id=person_candidates.id
+        );
+
+      UPDATE pet_candidates
+      SET
+        member_count=(
+          SELECT COUNT(*)
+          FROM pet_candidate_items pci
+          WHERE pci.candidate_id=pet_candidates.id
+        ),
+        newest_pet_id=(
+          SELECT MAX(pci.pet_detection_id)
+          FROM pet_candidate_items pci
+          WHERE pci.candidate_id=pet_candidates.id
+        );
+
+      CREATE INDEX IF NOT EXISTS idx_person_candidate_source_count
+        ON person_candidates(source_id, member_count DESC, average_similarity DESC, newest_face_id DESC);
+      CREATE INDEX IF NOT EXISTS idx_pet_candidate_source_count
+        ON pet_candidates(source_id, member_count DESC, average_similarity DESC, newest_pet_id DESC);
+      CREATE INDEX IF NOT EXISTS idx_person_candidate_face_detection
+        ON person_candidate_faces(face_detection_id, candidate_id);
+      CREATE INDEX IF NOT EXISTS idx_pet_candidate_item_detection
+        ON pet_candidate_items(pet_detection_id, candidate_id);
+
+      CREATE TRIGGER IF NOT EXISTS trg_person_candidate_face_insert_summary
+      AFTER INSERT ON person_candidate_faces
+      BEGIN
+        UPDATE person_candidates
+        SET
+          member_count=member_count+1,
+          newest_face_id=CASE
+            WHEN newest_face_id IS NULL OR NEW.face_detection_id>newest_face_id
+              THEN NEW.face_detection_id
+            ELSE newest_face_id
+          END
+        WHERE id=NEW.candidate_id;
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS trg_person_candidate_face_delete_summary
+      AFTER DELETE ON person_candidate_faces
+      BEGIN
+        UPDATE person_candidates
+        SET
+          member_count=(
+            SELECT COUNT(*)
+            FROM person_candidate_faces pcf
+            WHERE pcf.candidate_id=OLD.candidate_id
+          ),
+          newest_face_id=(
+            SELECT MAX(pcf.face_detection_id)
+            FROM person_candidate_faces pcf
+            WHERE pcf.candidate_id=OLD.candidate_id
+          )
+        WHERE id=OLD.candidate_id;
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS trg_pet_candidate_item_insert_summary
+      AFTER INSERT ON pet_candidate_items
+      BEGIN
+        UPDATE pet_candidates
+        SET
+          member_count=member_count+1,
+          newest_pet_id=CASE
+            WHEN newest_pet_id IS NULL OR NEW.pet_detection_id>newest_pet_id
+              THEN NEW.pet_detection_id
+            ELSE newest_pet_id
+          END
+        WHERE id=NEW.candidate_id;
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS trg_pet_candidate_item_delete_summary
+      AFTER DELETE ON pet_candidate_items
+      BEGIN
+        UPDATE pet_candidates
+        SET
+          member_count=(
+            SELECT COUNT(*)
+            FROM pet_candidate_items pci
+            WHERE pci.candidate_id=OLD.candidate_id
+          ),
+          newest_pet_id=(
+            SELECT MAX(pci.pet_detection_id)
+            FROM pet_candidate_items pci
+            WHERE pci.candidate_id=OLD.candidate_id
+          )
+        WHERE id=OLD.candidate_id;
+      END;
+    `);
+
+    db.prepare(
+      "INSERT INTO catalog_migrations(migration_key) VALUES(?)"
+    ).run(identitySummaryMigrationKey);
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+} else {
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_person_candidate_source_count
+      ON person_candidates(source_id, member_count DESC, average_similarity DESC, newest_face_id DESC);
+    CREATE INDEX IF NOT EXISTS idx_pet_candidate_source_count
+      ON pet_candidates(source_id, member_count DESC, average_similarity DESC, newest_pet_id DESC);
+    CREATE INDEX IF NOT EXISTS idx_person_candidate_face_detection
+      ON person_candidate_faces(face_detection_id, candidate_id);
+    CREATE INDEX IF NOT EXISTS idx_pet_candidate_item_detection
+      ON pet_candidate_items(pet_detection_id, candidate_id);
+
+    CREATE TRIGGER IF NOT EXISTS trg_person_candidate_face_insert_summary
+    AFTER INSERT ON person_candidate_faces
+    BEGIN
+      UPDATE person_candidates
+      SET
+        member_count=member_count+1,
+        newest_face_id=CASE
+          WHEN newest_face_id IS NULL OR NEW.face_detection_id>newest_face_id
+            THEN NEW.face_detection_id
+          ELSE newest_face_id
+        END
+      WHERE id=NEW.candidate_id;
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_person_candidate_face_delete_summary
+    AFTER DELETE ON person_candidate_faces
+    BEGIN
+      UPDATE person_candidates
+      SET
+        member_count=(
+          SELECT COUNT(*)
+          FROM person_candidate_faces pcf
+          WHERE pcf.candidate_id=OLD.candidate_id
+        ),
+        newest_face_id=(
+          SELECT MAX(pcf.face_detection_id)
+          FROM person_candidate_faces pcf
+          WHERE pcf.candidate_id=OLD.candidate_id
+        )
+      WHERE id=OLD.candidate_id;
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_pet_candidate_item_insert_summary
+    AFTER INSERT ON pet_candidate_items
+    BEGIN
+      UPDATE pet_candidates
+      SET
+        member_count=member_count+1,
+        newest_pet_id=CASE
+          WHEN newest_pet_id IS NULL OR NEW.pet_detection_id>newest_pet_id
+            THEN NEW.pet_detection_id
+          ELSE newest_pet_id
+        END
+      WHERE id=NEW.candidate_id;
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_pet_candidate_item_delete_summary
+    AFTER DELETE ON pet_candidate_items
+    BEGIN
+      UPDATE pet_candidates
+      SET
+        member_count=(
+          SELECT COUNT(*)
+          FROM pet_candidate_items pci
+          WHERE pci.candidate_id=OLD.candidate_id
+        ),
+        newest_pet_id=(
+          SELECT MAX(pci.pet_detection_id)
+          FROM pet_candidate_items pci
+          WHERE pci.candidate_id=OLD.candidate_id
+        )
+      WHERE id=OLD.candidate_id;
+    END;
+  `);
+}
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS media_video_analysis (
@@ -800,6 +1056,46 @@ function normalizeHistoricalUnavailableJobs(): void {
 
 normalizeHistoricalUnavailableJobs();
 
+runOneTimeCatalogMigration(
+  "2026-11-09-analysis-history-seed-v1",
+  () => {
+    db.prepare(`
+      INSERT OR IGNORE INTO analysis_job_history(
+        analysis_job_id,
+        media_id,
+        source_id,
+        module,
+        status,
+        attempts,
+        input_sha256,
+        started_at,
+        finished_at,
+        duration_ms
+      )
+      SELECT
+        j.id,
+        j.media_id,
+        m.source_id,
+        j.module,
+        j.status,
+        j.attempts,
+        j.input_sha256,
+        j.started_at,
+        j.finished_at,
+        CASE
+          WHEN j.started_at IS NULL THEN NULL
+          ELSE CAST(ROUND(
+            (julianday(j.finished_at)-julianday(j.started_at))*86400000
+          ) AS INTEGER)
+        END
+      FROM analysis_jobs j
+      LEFT JOIN media_items m ON m.id=j.media_id
+      WHERE j.status IN ('DONE','FAILED','UNAVAILABLE')
+        AND j.finished_at IS NOT NULL
+    `).run();
+  }
+);
+
 function runOneTimeCatalogMigration(
   migrationKey: string,
   apply: () => void
@@ -844,6 +1140,32 @@ runOneTimeCatalogMigration(
         finished_at=NULL,
         updated_at=CURRENT_TIMESTAMP
       WHERE status='FAILED'
+    `).run();
+  }
+);
+
+runOneTimeCatalogMigration(
+  "2026-11-09-recheck-gps-after-hemisphere-fix-v1",
+  () => {
+    // Re-read only image metadata for files that already had GPS data.
+    // Downstream face/pet/semantic jobs stay untouched.
+    db.prepare(`
+      UPDATE analysis_jobs
+      SET
+        status='PENDING',
+        attempts=0,
+        result_json=NULL,
+        error_message=NULL,
+        started_at=NULL,
+        finished_at=NULL,
+        updated_at=CURRENT_TIMESTAMP
+      WHERE module='image-metadata-v1'
+        AND media_id IN (
+          SELECT media_id
+          FROM media_image_metadata
+          WHERE gps_latitude IS NOT NULL
+            AND gps_longitude IS NOT NULL
+        )
     `).run();
   }
 );
@@ -1393,6 +1715,33 @@ async function resolveSourceRoot(sourceId: number): Promise<string> {
   return renamedPath;
 }
 
+function getIdentityCandidateSummaryStats(sourceId: number) {
+  const people = db.prepare(`
+    SELECT
+      COUNT(*) AS candidate_count,
+      COALESCE(SUM(member_count),0) AS member_count
+    FROM person_candidates
+    WHERE source_id=?
+      AND member_count>=2
+  `).get(sourceId);
+
+  const pets = db.prepare(`
+    SELECT
+      COUNT(*) AS candidate_count,
+      COALESCE(SUM(member_count),0) AS member_count
+    FROM pet_candidates
+    WHERE source_id=?
+      AND member_count>=2
+  `).get(sourceId);
+
+  return {
+    personCandidates: Number(people?.candidate_count ?? 0),
+    personCandidateFaces: Number(people?.member_count ?? 0),
+    petCandidates: Number(pets?.candidate_count ?? 0),
+    petCandidateDetections: Number(pets?.member_count ?? 0)
+  };
+}
+
 function getStats(sourceId: number) {
   const row = db.prepare(`
     SELECT
@@ -1422,29 +1771,15 @@ function getStats(sourceId: number) {
     SELECT
       (
         SELECT COUNT(*)
-        FROM (
-          SELECT pc.id
-          FROM person_candidates pc
-          JOIN person_candidate_faces pcf ON pcf.candidate_id=pc.id
-          JOIN face_detections fd ON fd.id=pcf.face_detection_id
-          JOIN media_items m ON m.id=fd.media_id
-          WHERE pc.source_id=?
-          GROUP BY pc.id
-          HAVING COUNT(DISTINCT m.sha256 || ':' || fd.detection_index) >= 2
-        )
+        FROM person_candidates pc
+        WHERE pc.source_id=?
+          AND pc.member_count>=2
       ) AS candidate_count,
       (
-        SELECT COALESCE(SUM(face_count), 0)
-        FROM (
-          SELECT COUNT(pcf.face_detection_id) AS face_count
-          FROM person_candidates pc
-          JOIN person_candidate_faces pcf ON pcf.candidate_id=pc.id
-          JOIN face_detections fd ON fd.id=pcf.face_detection_id
-          JOIN media_items m ON m.id=fd.media_id
-          WHERE pc.source_id=?
-          GROUP BY pc.id
-          HAVING COUNT(DISTINCT m.sha256 || ':' || fd.detection_index) >= 2
-        )
+        SELECT COALESCE(SUM(pc.member_count), 0)
+        FROM person_candidates pc
+        WHERE pc.source_id=?
+          AND pc.member_count>=2
       ) AS candidate_face_count,
       (
         SELECT COUNT(DISTINCT pfa.person_id)
@@ -1466,29 +1801,15 @@ function getStats(sourceId: number) {
     SELECT
       (
         SELECT COUNT(*)
-        FROM (
-          SELECT pc.id
-          FROM pet_candidates pc
-          JOIN pet_candidate_items pci ON pci.candidate_id=pc.id
-          JOIN pet_fused_detections pd ON pd.id=pci.pet_detection_id
-          JOIN media_items m ON m.id=pd.media_id
-          WHERE pc.source_id=?
-          GROUP BY pc.id
-          HAVING COUNT(DISTINCT m.sha256 || ':' || pd.detection_index) >= 2
-        )
+        FROM pet_candidates pc
+        WHERE pc.source_id=?
+          AND pc.member_count>=2
       ) AS candidate_count,
       (
-        SELECT COALESCE(SUM(detection_count), 0)
-        FROM (
-          SELECT COUNT(pci.pet_detection_id) AS detection_count
-          FROM pet_candidates pc
-          JOIN pet_candidate_items pci ON pci.candidate_id=pc.id
-          JOIN pet_fused_detections pd ON pd.id=pci.pet_detection_id
-          JOIN media_items m ON m.id=pd.media_id
-          WHERE pc.source_id=?
-          GROUP BY pc.id
-          HAVING COUNT(DISTINCT m.sha256 || ':' || pd.detection_index) >= 2
-        )
+        SELECT COALESCE(SUM(pc.member_count), 0)
+        FROM pet_candidates pc
+        WHERE pc.source_id=?
+          AND pc.member_count>=2
       ) AS candidate_detection_count,
       (
         SELECT COUNT(DISTINCT pa.pet_id)
@@ -1625,6 +1946,38 @@ function getStats(sourceId: number) {
     lastScan: lastScan?.finished_at ? String(lastScan.finished_at) : null
   };
 }
+
+function getRemoteSummary() {
+  const media = db.prepare(`
+    SELECT
+      COUNT(*) AS total,
+      COALESCE(SUM(CASE WHEN availability='AVAILABLE' THEN 1 ELSE 0 END), 0) AS available,
+      COALESCE(SUM(CASE WHEN availability='MISSING' THEN 1 ELSE 0 END), 0) AS missing
+    FROM media_items
+  `).get();
+
+  const identities = db.prepare(`
+    SELECT
+      (SELECT COUNT(*) FROM persons) AS person_count,
+      (SELECT COUNT(*) FROM pets) AS pet_count
+  `).get();
+
+  const lastScan = db.prepare(`
+    SELECT MAX(finished_at) AS finished_at
+    FROM scans
+    WHERE finished_at IS NOT NULL
+  `).get();
+
+  return {
+    total: Number(media?.total ?? 0),
+    available: Number(media?.available ?? 0),
+    missing: Number(media?.missing ?? 0),
+    persons: Number(identities?.person_count ?? 0),
+    pets: Number(identities?.pet_count ?? 0),
+    lastScan: lastScan?.finished_at ? String(lastScan.finished_at) : null
+  };
+}
+
 
 function normalizeSearchFilter(raw: SearchFilter | undefined): SearchFilter | undefined {
   if (!raw || typeof raw !== "object") return undefined;
@@ -1958,6 +2311,14 @@ function listMedia(
       CASE WHEN t.media_id IS NOT NULL AND t.input_sha256=m.sha256 THEN t.input_sha256 ELSE NULL END AS thumbnail_version,
       CASE WHEN md.input_sha256=m.sha256 THEN md.captured_at ELSE NULL END AS captured_at,
       (
+        SELECT MAX(aj_last.finished_at)
+        FROM analysis_jobs aj_last
+        WHERE aj_last.media_id=m.id
+          AND aj_last.input_sha256=m.sha256
+          AND aj_last.status='DONE'
+          AND aj_last.finished_at IS NOT NULL
+      ) AS last_analyzed_at,
+      (
         SELECT COUNT(*)
         FROM face_detections fd
         WHERE fd.media_id=m.id
@@ -2281,6 +2642,7 @@ function listMedia(
     thumbnailReady: Boolean(row.thumbnail_ready),
     thumbnailVersion: row.thumbnail_version ? String(row.thumbnail_version) : null,
     capturedAt: row.captured_at ? String(row.captured_at) : null,
+    lastAnalyzedAt: row.last_analyzed_at ? String(row.last_analyzed_at) : null,
     faceCount: Number(row.face_count ?? 0),
     faceEmbeddingCount: Number(row.face_embedding_count ?? 0),
     petCount: Number(row.pet_count ?? 0),
@@ -2347,6 +2709,8 @@ function listGeoMedia(sourceId?: number) {
       m.id AS media_id,
       m.source_id,
       m.relative_path,
+      m.extension,
+      m.size_bytes,
       md.gps_latitude,
       md.gps_longitude,
       md.captured_at,
@@ -2369,6 +2733,8 @@ function listGeoMedia(sourceId?: number) {
     mediaId: Number(row.media_id),
     sourceId: Number(row.source_id),
     relativePath: String(row.relative_path),
+    extension: String(row.extension),
+    sizeBytes: Number(row.size_bytes),
     latitude: Number(row.gps_latitude),
     longitude: Number(row.gps_longitude),
     capturedAt: row.captured_at ? String(row.captured_at) : null,
@@ -2631,47 +2997,33 @@ function sameIdentity(
   return left !== null && left === right;
 }
 
-function loadIndex(sourceId: number): {
+function indexedMediaFromRow(row: Record<string, unknown>): IndexedMedia {
+  return {
+    id: Number(row.id),
+    relativePath: String(row.relative_path),
+    absolutePath: String(row.absolute_path),
+    extension: String(row.extension),
+    sizeBytes: Number(row.size_bytes),
+    mtimeMs: Number(row.mtime_ms),
+    sha256: String(row.sha256),
+    deviceId: row.device_id === null ? null : String(row.device_id),
+    inode: row.inode === null ? null : String(row.inode),
+    availability: String(row.availability) as "AVAILABLE" | "MISSING",
+    inRecycleBin: Boolean(row.in_recycle_bin)
+  };
+}
+
+function createMediaIndex(rows: Array<Record<string, unknown>>): {
   byPath: Map<string, IndexedMedia>;
   byHash: Map<string, IndexedMedia[]>;
   byIdentity: Map<string, IndexedMedia[]>;
 } {
-  const rows = db.prepare(`
-    SELECT
-      id,
-      relative_path,
-      absolute_path,
-      extension,
-      size_bytes,
-      mtime_ms,
-      sha256,
-      device_id,
-      inode,
-      availability,
-      in_recycle_bin
-    FROM media_items
-    WHERE source_id=?
-  `).all(sourceId);
-
   const byPath = new Map<string, IndexedMedia>();
   const byHash = new Map<string, IndexedMedia[]>();
   const byIdentity = new Map<string, IndexedMedia[]>();
 
   for (const row of rows) {
-    const media: IndexedMedia = {
-      id: Number(row.id),
-      relativePath: String(row.relative_path),
-      absolutePath: String(row.absolute_path),
-      extension: String(row.extension),
-      sizeBytes: Number(row.size_bytes),
-      mtimeMs: Number(row.mtime_ms),
-      sha256: String(row.sha256),
-      deviceId: row.device_id === null ? null : String(row.device_id),
-      inode: row.inode === null ? null : String(row.inode),
-      availability: String(row.availability) as "AVAILABLE" | "MISSING",
-      inRecycleBin: Boolean(row.in_recycle_bin)
-    };
-
+    const media = indexedMediaFromRow(row);
     byPath.set(media.relativePath, media);
 
     const hashItems = byHash.get(media.sha256) ?? [];
@@ -2687,6 +3039,91 @@ function loadIndex(sourceId: number): {
   }
 
   return { byPath, byHash, byIdentity };
+}
+
+function indexedMediaSelectSql(): string {
+  return `
+    SELECT
+      id,
+      relative_path,
+      absolute_path,
+      extension,
+      size_bytes,
+      mtime_ms,
+      sha256,
+      device_id,
+      inode,
+      availability,
+      in_recycle_bin
+    FROM media_items
+  `;
+}
+
+function loadIndex(sourceId: number): {
+  byPath: Map<string, IndexedMedia>;
+  byHash: Map<string, IndexedMedia[]>;
+  byIdentity: Map<string, IndexedMedia[]>;
+} {
+  const rows = db.prepare(
+    indexedMediaSelectSql() + " WHERE source_id=?"
+  ).all(sourceId) as Array<Record<string, unknown>>;
+
+  return createMediaIndex(rows);
+}
+
+function loadIndexForPaths(
+  sourceId: number,
+  relativePaths: string[]
+): {
+  byPath: Map<string, IndexedMedia>;
+  byHash: Map<string, IndexedMedia[]>;
+  byIdentity: Map<string, IndexedMedia[]>;
+} {
+  const uniquePaths = [...new Set(relativePaths)];
+  if (uniquePaths.length === 0) return createMediaIndex([]);
+
+  const rows: Array<Record<string, unknown>> = [];
+  const chunkSize = 400;
+
+  for (let offset = 0; offset < uniquePaths.length; offset += chunkSize) {
+    const chunk = uniquePaths.slice(offset, offset + chunkSize);
+    const placeholders = chunk.map(() => "?").join(",");
+    const chunkRows = db.prepare(
+      indexedMediaSelectSql() +
+        ` WHERE source_id=? AND relative_path IN (${placeholders})`
+    ).all(sourceId, ...chunk) as Array<Record<string, unknown>>;
+    rows.push(...chunkRows);
+  }
+
+  return createMediaIndex(rows);
+}
+
+function loadIdentityCandidates(
+  sourceId: number,
+  deviceId: string,
+  inode: string
+): IndexedMedia[] {
+  if (!identityKey(deviceId, inode)) return [];
+
+  const rows = db.prepare(
+    indexedMediaSelectSql() +
+      " WHERE source_id=? AND device_id=? AND inode=?"
+  ).all(sourceId, deviceId, inode) as Array<Record<string, unknown>>;
+
+  return rows.map(indexedMediaFromRow);
+}
+
+function loadHashCandidates(
+  sourceId: number,
+  hash: string,
+  sizeBytes: number
+): IndexedMedia[] {
+  const rows = db.prepare(
+    indexedMediaSelectSql() +
+      " WHERE source_id=? AND sha256=? AND size_bytes=?"
+  ).all(sourceId, hash, sizeBytes) as Array<Record<string, unknown>>;
+
+  return rows.map(indexedMediaFromRow);
 }
 
 function loadDirectoryIndex(sourceId: number): DirectoryIndex {
@@ -3015,6 +3452,42 @@ async function uniqueMoveCandidate(
   }
 
   return missingAtOldLocation.length === 1 ? missingAtOldLocation[0] : null;
+}
+
+async function uniqueIdentityMoveCandidateFromDb(
+  sourceId: number,
+  deviceId: string,
+  inode: string,
+  seenIds: Set<number>
+): Promise<IndexedMedia | null> {
+  const key = identityKey(deviceId, inode);
+  if (!key) return null;
+
+  const candidates = loadIdentityCandidates(sourceId, deviceId, inode);
+  return uniqueIdentityMoveCandidate(
+    deviceId,
+    inode,
+    new Map([[key, candidates]]),
+    seenIds
+  );
+}
+
+async function uniqueMoveCandidateFromDb(
+  sourceId: number,
+  hash: string,
+  sizeBytes: number,
+  deviceId: string,
+  inode: string,
+  seenIds: Set<number>
+): Promise<IndexedMedia | null> {
+  return uniqueMoveCandidate(
+    hash,
+    sizeBytes,
+    deviceId,
+    inode,
+    new Map([[hash, loadHashCandidates(sourceId, hash, sizeBytes)]]),
+    seenIds
+  );
 }
 
 function normalizeRecyclePath(value: string): string {
@@ -3442,6 +3915,39 @@ function getPetDetectionQueueStats(sourceId?: number) {
 }
 
 
+function getAnalysisHistory(days = 30) {
+  const normalizedDays = Math.max(1, Math.min(90, Math.trunc(Number(days) || 30)));
+  const modifier = "-" + Math.max(0, normalizedDays - 1) + " days";
+
+  const rows = db.prepare(`
+    SELECT
+      date(finished_at, 'localtime') AS day,
+      module,
+      status,
+      COUNT(*) AS count,
+      CAST(ROUND(AVG(duration_ms)) AS INTEGER) AS avg_duration_ms
+    FROM analysis_job_history
+    WHERE date(finished_at, 'localtime') >= date('now', 'localtime', ?)
+    GROUP BY date(finished_at, 'localtime'), module, status
+    ORDER BY day DESC, module ASC, status ASC
+  `).all(modifier);
+
+  return {
+    days: normalizedDays,
+    rows: rows.map((row: any) => ({
+      day: String(row.day ?? ""),
+      module: String(row.module ?? ""),
+      status: String(row.status ?? ""),
+      count: Number(row.count ?? 0),
+      avgDurationMs:
+        row.avg_duration_ms === null || row.avg_duration_ms === undefined
+          ? null
+          : Number(row.avg_duration_ms)
+    }))
+  };
+}
+
+
 function countAnalysisErrors(sourceId?: number): number {
   const sourceFilter = sourceId === undefined ? "" : "AND m.source_id=?";
   const args: number[] = sourceId === undefined ? [] : [sourceId];
@@ -3622,6 +4128,146 @@ function listAnalysisErrors(sourceId?: number, requestedLimit = 200) {
   }));
 }
 
+
+const ANALYSIS_ERROR_CAUSE_SQL = `
+  CASE
+    WHEN j.status='UNAVAILABLE' THEN 'UNAVAILABLE'
+    WHEN lower(COALESCE(j.error_message,'')) LIKE 'abhängige %'
+      OR lower(COALESCE(j.error_message,'')) LIKE 'mindestens ein abhängiger %'
+      THEN 'DEPENDENCY'
+    WHEN lower(m.extension) IN ('.heic','.heif') THEN 'HEIC'
+    WHEN lower(COALESCE(j.error_message,'')) LIKE '%decompressionbomb%'
+      OR lower(COALESCE(j.error_message,'')) LIKE '%too many pixels%'
+      THEN 'LARGE_IMAGE'
+    WHEN lower(COALESCE(j.error_message,'')) LIKE '%timeout%'
+      OR lower(COALESCE(j.error_message,'')) LIKE '%timed out%'
+      OR lower(COALESCE(j.error_message,'')) LIKE '%zeitüberschreit%'
+      THEN 'TIMEOUT'
+    WHEN lower(COALESCE(j.error_message,'')) LIKE '%unsupported image%'
+      OR lower(COALESCE(j.error_message,'')) LIKE '%decoder%'
+      THEN 'FORMAT'
+    WHEN lower(COALESCE(j.error_message,'')) LIKE '%opencv%'
+      OR lower(COALESCE(j.error_message,'')) LIKE '%bild konnte nicht gelesen%'
+      OR lower(COALESCE(j.error_message,'')) LIKE '%cannot identify image%'
+      THEN 'DECODE'
+    ELSE 'OTHER'
+  END
+`;
+
+const ANALYSIS_ERROR_WHERE_SQL = `
+  (j.status='FAILED' OR (
+     j.status='UNAVAILABLE' AND j.id=(
+       SELECT MIN(j2.id) FROM analysis_jobs j2
+       WHERE j2.media_id=j.media_id AND j2.status='UNAVAILABLE'
+     )
+  ))
+`;
+
+function getAnalysisErrorOverview(sourceId?: number) {
+  const sourceClause = sourceId === undefined ? "" : "AND m.source_id=?";
+  const args = sourceId === undefined ? [] : [sourceId];
+  const base = `
+    SELECT j.media_id, j.module, j.status, j.error_message,
+      ${ANALYSIS_ERROR_CAUSE_SQL} AS cause
+    FROM analysis_jobs j JOIN media_items m ON m.id=j.media_id
+    WHERE ${ANALYSIS_ERROR_WHERE_SQL} ${sourceClause}
+  `;
+  const totals = db.prepare(`
+    SELECT COUNT(*) AS job_count, COUNT(DISTINCT media_id) AS media_count,
+      COALESCE(SUM(CASE WHEN cause='DEPENDENCY' THEN 1 ELSE 0 END),0) AS dependent_count,
+      COALESCE(SUM(CASE WHEN cause='UNAVAILABLE' THEN 1 ELSE 0 END),0) AS unavailable_count
+    FROM (${base})
+  `).get(...args);
+  const groups = db.prepare(`
+    SELECT module, cause, COUNT(*) AS count,
+      COUNT(DISTINCT media_id) AS media_count,
+      MIN(error_message) AS example
+    FROM (${base})
+    GROUP BY module, cause
+    ORDER BY count DESC, module ASC
+  `).all(...args);
+  return {
+    totalJobs: Number(totals?.job_count ?? 0),
+    mediaCount: Number(totals?.media_count ?? 0),
+    dependentJobs: Number(totals?.dependent_count ?? 0),
+    unavailableJobs: Number(totals?.unavailable_count ?? 0),
+    groups: groups.map((row) => ({
+      module: String(row.module),
+      cause: String(row.cause),
+      count: Number(row.count),
+      mediaCount: Number(row.media_count),
+      example: String(row.example ?? "")
+    }))
+  };
+}
+
+function listAnalysisErrorPage(filter: Record<string, unknown> = {}) {
+  const sourceId = filter.sourceId === undefined ? undefined :
+    asNumber(filter.sourceId, "sourceId");
+  const module = typeof filter.module === "string" ? filter.module.slice(0,100) : "";
+  const cause = typeof filter.cause === "string" ? filter.cause : "";
+  const search = typeof filter.search === "string" ? filter.search.trim().slice(0,160) : "";
+  const limitValue = Number(filter.limit ?? 75);
+  const offsetValue = Number(filter.offset ?? 0);
+  const limit = Number.isFinite(limitValue) ? Math.max(1, Math.min(150,Math.trunc(limitValue))) : 75;
+  const offset = Number.isFinite(offsetValue) ? Math.max(0,Math.min(2000000,Math.trunc(offsetValue))) : 0;
+  const allowedCauses = new Set(["UNAVAILABLE","DEPENDENCY","HEIC","LARGE_IMAGE","TIMEOUT","FORMAT","DECODE","OTHER"]);
+  const conditions = [ANALYSIS_ERROR_WHERE_SQL];
+  const args: Array<string | number> = [];
+  if (sourceId !== undefined) { conditions.push("m.source_id=?"); args.push(sourceId); }
+  if (module) { conditions.push("j.module=?"); args.push(module); }
+  if (allowedCauses.has(cause)) {
+    conditions.push(`(${ANALYSIS_ERROR_CAUSE_SQL})=?`);
+    args.push(cause);
+  }
+  if (search) {
+    conditions.push("(m.relative_path LIKE ? OR j.error_message LIKE ? OR j.module LIKE ?)");
+    args.push("%"+search+"%","%"+search+"%","%"+search+"%");
+  }
+  const from = `FROM analysis_jobs j JOIN media_items m ON m.id=j.media_id
+    WHERE ${conditions.join(" AND ")}`;
+  const countRow = db.prepare(`SELECT COUNT(*) AS count ${from}`).get(...args);
+  const rows = db.prepare(`
+    SELECT j.id,j.status,j.media_id,j.module,j.attempts,
+      j.error_message,j.started_at,j.finished_at,
+      m.relative_path,m.extension,
+      ${ANALYSIS_ERROR_CAUSE_SQL} AS cause
+    ${from}
+    ORDER BY COALESCE(j.finished_at,j.updated_at) DESC,j.id DESC
+    LIMIT ? OFFSET ?
+  `).all(...args,limit,offset);
+  return {
+    total: Number(countRow?.count ?? 0),
+    items: rows.map((row) => ({
+      id: Number(row.id),
+      status: row.status === "UNAVAILABLE" ? "UNAVAILABLE" : "FAILED",
+      mediaId: Number(row.media_id),
+      module: String(row.module),
+      relativePath: String(row.relative_path),
+      extension: String(row.extension),
+      attempts: Number(row.attempts ?? 0),
+      errorMessage: String(row.error_message ?? ""),
+      startedAt: row.started_at === null ? null : String(row.started_at),
+      finishedAt: row.finished_at === null ? null : String(row.finished_at),
+      cause: String(row.cause)
+    }))
+  };
+}
+
+function retryErrorSample(filter: Record<string, unknown> = {}) {
+  const page = listAnalysisErrorPage({ ...filter, limit: 50, offset: 0 });
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    let retried = 0;
+    for (const item of page.items) retried += resetAnalysisJob(item.id);
+    db.exec("COMMIT");
+    return { retried };
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+}
+
 function resetAnalysisJob(jobId: number): number {
   const job = db.prepare(`
     SELECT
@@ -3629,6 +4275,7 @@ function resetAnalysisJob(jobId: number): number {
       j.media_id,
       j.module,
       j.status,
+      j.error_message,
       m.sha256,
       m.absolute_path
     FROM analysis_jobs j
@@ -3675,6 +4322,23 @@ function resetAnalysisJob(jobId: number): number {
 
   const modules = new Set<string>([module]);
 
+  // Ein Folgefehler kann erst nach Reparatur des eigentlichen Ursprungjobs
+  // erneut laufen. Setze daher die betroffenen fehlerhaften Vorgänger zurück;
+  // erfolgreich abgeschlossene Jobs bleiben durch die WHERE-Bedingung unten
+  // unangetastet.
+  const causedByDependency = /abhängig/i.test(String(job.error_message ?? ""));
+  if (causedByDependency && module === "face-embed-sface-v1") {
+    modules.add("face-detect-yunet-v1");
+  }
+  if (causedByDependency && (
+    module === "pet-fuse-ensemble-v1" || module === "pet-embed-dogreid-v1"
+  )) {
+    modules.add("pet-detect-nanodet-v1");
+    modules.add("pet-detect-yolox-v1");
+    modules.add("pet-fuse-ensemble-v1");
+    modules.add("pet-embed-dogreid-v1");
+  }
+
   if (module === "face-detect-yunet-v1") {
     modules.add("face-embed-sface-v1");
   }
@@ -3702,7 +4366,7 @@ function resetAnalysisJob(jobId: number): number {
       updated_at=CURRENT_TIMESTAMP
     WHERE media_id=?
       AND module=?
-      AND status<>'RUNNING'
+      AND status IN ('FAILED','UNAVAILABLE','PENDING')
   `);
 
   let changes = 0;
@@ -3894,8 +4558,11 @@ function completeAnalysisJob(jobId: number, result: unknown) {
   const job = db.prepare(`
     SELECT id, media_id, module, input_sha256
     FROM analysis_jobs
-    WHERE id=?
+    WHERE id=? AND status='RUNNING'
   `).get(jobId);
+  // A previous run may still return after an explicit requeue. Never let such
+  // results update the replacement job's state or enqueue stale modules.
+  if (!job) throw new Error("Veraltetes Analyseergebnis nach Neueinreihung verworfen.");
 
   db.prepare(`
     UPDATE analysis_jobs
@@ -3962,7 +4629,7 @@ function completeAnalysisJob(jobId: number, result: unknown) {
 
 function failAnalysisJob(jobId: number, errorMessage: string) {
   const job = db.prepare(`
-    SELECT j.media_id, j.module, m.absolute_path
+    SELECT j.media_id, j.module, j.attempts, m.absolute_path
     FROM analysis_jobs j
     JOIN media_items m ON m.id=j.media_id
     WHERE j.id=?
@@ -4003,6 +4670,24 @@ function failAnalysisJob(jobId: number, errorMessage: string) {
 
       db.exec("COMMIT");
       return { failed: false, unavailable: true };
+    }
+
+    // Nur vorübergehende Worker-/I/O-Probleme automatisch wiederholen.
+    // Nach maximal drei Versuchen als echten Fehler für die Diagnose speichern.
+    // Fehlende Dateien wurden bereits oberhalb gesondert behandelt.
+    const transient = /timeout|timed out|zeitüberschreit|temporarily unavailable|resource busy|broken pipe|eagain|econnreset|winerror 32|worker wurde beendet|worker is not active/i.test(errorMessage);
+    if (job && transient && Number(job.attempts ?? 0) < 3) {
+      db.prepare(`
+        UPDATE analysis_jobs
+        SET status='PENDING',
+            priority=priority+10,
+            error_message=?,
+            finished_at=NULL,
+            updated_at=CURRENT_TIMESTAMP
+        WHERE id=? AND status='RUNNING'
+      `).run(errorMessage.slice(0, 4000),jobId);
+      db.exec("COMMIT");
+      return { failed: false, retryScheduled: true };
     }
 
     db.prepare(`
@@ -4265,7 +4950,12 @@ async function reconcileSourceChanges(
     scanId = Number(started.lastInsertRowid);
 
     const token = randomUUID();
-    const { byPath, byHash, byIdentity } = loadIndex(sourceId);
+    // Normale Datei-Events dürfen nicht mehr den kompletten Medienbestand der
+    // Quelle in drei Maps laden. Bei Verzeichnisereignissen bleibt der volle
+    // Index bewusst erhalten, weil Directory-Moves ganze Teilbäume umschreiben.
+    const { byPath, byHash, byIdentity } = containsDirectoryPath
+      ? loadIndex(sourceId)
+      : loadIndexForPaths(sourceId, relativePaths);
     const directoryIndex: DirectoryIndex = containsDirectoryPath
       ? loadDirectoryIndex(sourceId)
       : {
@@ -4466,12 +5156,19 @@ async function reconcileSourceChanges(
         return;
       }
 
-      const identityCandidate = await uniqueIdentityMoveCandidate(
-        file.deviceId,
-        file.inode,
-        byIdentity,
-        seenIds
-      );
+      const identityCandidate = containsDirectoryPath
+        ? await uniqueIdentityMoveCandidate(
+            file.deviceId,
+            file.inode,
+            byIdentity,
+            seenIds
+          )
+        : await uniqueIdentityMoveCandidateFromDb(
+            sourceId,
+            file.deviceId,
+            file.inode,
+            seenIds
+          );
 
       if (identityCandidate) {
         const previousPath = identityCandidate.relativePath;
@@ -4513,14 +5210,23 @@ async function reconcileSourceChanges(
       }
 
       const hash = await sha256File(file.absolutePath);
-      const moveCandidate = await uniqueMoveCandidate(
-        hash,
-        file.sizeBytes,
-        file.deviceId,
-        file.inode,
-        byHash,
-        seenIds
-      );
+      const moveCandidate = containsDirectoryPath
+        ? await uniqueMoveCandidate(
+            hash,
+            file.sizeBytes,
+            file.deviceId,
+            file.inode,
+            byHash,
+            seenIds
+          )
+        : await uniqueMoveCandidateFromDb(
+            sourceId,
+            hash,
+            file.sizeBytes,
+            file.deviceId,
+            file.inode,
+            seenIds
+          );
 
       if (moveCandidate) {
         const previousPath = moveCandidate.relativePath;
@@ -7843,34 +8549,227 @@ function autoAssignKnownPetCandidates(sourceId: number) {
   return { assignedCandidates, assignedPets };
 }
 
+function listUngroupedPetDetections(sourceId: number, requestedLimit: number) {
+  const limit = Math.max(1, Math.min(4000, Math.trunc(requestedLimit || 1000)));
+  const rows = db.prepare(`
+    SELECT
+      pd.id AS pet_detection_id,
+      pd.media_id,
+      pd.pet_class,
+      m.relative_path,
+      pd.x, pd.y, pd.width, pd.height,
+      pe.dimension,
+      pe.vector_blob
+    FROM pet_fused_detections pd
+    JOIN media_items m ON m.id=pd.media_id
+    JOIN pet_embeddings pe ON pe.pet_detection_id=pd.id
+    LEFT JOIN pet_assignments pa ON pa.pet_detection_id=pd.id
+    LEFT JOIN pet_candidate_items pci ON pci.pet_detection_id=pd.id
+    LEFT JOIN ignored_pet_matches ipm ON ipm.pet_detection_id=pd.id
+    WHERE m.source_id=?
+      AND m.availability='AVAILABLE'
+      AND pd.input_sha256=m.sha256
+      AND pe.input_sha256=m.sha256
+      AND pe.model_version='DogReID DINOv2-B14 0.2.0'
+      AND pa.pet_detection_id IS NULL
+      AND pci.pet_detection_id IS NULL
+      AND ipm.pet_detection_id IS NULL
+    ORDER BY pd.id DESC
+    LIMIT ?
+  `).all(sourceId, limit);
+
+  const knownPets = knownPetCentroids();
+  const exclusion = db.prepare(
+    "SELECT 1 FROM pet_assignment_exclusions " +
+    "WHERE pet_detection_id=? AND pet_id=? LIMIT 1"
+  );
+
+  return rows.map((row) => {
+    const petDetectionId = Number(row.pet_detection_id);
+    const petClass = String(row.pet_class) === "cat" ? "cat" : "dog";
+    const vector = vectorFromBlob(row.vector_blob, Number(row.dimension));
+    const suggestedPets = knownPets
+      .filter((known) =>
+        known.petClass === petClass && !exclusion.get(petDetectionId, known.id)
+      )
+      .map((known) => ({
+        petId: known.id,
+        petName: known.name,
+        similarity: cosineSimilarity(vector, known.vector),
+        representativePetId: known.representativePetId
+      }))
+      .filter((match) => Number.isFinite(match.similarity) && match.similarity >= 0.52)
+      .sort((left, right) => right.similarity - left.similarity)
+      .slice(0, 5);
+
+    return {
+      petDetectionId,
+      mediaId: Number(row.media_id),
+      relativePath: String(row.relative_path),
+      petClass,
+      x: Number(row.x),
+      y: Number(row.y),
+      width: Number(row.width),
+      height: Number(row.height),
+      suggestedPets
+    };
+  });
+}
+
+function rejectPetDetectionSuggestion(petDetectionId: number, petId: number) {
+  const detection = db.prepare(`
+    SELECT pd.id
+    FROM pet_fused_detections pd
+    LEFT JOIN pet_assignments pa ON pa.pet_detection_id=pd.id
+    WHERE pd.id=? AND pa.pet_detection_id IS NULL
+  `).get(petDetectionId);
+  if (!detection) throw new Error("Die Haustierfundstelle ist nicht mehr unbestätigt verfügbar.");
+
+  const pet = db.prepare("SELECT id FROM pets WHERE id=?").get(petId);
+  if (!pet) throw new Error("Das vorgeschlagene Haustier existiert nicht mehr.");
+
+  db.prepare(`
+    INSERT INTO pet_assignment_exclusions(pet_id, pet_detection_id, reason)
+    VALUES(?,?,'USER_REJECTED_SUGGESTION')
+    ON CONFLICT(pet_id, pet_detection_id) DO UPDATE SET
+      reason='USER_REJECTED_SUGGESTION'
+  `).run(petId, petDetectionId);
+
+  return { changed: true, affectedPets: 1 };
+}
 function listPetCandidates(
   sourceId: number,
   requestedLimit: number,
   ignoreDefiniteThreshold = 0.68,
-  ignoreDoubtThreshold = 0.60
+  ignoreDoubtThreshold = 0.60,
+  summaryOnly = false
 ) {
   const limit = Math.max(1, Math.min(2000, Math.trunc(requestedLimit || 500)));
 
-  const candidates = db.prepare(`
-    SELECT
-      pc.id,
-      pc.pet_class,
-      pc.representative_pet_id,
-      pc.average_similarity,
-      pc.min_similarity,
-      COUNT(pci.pet_detection_id) AS detection_count,
-      MAX(pci.pet_detection_id) AS newest_pet_id
-    FROM pet_candidates pc
-    JOIN pet_candidate_items pci ON pci.candidate_id=pc.id
-    JOIN pet_fused_detections pd ON pd.id=pci.pet_detection_id
-    JOIN media_items m ON m.id=pd.media_id
-    WHERE pc.source_id=?
-      AND m.availability='AVAILABLE'
-      AND pd.input_sha256=m.sha256
-    GROUP BY pc.id
-    ORDER BY detection_count DESC, pc.average_similarity DESC, newest_pet_id DESC
-    LIMIT ?
-  `).all(sourceId, limit);
+  const candidates = summaryOnly
+    ? db.prepare(`
+        SELECT
+          pc.id,
+          pc.pet_class,
+          pc.representative_pet_id,
+          pc.average_similarity,
+          pc.min_similarity,
+          pc.member_count AS detection_count,
+          pc.representative_pet_id AS first_pet_id,
+          pc.newest_pet_id
+        FROM pet_candidates pc
+        WHERE pc.source_id=?
+          AND pc.member_count>=2
+        ORDER BY
+          pc.member_count DESC,
+          pc.average_similarity DESC,
+          pc.newest_pet_id DESC
+        LIMIT ?
+      `).all(sourceId, limit)
+    : db.prepare(`
+        SELECT
+          pc.id,
+          pc.pet_class,
+          pc.representative_pet_id,
+          pc.average_similarity,
+          pc.min_similarity,
+          COUNT(pci.pet_detection_id) AS detection_count,
+          MIN(pci.pet_detection_id) AS first_pet_id,
+          MAX(pci.pet_detection_id) AS newest_pet_id
+        FROM pet_candidates pc
+        JOIN pet_candidate_items pci ON pci.candidate_id=pc.id
+        JOIN pet_fused_detections pd ON pd.id=pci.pet_detection_id
+        JOIN media_items m ON m.id=pd.media_id
+        LEFT JOIN pet_assignments pa
+          ON pa.pet_detection_id=pci.pet_detection_id
+        WHERE pc.source_id=?
+          AND m.availability='AVAILABLE'
+          AND pd.input_sha256=m.sha256
+          AND pa.pet_detection_id IS NULL
+        GROUP BY pc.id
+        HAVING COUNT(DISTINCT m.sha256 || ':' || pd.detection_index) >= 2
+        ORDER BY detection_count DESC, pc.average_similarity DESC, newest_pet_id DESC
+        LIMIT ?
+      `).all(sourceId, limit);
+
+  if (summaryOnly) {
+    const knownPets = knownPetCentroids();
+    const embeddingQuery = db.prepare(`
+      SELECT
+        pe.dimension,
+        pe.vector_blob
+      FROM pet_candidate_items pci
+      JOIN pet_embeddings pe ON pe.pet_detection_id=pci.pet_detection_id
+      JOIN pet_fused_detections pd ON pd.id=pci.pet_detection_id
+      JOIN media_items m ON m.id=pd.media_id
+      LEFT JOIN pet_assignments pa
+        ON pa.pet_detection_id=pci.pet_detection_id
+      WHERE pci.candidate_id=?
+        AND pe.model_version='DogReID DINOv2-B14 0.2.0'
+        AND m.availability='AVAILABLE'
+        AND pd.input_sha256=m.sha256
+        AND pe.input_sha256=m.sha256
+        AND pa.pet_detection_id IS NULL
+      ORDER BY pci.pet_detection_id
+    `);
+    const exclusionQuery = db.prepare(`
+      SELECT 1
+      FROM pet_candidate_items pci
+      JOIN pet_assignment_exclusions pae
+        ON pae.pet_detection_id=pci.pet_detection_id
+      WHERE pci.candidate_id=?
+        AND pae.pet_id=?
+      LIMIT 1
+    `);
+
+    return candidates.map((candidate) => {
+      const candidateId = Number(candidate.id);
+      const candidateVector = centroid(
+        embeddingQuery.all(candidateId).map((row) =>
+          vectorFromBlob(row.vector_blob, Number(row.dimension))
+        )
+      );
+      const suggestedPets = candidateVector
+        ? knownPets
+            .filter(
+              (known) =>
+                known.petClass === String(candidate.pet_class) &&
+                !exclusionQuery.get(candidateId, known.id)
+            )
+            .map((known) => ({
+              petId: known.id,
+              petName: known.name,
+              similarity: cosineSimilarity(candidateVector, known.vector),
+              representativePetId: known.representativePetId
+            }))
+            .filter((match) => match.similarity >= 0.60)
+            .sort((left, right) => right.similarity - left.similarity)
+            .slice(0, 3)
+        : [];
+      const bestPetSuggestion = suggestedPets[0] ?? null;
+
+      return {
+        id: candidateId,
+        petClass: String(candidate.pet_class),
+        detectionCount: Number(candidate.detection_count),
+        newestPetId: Number(candidate.newest_pet_id),
+        memberSignature: "",
+        representativePetId:
+          candidate.first_pet_id === null || candidate.first_pet_id === undefined
+            ? null
+            : Number(candidate.first_pet_id),
+        averageSimilarity: Number(candidate.average_similarity),
+        minSimilarity: Number(candidate.min_similarity),
+        suggestedPetId: bestPetSuggestion?.petId ?? null,
+        suggestedPetName: bestPetSuggestion?.petName ?? null,
+        suggestedPetSimilarity: bestPetSuggestion?.similarity ?? null,
+        suggestedPets,
+        ignoredIdentityId: null,
+        ignoredSimilarity: null,
+        pets: []
+      };
+    });
+  }
 
   const itemQuery = db.prepare(`
     SELECT
@@ -7885,9 +8784,12 @@ function listPetCandidates(
     FROM pet_candidate_items pci
     JOIN pet_fused_detections pd ON pd.id=pci.pet_detection_id
     JOIN media_items m ON m.id=pd.media_id
+    LEFT JOIN pet_assignments pa
+      ON pa.pet_detection_id=pci.pet_detection_id
     WHERE pci.candidate_id=?
       AND m.availability='AVAILABLE'
       AND pd.input_sha256=m.sha256
+      AND pa.pet_detection_id IS NULL
     ORDER BY
       CASE WHEN pci.pet_detection_id=? THEN 0 ELSE 1 END,
       pci.similarity DESC,
@@ -7900,9 +8802,12 @@ function listPetCandidates(
     FROM pet_candidate_items pci
     JOIN pet_fused_detections pd ON pd.id=pci.pet_detection_id
     JOIN media_items m ON m.id=pd.media_id
+    LEFT JOIN pet_assignments pa
+      ON pa.pet_detection_id=pci.pet_detection_id
     WHERE pci.candidate_id=?
       AND m.availability='AVAILABLE'
       AND pd.input_sha256=m.sha256
+      AND pa.pet_detection_id IS NULL
     ORDER BY pci.pet_detection_id
   `);
 
@@ -7913,8 +8818,16 @@ function listPetCandidates(
       pe.vector_blob
     FROM pet_candidate_items pci
     JOIN pet_embeddings pe ON pe.pet_detection_id=pci.pet_detection_id
+    JOIN pet_fused_detections pd ON pd.id=pci.pet_detection_id
+    JOIN media_items m ON m.id=pd.media_id
+    LEFT JOIN pet_assignments pa
+      ON pa.pet_detection_id=pci.pet_detection_id
     WHERE pci.candidate_id=?
       AND pe.model_version='DogReID DINOv2-B14 0.2.0'
+      AND m.availability='AVAILABLE'
+      AND pd.input_sha256=m.sha256
+      AND pe.input_sha256=m.sha256
+      AND pa.pet_detection_id IS NULL
     ORDER BY pci.pet_detection_id
   `);
 
@@ -7927,6 +8840,10 @@ function listPetCandidates(
       AND pae.pet_id=?
     LIMIT 1
   `);
+  const petExclusionQuery = db.prepare(
+    "SELECT 1 FROM pet_assignment_exclusions " +
+    "WHERE pet_detection_id=? AND pet_id=? LIMIT 1"
+  );
 
   const knownPets = knownPetCentroids();
   const ignoredIdentities = ignoredPetVectorIdentities();
@@ -7949,9 +8866,17 @@ function listPetCandidates(
 
   return candidates.map((candidate) => {
     const candidateId = Number(candidate.id);
-    const representativePetId = candidate.representative_pet_id === null
+    const memberIds = memberSignatureQuery
+      .all(candidateId)
+      .map((row) => Number(row.pet_detection_id));
+    const storedRepresentativePetId = candidate.representative_pet_id === null
       ? null
       : Number(candidate.representative_pet_id);
+    const representativePetId =
+      storedRepresentativePetId !== null &&
+      memberIds.includes(storedRepresentativePetId)
+        ? storedRepresentativePetId
+        : (memberIds[0] ?? null);
 
     const embeddingRows = embeddingQuery.all(candidateId);
     const candidateVectors = embeddingRows.map((row) =>
@@ -8009,10 +8934,7 @@ function listPetCandidates(
       petClass: String(candidate.pet_class),
       detectionCount: Number(candidate.detection_count),
       newestPetId: Number(candidate.newest_pet_id),
-      memberSignature: memberSignatureQuery
-        .all(candidateId)
-        .map((row) => Number(row.pet_detection_id))
-        .join(","),
+      memberSignature: memberIds.join(","),
       representativePetId,
       averageSimilarity: Number(candidate.average_similarity),
       minSimilarity: Number(candidate.min_similarity),
@@ -8038,7 +8960,11 @@ function listPetCandidates(
           const vector = vectorByPetId.get(Number(row.pet_detection_id));
           if (!vector) return [];
           return knownPets
-            .filter((known) => known.petClass === String(candidate.pet_class))
+            .filter(
+              (known) =>
+                known.petClass === String(candidate.pet_class) &&
+                !petExclusionQuery.get(Number(row.pet_detection_id), known.id)
+            )
             .map((known) => ({
               petId: known.id,
               petName: known.name,
@@ -8054,7 +8980,97 @@ function listPetCandidates(
   }).filter((candidate) => candidate !== null);
 }
 
-function listPets(sourceId: number) {
+function listPetCandidateItems(
+  candidateId: number,
+  requestedLimit = 5000,
+  requestedOffset = 0
+) {
+  const limit = Math.max(1, Math.min(5000, Math.trunc(requestedLimit || 5000)));
+  const offset = Math.max(0, Math.trunc(requestedOffset || 0));
+  const candidate = db.prepare(
+    "SELECT representative_pet_id FROM pet_candidates WHERE id=?"
+  ).get(candidateId);
+  if (!candidate) return [];
+
+  const representativePetId =
+    candidate.representative_pet_id === null ||
+    candidate.representative_pet_id === undefined
+      ? -1
+      : Number(candidate.representative_pet_id);
+
+  const rows = db.prepare(`
+    SELECT
+      pci.pet_detection_id,
+      pd.media_id,
+      m.relative_path,
+      pci.similarity,
+      pd.x,
+      pd.y,
+      pd.width,
+      pd.height,
+      pe.dimension,
+      pe.vector_blob,
+      pd.pet_class
+    FROM pet_candidate_items pci
+    JOIN pet_fused_detections pd ON pd.id=pci.pet_detection_id
+    JOIN media_items m ON m.id=pd.media_id
+    JOIN pet_embeddings pe ON pe.pet_detection_id=pci.pet_detection_id
+    LEFT JOIN pet_assignments pa
+      ON pa.pet_detection_id=pci.pet_detection_id
+    WHERE pci.candidate_id=?
+      AND m.availability='AVAILABLE'
+      AND pd.input_sha256=m.sha256
+      AND pe.input_sha256=m.sha256
+      AND pe.model_version='DogReID DINOv2-B14 0.2.0'
+      AND pa.pet_detection_id IS NULL
+    ORDER BY
+      CASE WHEN pci.pet_detection_id=? THEN 0 ELSE 1 END,
+      pci.similarity DESC,
+      pci.pet_detection_id ASC
+    LIMIT ? OFFSET ?
+  `).all(candidateId, representativePetId, limit, offset);
+
+  const knownPets = knownPetCentroids();
+  const exclusionQuery = db.prepare(
+    "SELECT 1 FROM pet_assignment_exclusions " +
+    "WHERE pet_detection_id=? AND pet_id=? LIMIT 1"
+  );
+
+  return rows.map((row) => {
+    const petDetectionId = Number(row.pet_detection_id);
+    const petClass = String(row.pet_class);
+    const vector = vectorFromBlob(row.vector_blob, Number(row.dimension));
+    const suggestedPets = knownPets
+      .filter(
+        (known) =>
+          known.petClass === petClass &&
+          !exclusionQuery.get(petDetectionId, known.id)
+      )
+      .map((known) => ({
+        petId: known.id,
+        petName: known.name,
+        similarity: cosineSimilarity(vector, known.vector),
+        representativePetId: known.representativePetId
+      }))
+      .filter((match) => match.similarity >= 0.52)
+      .sort((left, right) => right.similarity - left.similarity)
+      .slice(0, 5);
+
+    return {
+      petDetectionId,
+      mediaId: Number(row.media_id),
+      relativePath: String(row.relative_path),
+      similarity: Number(row.similarity),
+      x: Number(row.x),
+      y: Number(row.y),
+      width: Number(row.width),
+      height: Number(row.height),
+      suggestedPets
+    };
+  });
+}
+
+function listPets(sourceId: number, summaryOnly = false) {
   const pets = db.prepare(`
     SELECT
       p.id,
@@ -8122,6 +9138,21 @@ function listPets(sourceId: number) {
     )
     ORDER BY p.name COLLATE NOCASE, p.id
   `).all(sourceId, sourceId, sourceId, sourceId, sourceId, sourceId);
+
+  if (summaryOnly) {
+    return pets.map((row) => ({
+      id: Number(row.id),
+      name: String(row.name),
+      petClass: String(row.pet_class),
+      detectionCount: Number(row.detection_count),
+      confirmedCount: Number(row.confirmed_count ?? 0),
+      automaticCount: Number(row.automatic_count ?? 0),
+      representativePetId:
+        row.representative_pet_id === null ? null : Number(row.representative_pet_id),
+      pets: [],
+      videoHits: []
+    }));
+  }
 
   const itemQuery = db.prepare(`
     SELECT
@@ -8239,8 +9270,12 @@ function ignorePetCandidate(
   const members = db.prepare(`
     SELECT pci.pet_detection_id
     FROM pet_candidate_items pci
+    JOIN pet_fused_detections pd ON pd.id=pci.pet_detection_id
+    JOIN media_items m ON m.id=pd.media_id
     LEFT JOIN pet_assignments pa ON pa.pet_detection_id=pci.pet_detection_id
     WHERE pci.candidate_id=?
+      AND m.availability='AVAILABLE'
+      AND pd.input_sha256=m.sha256
       AND pa.pet_detection_id IS NULL
     ORDER BY pci.pet_detection_id
   `).all(resolvedCandidateId);
@@ -8442,8 +9477,12 @@ function confirmPetCandidate(
   const members = db.prepare(`
     SELECT pci.pet_detection_id, pci.similarity
     FROM pet_candidate_items pci
+    JOIN pet_fused_detections pd ON pd.id=pci.pet_detection_id
+    JOIN media_items m ON m.id=pd.media_id
     LEFT JOIN pet_assignments pa ON pa.pet_detection_id=pci.pet_detection_id
     WHERE pci.candidate_id=?
+      AND m.availability='AVAILABLE'
+      AND pd.input_sha256=m.sha256
       AND pa.pet_detection_id IS NULL
     ORDER BY pci.pet_detection_id
   `).all(resolvedCandidateId);
@@ -9955,37 +10994,228 @@ function replacePersonCandidates(
   }
 }
 
+function listUngroupedPersonDetections(sourceId: number, requestedLimit: number) {
+  const limit = Math.max(1, Math.min(4000, Math.trunc(requestedLimit || 1000)));
+  const rows = db.prepare(`
+    SELECT
+      fd.id AS face_detection_id,
+      fd.media_id,
+      m.relative_path,
+      fd.x, fd.y, fd.width, fd.height,
+      fe.dimension,
+      fe.vector_blob
+    FROM face_detections fd
+    JOIN media_items m ON m.id=fd.media_id
+    JOIN face_embeddings fe ON fe.face_detection_id=fd.id
+    LEFT JOIN person_face_assignments pfa ON pfa.face_detection_id=fd.id
+    LEFT JOIN person_candidate_faces pcf ON pcf.face_detection_id=fd.id
+    LEFT JOIN ignored_person_matches ipm ON ipm.face_detection_id=fd.id
+    WHERE m.source_id=?
+      AND m.availability='AVAILABLE'
+      AND fd.input_sha256=m.sha256
+      AND fe.input_sha256=m.sha256
+      AND fe.model_version='SFace 2021dec'
+      AND pfa.face_detection_id IS NULL
+      AND pcf.face_detection_id IS NULL
+      AND ipm.face_detection_id IS NULL
+    ORDER BY fd.id DESC
+    LIMIT ?
+  `).all(sourceId, limit);
+
+  const knownPersons = knownPersonCentroids();
+  const exclusion = db.prepare(
+    "SELECT 1 FROM person_face_exclusions " +
+    "WHERE face_detection_id=? AND person_id=? LIMIT 1"
+  );
+
+  return rows.map((row) => {
+    const faceDetectionId = Number(row.face_detection_id);
+    const vector = vectorFromBlob(row.vector_blob, Number(row.dimension));
+    const suggestedPersons = knownPersons
+      .filter((known) => !exclusion.get(faceDetectionId, known.id))
+      .map((known) => ({
+        personId: known.id,
+        personName: known.name,
+        similarity: cosineSimilarity(vector, known.vector),
+        representativeFaceId: known.representativeFaceId
+      }))
+      .filter((match) => Number.isFinite(match.similarity) && match.similarity >= 0.48)
+      .sort((left, right) => right.similarity - left.similarity)
+      .slice(0, 5);
+
+    return {
+      faceDetectionId,
+      mediaId: Number(row.media_id),
+      relativePath: String(row.relative_path),
+      x: Number(row.x),
+      y: Number(row.y),
+      width: Number(row.width),
+      height: Number(row.height),
+      suggestedPersons
+    };
+  });
+}
+
+function rejectPersonDetectionSuggestion(faceDetectionId: number, personId: number) {
+  const face = db.prepare(`
+    SELECT fd.id
+    FROM face_detections fd
+    LEFT JOIN person_face_assignments pfa ON pfa.face_detection_id=fd.id
+    WHERE fd.id=? AND pfa.face_detection_id IS NULL
+  `).get(faceDetectionId);
+  if (!face) throw new Error("Das Gesicht ist nicht mehr unbestätigt verfügbar.");
+
+  const person = db.prepare("SELECT id FROM persons WHERE id=?").get(personId);
+  if (!person) throw new Error("Die vorgeschlagene Person existiert nicht mehr.");
+
+  db.prepare(`
+    INSERT INTO person_face_exclusions(person_id, face_detection_id, reason)
+    VALUES(?,?,'USER_REJECTED_SUGGESTION')
+    ON CONFLICT(person_id, face_detection_id) DO UPDATE SET
+      reason='USER_REJECTED_SUGGESTION'
+  `).run(personId, faceDetectionId);
+
+  return { changed: true, affectedFaces: 1 };
+}
 function listPersonCandidates(
   sourceId: number,
   requestedLimit: number,
   ignoreDefiniteThreshold = 0.62,
-  ignoreDoubtThreshold = 0.55
+  ignoreDoubtThreshold = 0.55,
+  summaryOnly = false
 ) {
   const limit = Math.max(1, Math.min(2000, Math.trunc(requestedLimit || 500)));
 
-  const candidates = db.prepare(`
-    SELECT
-      pc.id,
-      pc.representative_face_id,
-      pc.average_similarity,
-      pc.min_similarity,
-      COUNT(pcf.face_detection_id) AS face_count,
-      MAX(pcf.face_detection_id) AS newest_face_id
-    FROM person_candidates pc
-    JOIN person_candidate_faces pcf ON pcf.candidate_id=pc.id
-    JOIN face_detections fd ON fd.id=pcf.face_detection_id
-    JOIN media_items m ON m.id=fd.media_id
-    WHERE pc.source_id=?
-    GROUP BY pc.id
-    ORDER BY face_count DESC, pc.average_similarity DESC, newest_face_id DESC
-    LIMIT ?
-  `).all(sourceId, limit);
+  const candidates = summaryOnly
+    ? db.prepare(`
+        SELECT
+          pc.id,
+          pc.representative_face_id,
+          pc.average_similarity,
+          pc.min_similarity,
+          pc.member_count AS face_count,
+          pc.representative_face_id AS first_face_id,
+          pc.newest_face_id
+        FROM person_candidates pc
+        WHERE pc.source_id=?
+          AND pc.member_count>=2
+        ORDER BY
+          pc.member_count DESC,
+          pc.average_similarity DESC,
+          pc.newest_face_id DESC
+        LIMIT ?
+      `).all(sourceId, limit)
+    : db.prepare(`
+        SELECT
+          pc.id,
+          pc.representative_face_id,
+          pc.average_similarity,
+          pc.min_similarity,
+          COUNT(pcf.face_detection_id) AS face_count,
+          MIN(pcf.face_detection_id) AS first_face_id,
+          MAX(pcf.face_detection_id) AS newest_face_id
+        FROM person_candidates pc
+        JOIN person_candidate_faces pcf ON pcf.candidate_id=pc.id
+        JOIN face_detections fd ON fd.id=pcf.face_detection_id
+        JOIN media_items m ON m.id=fd.media_id
+        LEFT JOIN person_face_assignments pfa
+          ON pfa.face_detection_id=pcf.face_detection_id
+        WHERE pc.source_id=?
+          AND m.availability='AVAILABLE'
+          AND fd.input_sha256=m.sha256
+          AND pfa.face_detection_id IS NULL
+        GROUP BY pc.id
+        HAVING COUNT(DISTINCT m.sha256 || ':' || fd.detection_index) >= 2
+        ORDER BY face_count DESC, pc.average_similarity DESC, newest_face_id DESC
+        LIMIT ?
+      `).all(sourceId, limit);
+
+  if (summaryOnly) {
+    // Die paginierte Bestätigungsansicht soll schnell bleiben, aber weiterhin
+    // die ähnlichsten bereits bestätigten Personen anzeigen. Deshalb laden wir
+    // keine Einzelbilder der Gruppe, berechnen aber für die wenigen sichtbaren
+    // Gruppen weiterhin exakt denselben Gruppen-Zentroid wie in der Vollansicht.
+    const knownPersons = knownPersonCentroids();
+    const embeddingQuery = db.prepare(`
+      SELECT
+        fe.dimension,
+        fe.vector_blob
+      FROM person_candidate_faces pcf
+      JOIN face_embeddings fe ON fe.face_detection_id=pcf.face_detection_id
+      JOIN face_detections fd ON fd.id=pcf.face_detection_id
+      JOIN media_items m ON m.id=fd.media_id
+      LEFT JOIN person_face_assignments pfa
+        ON pfa.face_detection_id=pcf.face_detection_id
+      WHERE pcf.candidate_id=?
+        AND fe.model_version='SFace 2021dec'
+        AND m.availability='AVAILABLE'
+        AND fd.input_sha256=m.sha256
+        AND fe.input_sha256=m.sha256
+        AND pfa.face_detection_id IS NULL
+      ORDER BY pcf.face_detection_id
+    `);
+    const exclusionQuery = db.prepare(`
+      SELECT 1
+      FROM person_candidate_faces pcf
+      JOIN person_face_exclusions pfe
+        ON pfe.face_detection_id=pcf.face_detection_id
+      WHERE pcf.candidate_id=?
+        AND pfe.person_id=?
+      LIMIT 1
+    `);
+
+    return candidates.map((candidate) => {
+      const candidateId = Number(candidate.id);
+      const candidateVector = centroid(
+        embeddingQuery.all(candidateId).map((row) =>
+          vectorFromBlob(row.vector_blob, Number(row.dimension))
+        )
+      );
+      const suggestedPersons = candidateVector
+        ? knownPersons
+            .filter((known) => !exclusionQuery.get(candidateId, known.id))
+            .map((known) => ({
+              personId: known.id,
+              personName: known.name,
+              similarity: cosineSimilarity(candidateVector, known.vector),
+              representativeFaceId: known.representativeFaceId
+            }))
+            .filter((match) => match.similarity >= 0.55)
+            .sort((left, right) => right.similarity - left.similarity)
+            .slice(0, 3)
+        : [];
+
+      return {
+        id: candidateId,
+        faceCount: Number(candidate.face_count),
+        newestFaceId: Number(candidate.newest_face_id),
+        memberSignature: "",
+        representativeFaceId:
+          candidate.first_face_id === null || candidate.first_face_id === undefined
+            ? null
+            : Number(candidate.first_face_id),
+        averageSimilarity: Number(candidate.average_similarity),
+        minSimilarity: Number(candidate.min_similarity),
+        suggestedPersons,
+        ignoredIdentityId: null,
+        ignoredSimilarity: null,
+        faces: []
+      };
+    });
+  }
 
   const memberSignatureQuery = db.prepare(`
-    SELECT face_detection_id
-    FROM person_candidate_faces
-    WHERE candidate_id=?
-    ORDER BY face_detection_id
+    SELECT pcf.face_detection_id
+    FROM person_candidate_faces pcf
+    JOIN face_detections fd ON fd.id=pcf.face_detection_id
+    JOIN media_items m ON m.id=fd.media_id
+    LEFT JOIN person_face_assignments pfa
+      ON pfa.face_detection_id=pcf.face_detection_id
+    WHERE pcf.candidate_id=?
+      AND m.availability='AVAILABLE'
+      AND fd.input_sha256=m.sha256
+      AND pfa.face_detection_id IS NULL
+    ORDER BY pcf.face_detection_id
   `);
 
   const faceQuery = db.prepare(`
@@ -10001,7 +11231,12 @@ function listPersonCandidates(
     FROM person_candidate_faces pcf
     JOIN face_detections fd ON fd.id=pcf.face_detection_id
     JOIN media_items m ON m.id=fd.media_id
+    LEFT JOIN person_face_assignments pfa
+      ON pfa.face_detection_id=pcf.face_detection_id
     WHERE pcf.candidate_id=?
+      AND m.availability='AVAILABLE'
+      AND fd.input_sha256=m.sha256
+      AND pfa.face_detection_id IS NULL
     ORDER BY
       CASE WHEN pcf.face_detection_id=? THEN 0 ELSE 1 END,
       pcf.similarity DESC,
@@ -10016,8 +11251,16 @@ function listPersonCandidates(
       fe.vector_blob
     FROM person_candidate_faces pcf
     JOIN face_embeddings fe ON fe.face_detection_id=pcf.face_detection_id
+    JOIN face_detections fd ON fd.id=pcf.face_detection_id
+    JOIN media_items m ON m.id=fd.media_id
+    LEFT JOIN person_face_assignments pfa
+      ON pfa.face_detection_id=pcf.face_detection_id
     WHERE pcf.candidate_id=?
       AND fe.model_version='SFace 2021dec'
+      AND m.availability='AVAILABLE'
+      AND fd.input_sha256=m.sha256
+      AND fe.input_sha256=m.sha256
+      AND pfa.face_detection_id IS NULL
     ORDER BY pcf.face_detection_id
   `);
 
@@ -10030,6 +11273,10 @@ function listPersonCandidates(
       AND pfe.person_id=?
     LIMIT 1
   `);
+  const faceExclusionQuery = db.prepare(
+    "SELECT 1 FROM person_face_exclusions " +
+    "WHERE face_detection_id=? AND person_id=? LIMIT 1"
+  );
 
   const knownPersons = knownPersonCentroids();
   const ignoredIdentities = ignoredPersonVectorIdentities();
@@ -10052,9 +11299,17 @@ function listPersonCandidates(
 
   return candidates.map((candidate) => {
     const candidateId = Number(candidate.id);
-    const representativeFaceId = candidate.representative_face_id === null
+    const memberIds = memberSignatureQuery
+      .all(candidateId)
+      .map((row) => Number(row.face_detection_id));
+    const storedRepresentativeFaceId = candidate.representative_face_id === null
       ? null
       : Number(candidate.representative_face_id);
+    const representativeFaceId =
+      storedRepresentativeFaceId !== null &&
+      memberIds.includes(storedRepresentativeFaceId)
+        ? storedRepresentativeFaceId
+        : (memberIds[0] ?? null);
 
     const embeddingRows = embeddingQuery.all(candidateId);
     const vectors = embeddingRows.map((row) =>
@@ -10104,10 +11359,7 @@ function listPersonCandidates(
       id: candidateId,
       faceCount: Number(candidate.face_count),
       newestFaceId: Number(candidate.newest_face_id),
-      memberSignature: memberSignatureQuery
-        .all(candidateId)
-        .map((row) => Number(row.face_detection_id))
-        .join(","),
+      memberSignature: memberIds.join(","),
       representativeFaceId,
       averageSimilarity: Number(candidate.average_similarity),
       minSimilarity: Number(candidate.min_similarity),
@@ -10130,6 +11382,9 @@ function listPersonCandidates(
           const vector = vectorByFaceId.get(Number(row.face_detection_id));
           if (!vector) return [];
           return knownPersons
+            .filter((known) =>
+              !faceExclusionQuery.get(Number(row.face_detection_id), known.id)
+            )
             .map((known) => ({
               personId: known.id,
               personName: known.name,
@@ -10145,7 +11400,91 @@ function listPersonCandidates(
   }).filter((candidate) => candidate !== null);
 }
 
-function listPersons(sourceId: number) {
+function listPersonCandidateItems(
+  candidateId: number,
+  requestedLimit = 5000,
+  requestedOffset = 0
+) {
+  const limit = Math.max(1, Math.min(5000, Math.trunc(requestedLimit || 5000)));
+  const offset = Math.max(0, Math.trunc(requestedOffset || 0));
+  const candidate = db.prepare(
+    "SELECT representative_face_id FROM person_candidates WHERE id=?"
+  ).get(candidateId);
+  if (!candidate) return [];
+
+  const representativeFaceId =
+    candidate.representative_face_id === null ||
+    candidate.representative_face_id === undefined
+      ? -1
+      : Number(candidate.representative_face_id);
+
+  const rows = db.prepare(`
+    SELECT
+      pcf.face_detection_id,
+      fd.media_id,
+      m.relative_path,
+      pcf.similarity,
+      fd.x,
+      fd.y,
+      fd.width,
+      fd.height,
+      fe.dimension,
+      fe.vector_blob
+    FROM person_candidate_faces pcf
+    JOIN face_detections fd ON fd.id=pcf.face_detection_id
+    JOIN media_items m ON m.id=fd.media_id
+    JOIN face_embeddings fe ON fe.face_detection_id=pcf.face_detection_id
+    LEFT JOIN person_face_assignments pfa
+      ON pfa.face_detection_id=pcf.face_detection_id
+    WHERE pcf.candidate_id=?
+      AND m.availability='AVAILABLE'
+      AND fd.input_sha256=m.sha256
+      AND fe.input_sha256=m.sha256
+      AND fe.model_version='SFace 2021dec'
+      AND pfa.face_detection_id IS NULL
+    ORDER BY
+      CASE WHEN pcf.face_detection_id=? THEN 0 ELSE 1 END,
+      pcf.similarity DESC,
+      pcf.face_detection_id ASC
+    LIMIT ? OFFSET ?
+  `).all(candidateId, representativeFaceId, limit, offset);
+
+  const knownPersons = knownPersonCentroids();
+  const exclusionQuery = db.prepare(
+    "SELECT 1 FROM person_face_exclusions " +
+    "WHERE face_detection_id=? AND person_id=? LIMIT 1"
+  );
+
+  return rows.map((row) => {
+    const faceDetectionId = Number(row.face_detection_id);
+    const vector = vectorFromBlob(row.vector_blob, Number(row.dimension));
+    const suggestedPersons = knownPersons
+      .filter((known) => !exclusionQuery.get(faceDetectionId, known.id))
+      .map((known) => ({
+        personId: known.id,
+        personName: known.name,
+        similarity: cosineSimilarity(vector, known.vector),
+        representativeFaceId: known.representativeFaceId
+      }))
+      .filter((match) => match.similarity >= 0.48)
+      .sort((left, right) => right.similarity - left.similarity)
+      .slice(0, 5);
+
+    return {
+      faceDetectionId,
+      mediaId: Number(row.media_id),
+      relativePath: String(row.relative_path),
+      similarity: Number(row.similarity),
+      x: Number(row.x),
+      y: Number(row.y),
+      width: Number(row.width),
+      height: Number(row.height),
+      suggestedPersons
+    };
+  });
+}
+
+function listPersons(sourceId: number, summaryOnly = false) {
   const persons = db.prepare(`
     SELECT
       p.id,
@@ -10186,6 +11525,18 @@ function listPersons(sourceId: number) {
     )
     ORDER BY p.name COLLATE NOCASE, p.id
   `).all(sourceId, sourceId, sourceId, sourceId);
+
+  if (summaryOnly) {
+    return persons.map((row) => ({
+      id: Number(row.id),
+      name: String(row.name),
+      faceCount: Number(row.face_count),
+      representativeFaceId:
+        row.representative_face_id === null ? null : Number(row.representative_face_id),
+      faces: [],
+      videoHits: []
+    }));
+  }
 
   const faceQuery = db.prepare(`
     SELECT
@@ -10705,9 +12056,13 @@ function ignorePersonCandidate(
   const members = db.prepare(`
     SELECT pcf.face_detection_id
     FROM person_candidate_faces pcf
+    JOIN face_detections fd ON fd.id=pcf.face_detection_id
+    JOIN media_items m ON m.id=fd.media_id
     LEFT JOIN person_face_assignments pfa
       ON pfa.face_detection_id=pcf.face_detection_id
     WHERE pcf.candidate_id=?
+      AND m.availability='AVAILABLE'
+      AND fd.input_sha256=m.sha256
       AND pfa.face_detection_id IS NULL
     ORDER BY pcf.face_detection_id
   `).all(resolvedCandidateId);
@@ -11060,9 +12415,13 @@ function confirmPersonCandidate(
   const members = db.prepare(`
     SELECT pcf.face_detection_id, pcf.similarity
     FROM person_candidate_faces pcf
+    JOIN face_detections fd ON fd.id=pcf.face_detection_id
+    JOIN media_items m ON m.id=fd.media_id
     LEFT JOIN person_face_assignments pfa
       ON pfa.face_detection_id=pcf.face_detection_id
     WHERE pcf.candidate_id=?
+      AND m.availability='AVAILABLE'
+      AND fd.input_sha256=m.sha256
       AND pfa.face_detection_id IS NULL
     ORDER BY pcf.face_detection_id
   `).all(resolvedCandidateId);
@@ -12287,9 +13646,151 @@ function assignVideoFrameIdentityName(
   }
 }
 
+
+function assignVideoFrameIdentityNames(
+  mediaId: number,
+  rawAssignments: unknown
+) {
+  const assignments = Array.isArray(rawAssignments) ? rawAssignments : [];
+  if (assignments.length === 0) return { mediaId, affected: 0 };
+
+  const media = db.prepare(
+    "SELECT m.id,m.sha256,va.frames_json " +
+    "FROM media_items m " +
+    "JOIN media_video_analysis va ON va.media_id=m.id AND va.input_sha256=m.sha256 " +
+    "WHERE m.id=? AND m.availability='AVAILABLE'"
+  ).get(mediaId);
+  if (!media) throw new Error("Das Video oder seine Frameanalyse wurde nicht gefunden.");
+
+  let frames: any[] = [];
+  try {
+    const parsed = JSON.parse(String(media.frames_json ?? "[]"));
+    frames = Array.isArray(parsed) ? parsed : [];
+  } catch {
+    frames = [];
+  }
+
+  const frameMap = new Map<number, Record<string, unknown>>();
+  for (const entry of frames) {
+    if (!entry || typeof entry !== "object") continue;
+    const frame = entry as Record<string, unknown>;
+    frameMap.set(
+      Math.max(0, Math.trunc(Number(frame.timestampMs) || 0)),
+      frame
+    );
+  }
+
+  const findIdentity = db.prepare(
+    "SELECT id FROM persons WHERE name=? COLLATE NOCASE ORDER BY id LIMIT 1"
+  );
+  const insertPerson = db.prepare("INSERT INTO persons(name) VALUES(?)");
+  const touchPerson = db.prepare(
+    "UPDATE persons SET updated_at=CURRENT_TIMESTAMP WHERE id=?"
+  );
+  const findPet = db.prepare(
+    "SELECT id FROM pets WHERE name=? COLLATE NOCASE AND pet_class=? ORDER BY id LIMIT 1"
+  );
+  const insertPet = db.prepare(
+    "INSERT INTO pets(name,pet_class) VALUES(?,?)"
+  );
+  const touchPet = db.prepare(
+    "UPDATE pets SET updated_at=CURRENT_TIMESTAMP WHERE id=?"
+  );
+  const upsertOverride = db.prepare(
+    "INSERT INTO video_frame_identity_overrides(" +
+    "media_id,timestamp_ms,identity_kind,detection_index,pet_class,identity_id,updated_at" +
+    ") VALUES(?,?,?,?,?,?,CURRENT_TIMESTAMP) " +
+    "ON CONFLICT(media_id,timestamp_ms,identity_kind,detection_index) DO UPDATE SET " +
+    "pet_class=excluded.pet_class,identity_id=excluded.identity_id,updated_at=CURRENT_TIMESTAMP"
+  );
+
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    let affected = 0;
+
+    for (const rawAssignment of assignments) {
+      if (!rawAssignment || typeof rawAssignment !== "object") continue;
+      const assignment = rawAssignment as Record<string, unknown>;
+      const kind =
+        assignment.kind === "pet"
+          ? "pet"
+          : assignment.kind === "person"
+            ? "person"
+            : null;
+      if (!kind) continue;
+
+      const name =
+        typeof assignment.name === "string" ? assignment.name.trim() : "";
+      if (!name || name.length > 120) continue;
+
+      const timestampMs = Math.max(
+        0,
+        Math.trunc(Number(assignment.timestampMs) || 0)
+      );
+      const detectionIndex = Math.max(
+        0,
+        Math.trunc(Number(assignment.detectionIndex) || 0)
+      );
+      const petClass =
+        kind === "pet"
+          ? String(assignment.petClass) === "cat" ? "cat" : "dog"
+          : null;
+
+      const frame = frameMap.get(timestampMs);
+      const detections = frame
+        ? kind === "person"
+          ? Array.isArray(frame.persons) ? frame.persons : []
+          : Array.isArray(frame.pets) ? frame.pets : []
+        : [];
+      const exists = detections.some((entry, fallbackIndex) => {
+        if (!entry || typeof entry !== "object") return false;
+        const detection = entry as Record<string, unknown>;
+        const index = Math.max(
+          0,
+          Math.trunc(Number(detection.detectionIndex) || fallbackIndex)
+        );
+        return index === detectionIndex;
+      });
+      if (!exists) continue;
+
+      let identityId: number;
+      if (kind === "person") {
+        const existing = findIdentity.get(name);
+        identityId = existing
+          ? Number(existing.id)
+          : Number(insertPerson.run(name).lastInsertRowid);
+        touchPerson.run(identityId);
+      } else {
+        const existing = findPet.get(name, petClass);
+        identityId = existing
+          ? Number(existing.id)
+          : Number(insertPet.run(name, petClass).lastInsertRowid);
+        touchPet.run(identityId);
+      }
+
+      upsertOverride.run(
+        mediaId,
+        timestampMs,
+        kind,
+        detectionIndex,
+        petClass,
+        identityId
+      );
+      affected += 1;
+    }
+
+    if (affected > 0) rebuildVideoIdentityTracks(mediaId);
+    db.exec("COMMIT");
+    return { mediaId, affected };
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+}
+
 function reanalyzeMedia(mediaId: number) {
   const media = db.prepare(`
-    SELECT id, source_id, sha256, availability
+    SELECT id, source_id, sha256, availability, extension
     FROM media_items
     WHERE id=?
   `).get(mediaId);
@@ -12303,6 +13804,7 @@ function reanalyzeMedia(mediaId: number) {
 
   const sourceId = Number(media.source_id);
   const sha256 = String(media.sha256);
+  const videoExtension = VIDEO_EXTENSIONS.has(String(media.extension).toLowerCase());
   const modules = [
     "file-probe-v1",
     "thumbnail-v1",
@@ -12354,25 +13856,28 @@ function reanalyzeMedia(mediaId: number) {
       deleteFrom(table);
     }
 
-    // Durch CASCADE sind Embeddings, Kandidaten-Zuordnungen und bestätigte
-    // Detektionszuordnungen des Mediums ebenfalls verschwunden. Leere
-    // Kandidatengruppen anschließend entfernen und Clusterstände invalidieren.
-    db.prepare(`
-      DELETE FROM person_candidates
-      WHERE NOT EXISTS (
-        SELECT 1 FROM person_candidate_faces pcf
-        WHERE pcf.candidate_id=person_candidates.id
-      )
-    `).run();
-    db.prepare(`
-      DELETE FROM pet_candidates
-      WHERE NOT EXISTS (
-        SELECT 1 FROM pet_candidate_items pci
-        WHERE pci.candidate_id=pet_candidates.id
-      )
-    `).run();
-    db.prepare("DELETE FROM person_cluster_runs WHERE source_id=?").run(sourceId);
-    db.prepare("DELETE FROM pet_cluster_runs WHERE source_id=?").run(sourceId);
+    // Videos haben keine normalen face_detections/pet_fused_detections
+    // Zuordnungen. Teure globale Kandidatenbereinigung und Gruppen-Refresh
+    // sind nur für Bilder notwendig. So blockiert ein Video-Reset nicht die
+    // gesamte Personen-/Haustiergruppierung.
+    if (!videoExtension) {
+      db.prepare(`
+        DELETE FROM person_candidates
+        WHERE NOT EXISTS (
+          SELECT 1 FROM person_candidate_faces pcf
+          WHERE pcf.candidate_id=person_candidates.id
+        )
+      `).run();
+      db.prepare(`
+        DELETE FROM pet_candidates
+        WHERE NOT EXISTS (
+          SELECT 1 FROM pet_candidate_items pci
+          WHERE pci.candidate_id=pet_candidates.id
+        )
+      `).run();
+      db.prepare("DELETE FROM person_cluster_runs WHERE source_id=?").run(sourceId);
+      db.prepare("DELETE FROM pet_cluster_runs WHERE source_id=?").run(sourceId);
+    }
 
     db.prepare("DELETE FROM analysis_jobs WHERE media_id=?").run(mediaId);
 
@@ -12630,6 +14135,12 @@ async function dispatch(method: CatalogMethod, payload: Record<string, unknown> 
       return disableSource(asNumber(payload.sourceId, "sourceId"));
     case "getStats":
       return getStats(asNumber(payload.sourceId, "sourceId"));
+    case "getIdentityCandidateSummaryStats":
+      return getIdentityCandidateSummaryStats(
+        asNumber(payload.sourceId, "sourceId")
+      );
+    case "getRemoteSummary":
+      return getRemoteSummary();
     case "listMedia":
       return listMedia(
         asNumber(payload.sourceId, "sourceId"),
@@ -12706,7 +14217,10 @@ async function dispatch(method: CatalogMethod, payload: Record<string, unknown> 
           : asNumber(payload.sourceId, "sourceId"),
         payload.limit === undefined ? 500 : asNumber(payload.limit, "limit"),
         payload.filter as SearchFilter | undefined,
-        payload.semantic as SemanticTextEmbedding | null | undefined
+        payload.semantic as SemanticTextEmbedding | null | undefined,
+        payload.mediaKind === "image" || payload.mediaKind === "video"
+          ? payload.mediaKind
+          : "all"
       );
     case "listDuplicateGroups":
       return listDuplicateGroups(
@@ -12730,6 +14244,10 @@ async function dispatch(method: CatalogMethod, payload: Record<string, unknown> 
       );
     case "getPipelineQueueStats":
       return getPipelineQueueStats();
+    case "getAnalysisHistory":
+      return getAnalysisHistory(
+        payload.days === undefined ? 30 : asNumber(payload.days, "days")
+      );
     case "getPetDetectionQueueStats":
       return getPetDetectionQueueStats(
         payload.sourceId === undefined ? undefined : asNumber(payload.sourceId, "sourceId")
@@ -12741,6 +14259,14 @@ async function dispatch(method: CatalogMethod, payload: Record<string, unknown> 
         payload.sourceId === undefined ? undefined : asNumber(payload.sourceId, "sourceId"),
         payload.limit === undefined ? 200 : asNumber(payload.limit, "limit")
       );
+    case "getAnalysisErrorOverview":
+      return getAnalysisErrorOverview(
+        payload.sourceId === undefined ? undefined : asNumber(payload.sourceId,"sourceId")
+      );
+    case "listAnalysisErrorPage":
+      return listAnalysisErrorPage(payload);
+    case "retryErrorSample":
+      return retryErrorSample(payload);
     case "countAnalysisErrors":
       return countAnalysisErrors(
         payload.sourceId === undefined ? undefined : asNumber(payload.sourceId, "sourceId")
@@ -12859,6 +14385,16 @@ async function dispatch(method: CatalogMethod, payload: Record<string, unknown> 
       return autoAssignKnownPetCandidates(
         asNumber(payload.sourceId, "sourceId")
       );
+    case "listUngroupedPetDetections":
+      return listUngroupedPetDetections(
+        asNumber(payload.sourceId, "sourceId"),
+        payload.limit === undefined ? 1000 : asNumber(payload.limit, "limit")
+      );
+    case "rejectPetDetectionSuggestion":
+      return rejectPetDetectionSuggestion(
+        asNumber(payload.petDetectionId, "petDetectionId"),
+        asNumber(payload.petId, "petId")
+      );
     case "listPetCandidates":
       return listPetCandidates(
         asNumber(payload.sourceId, "sourceId"),
@@ -12868,10 +14404,20 @@ async function dispatch(method: CatalogMethod, payload: Record<string, unknown> 
           : Number(payload.ignoreDefiniteThreshold),
         payload.ignoreDoubtThreshold === undefined
           ? 0.60
-          : Number(payload.ignoreDoubtThreshold)
+          : Number(payload.ignoreDoubtThreshold),
+        payload.summaryOnly === true
+      );
+    case "listPetCandidateItems":
+      return listPetCandidateItems(
+        asNumber(payload.candidateId, "candidateId"),
+        payload.limit === undefined ? 5000 : asNumber(payload.limit, "limit"),
+        payload.offset === undefined ? 0 : asNumber(payload.offset, "offset")
       );
     case "listPets":
-      return listPets(asNumber(payload.sourceId, "sourceId"));
+      return listPets(
+        asNumber(payload.sourceId, "sourceId"),
+        payload.summaryOnly === true
+      );
     case "confirmPetCandidate":
       return confirmPetCandidate(
         asNumber(payload.candidateId, "candidateId"),
@@ -12980,6 +14526,16 @@ async function dispatch(method: CatalogMethod, payload: Record<string, unknown> 
           : "person-complete-link-v6-ignore",
         payload.clusters
       );
+    case "listUngroupedPersonDetections":
+      return listUngroupedPersonDetections(
+        asNumber(payload.sourceId, "sourceId"),
+        payload.limit === undefined ? 1000 : asNumber(payload.limit, "limit")
+      );
+    case "rejectPersonDetectionSuggestion":
+      return rejectPersonDetectionSuggestion(
+        asNumber(payload.faceDetectionId, "faceDetectionId"),
+        asNumber(payload.personId, "personId")
+      );
     case "listPersonCandidates":
       return listPersonCandidates(
         asNumber(payload.sourceId, "sourceId"),
@@ -12989,10 +14545,20 @@ async function dispatch(method: CatalogMethod, payload: Record<string, unknown> 
           : Number(payload.ignoreDefiniteThreshold),
         payload.ignoreDoubtThreshold === undefined
           ? 0.55
-          : Number(payload.ignoreDoubtThreshold)
+          : Number(payload.ignoreDoubtThreshold),
+        payload.summaryOnly === true
+      );
+    case "listPersonCandidateItems":
+      return listPersonCandidateItems(
+        asNumber(payload.candidateId, "candidateId"),
+        payload.limit === undefined ? 5000 : asNumber(payload.limit, "limit"),
+        payload.offset === undefined ? 0 : asNumber(payload.offset, "offset")
       );
     case "listPersons":
-      return listPersons(asNumber(payload.sourceId, "sourceId"));
+      return listPersons(
+        asNumber(payload.sourceId, "sourceId"),
+        payload.summaryOnly === true
+      );
     case "assignPersonCandidateSelection":
       return assignPersonCandidateSelection(
         asNumber(payload.candidateId, "candidateId"),
@@ -13070,6 +14636,11 @@ async function dispatch(method: CatalogMethod, payload: Record<string, unknown> 
         asNumber(payload.detectionIndex, "detectionIndex"),
         payload.petClass,
         payload.name
+      );
+    case "assignVideoFrameIdentityNames":
+      return assignVideoFrameIdentityNames(
+        asNumber(payload.mediaId, "mediaId"),
+        payload.assignments
       );
     case "reanalyzeMedia":
       return reanalyzeMedia(asNumber(payload.mediaId, "mediaId"));

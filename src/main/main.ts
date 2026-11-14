@@ -1,6 +1,8 @@
 import path from "node:path";
+import { createReadStream } from "node:fs";
+import { createServer, type Server as HttpServer } from "node:http";
 import { pathToFileURL } from "node:url";
-import { readFile, readdir, rm } from "node:fs/promises";
+import { readFile, readdir, rm, stat } from "node:fs/promises";
 import { app, BrowserWindow, clipboard, dialog, ipcMain, net, protocol, shell, type OpenDialogOptions } from "electron";
 import { CatalogService } from "./catalog-service";
 import { AnalysisService } from "./analysis-service";
@@ -11,9 +13,14 @@ import { getVideoFrameJpeg, pruneVideoFrameCache } from "./video-frame-service";
 import { PersonService } from "./person-service";
 import { PetService } from "./pet-service";
 import { CatalogWatchService } from "./catalog-watch-service";
+import { REMOTE_START_PAGE } from "./remote-web-page";
 import { IMAGE_EXTENSIONS, VIDEO_EXTENSIONS, IGNORED_DIRECTORY_NAMES } from "../catalog/constants";
 import type {
   AnalysisErrorRecord,
+  AnalysisErrorOverview,
+  AnalysisErrorPage,
+  AnalysisErrorPageFilter,
+  DiagnosticLogEntry,
   AnalysisQueueStats,
   AssignPersonSelectionResult,
   AnalysisWorkerStatus,
@@ -78,6 +85,8 @@ let catalogWatchService: CatalogWatchService | null = null;
 let thumbnailCacheRoot = "";
 let personRefreshTimer: NodeJS.Timeout | null = null;
 let personRefreshRunning = false;
+let personRefreshRescheduleRequested = false;
+let personRefreshForceRequested = false;
 let lifeAreaRuleRefreshTimer: NodeJS.Timeout | null = null;
 const groupedFaceEmbeddingCounts = new Map<number, number>();
 const groupedPetEmbeddingCounts = new Map<number, number>();
@@ -90,6 +99,872 @@ let qwenBenchmarkPreparing: Promise<void> | null = null;
 let backgroundPaused = false;
 let backgroundPauseChanging = false;
 const mediaStreamPathCache = new Map<number, string>();
+
+const REMOTE_WEB_PORT = 8787;
+const REMOTE_WEB_HOST = "127.0.0.1";
+let remoteWebServer: HttpServer | null = null;
+
+const REMOTE_WEB_SECURITY_HEADERS = {
+  "Cache-Control": "no-store",
+  "X-Content-Type-Options": "nosniff",
+  "Referrer-Policy": "strict-origin-when-cross-origin",
+  "Content-Security-Policy":
+    "default-src 'none'; connect-src 'self'; img-src 'self' data: https://tile.openstreetmap.org; media-src 'self'; style-src 'unsafe-inline' https://unpkg.com; script-src 'unsafe-inline' https://unpkg.com; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"
+} as const;
+
+function writeRemoteJson(
+  response: import("node:http").ServerResponse,
+  statusCode: number,
+  payload: unknown
+): void {
+  response.writeHead(statusCode, {
+    ...REMOTE_WEB_SECURITY_HEADERS,
+    "Content-Type": "application/json; charset=utf-8"
+  });
+  response.end(JSON.stringify(payload));
+}
+
+async function readRemoteJsonBody(
+  request: import("node:http").IncomingMessage,
+  maxBytes = 4096
+): Promise<unknown> {
+  let body = "";
+
+  for await (const chunk of request) {
+    body += Buffer.isBuffer(chunk) ? chunk.toString("utf8") : String(chunk);
+    if (Buffer.byteLength(body, "utf8") > maxBytes) {
+      throw new Error("Request body too large");
+    }
+  }
+
+  if (!body.trim()) return {};
+  return JSON.parse(body);
+}
+
+function writeRemoteBytes(
+  response: import("node:http").ServerResponse,
+  statusCode: number,
+  bytes: Buffer,
+  contentType: string,
+  cacheControl = "no-store"
+): void {
+  response.writeHead(statusCode, {
+    ...REMOTE_WEB_SECURITY_HEADERS,
+    "Cache-Control": cacheControl,
+    "Content-Type": contentType,
+    "Content-Length": String(bytes.byteLength)
+  });
+  response.end(bytes);
+}
+
+function remoteMediaContentType(filePath: string): string {
+  switch (path.extname(filePath).toLowerCase()) {
+    case ".jpg":
+    case ".jpeg": return "image/jpeg";
+    case ".png": return "image/png";
+    case ".webp": return "image/webp";
+    case ".gif": return "image/gif";
+    case ".heic":
+    case ".heif": return "image/heic";
+    case ".mp4":
+    case ".m4v": return "video/mp4";
+    case ".mov": return "video/quicktime";
+    case ".webm": return "video/webm";
+    case ".avi": return "video/x-msvideo";
+    case ".mkv": return "video/x-matroska";
+    case ".mts":
+    case ".m2ts": return "video/mp2t";
+    default: return "application/octet-stream";
+  }
+}
+
+async function streamRemoteMedia(
+  request: import("node:http").IncomingMessage,
+  response: import("node:http").ServerResponse,
+  mediaId: number,
+  download: boolean
+): Promise<void> {
+  if (!catalog) throw new Error("Katalog ist noch nicht bereit.");
+
+  const info = await catalog.request<MediaPreviewInfo | null>(
+    "getMediaPreviewInfo",
+    { mediaId }
+  );
+  if (!info) {
+    writeRemoteJson(response, 404, { ok: false, error: "Medium nicht gefunden." });
+    return;
+  }
+
+  const fileStat = await stat(info.absolutePath);
+  if (!fileStat.isFile()) {
+    writeRemoteJson(response, 404, { ok: false, error: "Medium ist keine Datei." });
+    return;
+  }
+
+  const size = fileStat.size;
+  const contentType = remoteMediaContentType(info.absolutePath);
+  const fileName = path.basename(info.absolutePath);
+  const disposition = download
+    ? "attachment; filename*=UTF-8''" + encodeURIComponent(fileName)
+    : "inline";
+  const range = request.headers.range;
+
+  if (range) {
+    const match = /^bytes=(\d*)-(\d*)$/.exec(range.trim());
+    if (!match) {
+      response.writeHead(416, {
+        ...REMOTE_WEB_SECURITY_HEADERS,
+        "Content-Range": "bytes */" + size
+      });
+      response.end();
+      return;
+    }
+
+    let start: number;
+    let end: number;
+    if (!match[1] && match[2]) {
+      const suffix = Math.max(1, Math.trunc(Number(match[2])));
+      start = Math.max(0, size - suffix);
+      end = size - 1;
+    } else {
+      start = Math.max(0, Math.trunc(Number(match[1]) || 0));
+      end = match[2]
+        ? Math.min(size - 1, Math.trunc(Number(match[2])))
+        : size - 1;
+    }
+
+    if (start >= size || end < start) {
+      response.writeHead(416, {
+        ...REMOTE_WEB_SECURITY_HEADERS,
+        "Content-Range": "bytes */" + size
+      });
+      response.end();
+      return;
+    }
+
+    response.writeHead(206, {
+      ...REMOTE_WEB_SECURITY_HEADERS,
+      "Content-Type": contentType,
+      "Content-Disposition": disposition,
+      "Accept-Ranges": "bytes",
+      "Content-Range": "bytes " + start + "-" + end + "/" + size,
+      "Content-Length": String(end - start + 1)
+    });
+    if (request.method === "HEAD") {
+      response.end();
+      return;
+    }
+    const stream = createReadStream(info.absolutePath, { start, end });
+    stream.on("error", () => response.destroy());
+    stream.pipe(response);
+    return;
+  }
+
+  response.writeHead(200, {
+    ...REMOTE_WEB_SECURITY_HEADERS,
+    "Content-Type": contentType,
+    "Content-Disposition": disposition,
+    "Accept-Ranges": "bytes",
+    "Content-Length": String(size)
+  });
+  if (request.method === "HEAD") {
+    response.end();
+    return;
+  }
+  const stream = createReadStream(info.absolutePath);
+  stream.on("error", () => response.destroy());
+  stream.pipe(response);
+}
+
+function startRemoteWebServer(): Promise<void> {
+  if (remoteWebServer) return Promise.resolve();
+
+  return new Promise<void>((resolve, reject) => {
+    const server = createServer(async (request, response) => {
+      const method = request.method ?? "GET";
+      let requestUrl: URL;
+
+      try {
+        requestUrl = new URL(request.url ?? "/", "http://localhost");
+      } catch {
+        response.writeHead(400, {
+          ...REMOTE_WEB_SECURITY_HEADERS,
+          "Content-Type": "text/plain; charset=utf-8"
+        });
+        response.end("Bad Request");
+        return;
+      }
+
+      const pathname = requestUrl.pathname;
+
+      try {
+        if ((method === "GET" || method === "HEAD") && pathname === "/") {
+          response.writeHead(200, {
+            ...REMOTE_WEB_SECURITY_HEADERS,
+            "Content-Type": "text/html; charset=utf-8"
+          });
+          response.end(method === "HEAD" ? undefined : REMOTE_START_PAGE);
+          return;
+        }
+
+        if ((method === "GET" || method === "HEAD") && pathname === "/api/remote-status") {
+          const payload = {
+            ok: true,
+            app: "Image Sortierer",
+            serverTime: new Date().toISOString(),
+            catalogReady: Boolean(catalog),
+            background: backgroundPauseState(),
+            analysis: analysis?.getStatus() ?? null,
+            identityGrouping: {
+              running: personRefreshRunning,
+              queued:
+                Boolean(personRefreshTimer) ||
+                personRefreshRescheduleRequested ||
+                personRefreshForceRequested
+            },
+            pipeline: pipelineStatus
+          };
+
+          if (method === "HEAD") {
+            response.writeHead(200, {
+              ...REMOTE_WEB_SECURITY_HEADERS,
+              "Content-Type": "application/json; charset=utf-8"
+            });
+            response.end();
+          } else {
+            writeRemoteJson(response, 200, payload);
+          }
+          return;
+        }
+
+        if ((method === "GET" || method === "HEAD") && pathname === "/api/remote-summary") {
+          if (!catalog) throw new Error("Katalog ist noch nicht bereit.");
+          const summary = await catalog.request<Pick<
+            CatalogStats,
+            "total" | "available" | "missing" | "persons" | "pets" | "lastScan"
+          >>("getRemoteSummary");
+          if (method === "HEAD") {
+            response.writeHead(200, {
+              ...REMOTE_WEB_SECURITY_HEADERS,
+              "Content-Type": "application/json; charset=utf-8"
+            });
+            response.end();
+          } else {
+            writeRemoteJson(response, 200, summary);
+          }
+          return;
+        }
+
+        if ((method === "GET" || method === "HEAD") && pathname === "/api/sources") {
+          if (!catalog) throw new Error("Katalog ist noch nicht bereit.");
+          const sources = await catalog.request<SourceRecord[]>("listSources");
+          if (method === "HEAD") {
+            response.writeHead(200, {
+              ...REMOTE_WEB_SECURITY_HEADERS,
+              "Content-Type": "application/json; charset=utf-8"
+            });
+            response.end();
+          } else {
+            writeRemoteJson(response, 200, sources);
+          }
+          return;
+        }
+
+        if (method === "GET" && pathname === "/api/media") {
+          if (!catalog) throw new Error("Katalog ist noch nicht bereit.");
+          const sourceId = Math.trunc(Number(requestUrl.searchParams.get("sourceId")));
+          if (!Number.isSafeInteger(sourceId) || sourceId <= 0) {
+            writeRemoteJson(response, 400, { ok: false, error: "Ungültige Quelle." });
+            return;
+          }
+          const limit = Math.max(
+            1,
+            Math.min(2000, Math.trunc(Number(requestUrl.searchParams.get("limit")) || 300))
+          );
+          const rawKind = requestUrl.searchParams.get("kind");
+          const mediaKind =
+            rawKind === "image" || rawKind === "video" ? rawKind : "all";
+          const personId = Math.trunc(Number(requestUrl.searchParams.get("personId")));
+          const petId = Math.trunc(Number(requestUrl.searchParams.get("petId")));
+          const filter: SearchFilter = {
+            personIds: Number.isSafeInteger(personId) && personId > 0 ? [personId] : [],
+            petIds: Number.isSafeInteger(petId) && petId > 0 ? [petId] : [],
+            objectLabels: [],
+            minDogs: 0,
+            minCats: 0,
+            semanticQuery: "",
+            semanticMinProbability: 0
+          };
+          const rows = await catalog.request<MediaRecord[]>("searchMedia", {
+            sourceId,
+            limit,
+            mediaKind,
+            filter
+          });
+          for (const row of rows) {
+            if (!row.sourcePath) continue;
+            mediaStreamPathCache.set(
+              row.id,
+              path.resolve(row.sourcePath, row.relativePath)
+            );
+          }
+          writeRemoteJson(response, 200, rows);
+          return;
+        }
+
+        if (method === "GET" && pathname === "/api/geo-media") {
+          if (!catalog) throw new Error("Katalog ist noch nicht bereit.");
+          const sourceId = Math.trunc(Number(requestUrl.searchParams.get("sourceId")));
+          const payload =
+            Number.isSafeInteger(sourceId) && sourceId > 0 ? { sourceId } : {};
+          const rows = await catalog.request<GeoMediaPoint[]>("listGeoMedia", payload);
+          writeRemoteJson(response, 200, rows);
+          return;
+        }
+
+        const detailMatch = /^\/api\/media\/(\d+)\/details$/.exec(pathname);
+        if (method === "GET" && detailMatch) {
+          if (!catalog) throw new Error("Katalog ist noch nicht bereit.");
+          const mediaId = Number(detailMatch[1]);
+          const details = await catalog.request<MediaDetails | null>(
+            "getMediaDetails",
+            { mediaId }
+          );
+          if (!details) {
+            writeRemoteJson(response, 404, { ok: false, error: "Medium nicht gefunden." });
+            return;
+          }
+          mediaStreamPathCache.set(mediaId, details.absolutePath);
+          writeRemoteJson(response, 200, details);
+          return;
+        }
+
+        const thumbMatch = /^\/api\/media\/(\d+)\/thumbnail$/.exec(pathname);
+        if (method === "GET" && thumbMatch) {
+          if (!catalog) throw new Error("Katalog ist noch nicht bereit.");
+          const mediaId = Number(thumbMatch[1]);
+          const info = await catalog.request<ThumbnailInfo | null>(
+            "getThumbnailInfo",
+            { mediaId }
+          );
+          if (!info || !isInsideDirectory(info.path, thumbnailCacheRoot)) {
+            writeRemoteJson(response, 404, { ok: false, error: "Thumbnail nicht gefunden." });
+            return;
+          }
+          const bytes = await readFile(info.path);
+          writeRemoteBytes(response, 200, bytes, "image/jpeg", "private, max-age=300");
+          return;
+        }
+
+        const previewMatch = /^\/api\/media\/(\d+)\/preview$/.exec(pathname);
+        if (method === "GET" && previewMatch) {
+          if (!catalog || !thumbnailService) throw new Error("Vorschau ist noch nicht bereit.");
+          const mediaId = Number(previewMatch[1]);
+          const info = await catalog.request<MediaPreviewInfo | null>(
+            "getMediaPreviewInfo",
+            { mediaId }
+          );
+          if (!info) {
+            writeRemoteJson(response, 404, { ok: false, error: "Medium nicht gefunden." });
+            return;
+          }
+          const preview = await thumbnailService.generatePreview(
+            info.absolutePath,
+            info.inputSha256
+          );
+          if (!isInsideDirectory(preview.path, thumbnailCacheRoot)) {
+            writeRemoteJson(response, 403, { ok: false, error: "Vorschau-Pfad abgelehnt." });
+            return;
+          }
+          writeRemoteBytes(response, 200, await readFile(preview.path), "image/jpeg");
+          return;
+        }
+
+        const faceMatch = /^\/api\/face\/(\d+)$/.exec(pathname);
+        if (method === "GET" && faceMatch) {
+          if (!catalog || !thumbnailService) throw new Error("Gesichtsvorschau ist noch nicht bereit.");
+          const faceDetectionId = Number(faceMatch[1]);
+          const info = await catalog.request<FaceCropInfo | null>(
+            "getFaceCropInfo",
+            { faceDetectionId }
+          );
+          if (!info) {
+            writeRemoteJson(response, 404, { ok: false, error: "Gesicht nicht gefunden." });
+            return;
+          }
+          const crop = await thumbnailService.generateFaceCrop(
+            info.absolutePath,
+            info.inputSha256,
+            info.faceDetectionId,
+            { x: info.x, y: info.y, width: info.width, height: info.height }
+          );
+          if (!isInsideDirectory(crop.path, thumbnailCacheRoot)) {
+            writeRemoteJson(response, 403, { ok: false, error: "Gesichtsvorschau abgelehnt." });
+            return;
+          }
+          writeRemoteBytes(response, 200, await readFile(crop.path), "image/jpeg");
+          return;
+        }
+
+        const petMatch = /^\/api\/pet\/(\d+)$/.exec(pathname);
+        if (method === "GET" && petMatch) {
+          if (!catalog || !thumbnailService) throw new Error("Tiervorschau ist noch nicht bereit.");
+          const petDetectionId = Number(petMatch[1]);
+          const info = await catalog.request<PetCropInfo | null>(
+            "getPetCropInfo",
+            { petDetectionId }
+          );
+          if (!info) {
+            writeRemoteJson(response, 404, { ok: false, error: "Tier nicht gefunden." });
+            return;
+          }
+          const crop = await thumbnailService.generatePetCrop(
+            info.absolutePath,
+            info.inputSha256,
+            info.petDetectionId,
+            { x: info.x, y: info.y, width: info.width, height: info.height }
+          );
+          if (!isInsideDirectory(crop.path, thumbnailCacheRoot)) {
+            writeRemoteJson(response, 403, { ok: false, error: "Tiervorschau abgelehnt." });
+            return;
+          }
+          writeRemoteBytes(response, 200, await readFile(crop.path), "image/jpeg");
+          return;
+        }
+
+        const frameMatch = /^\/api\/video\/(\d+)\/frame$/.exec(pathname);
+        if (method === "GET" && frameMatch) {
+          if (!catalog) throw new Error("Katalog ist noch nicht bereit.");
+          const mediaId = Number(frameMatch[1]);
+          const timestampMs = Number(requestUrl.searchParams.get("ms"));
+          const width = Math.max(
+            160,
+            Math.min(1600, Math.trunc(Number(requestUrl.searchParams.get("width")) || 720))
+          );
+          const frameIndexRaw = requestUrl.searchParams.get("i");
+          const frameIndex = frameIndexRaw === null ? null : Number(frameIndexRaw);
+          const frameHash = requestUrl.searchParams.get("h");
+          if (
+            !Number.isSafeInteger(timestampMs) ||
+            timestampMs < 0 ||
+            (frameIndex !== null && (!Number.isSafeInteger(frameIndex) || frameIndex < 0)) ||
+            (frameHash !== null && !/^[a-f0-9]{32}$/i.test(frameHash))
+          ) {
+            writeRemoteJson(response, 400, { ok: false, error: "Ungültige Szenenbild-Parameter." });
+            return;
+          }
+          const info = await catalog.request<MediaPreviewInfo | null>(
+            "getMediaPreviewInfo",
+            { mediaId }
+          );
+          if (!info) {
+            writeRemoteJson(response, 404, { ok: false, error: "Video nicht gefunden." });
+            return;
+          }
+          const jpg = await getVideoFrameJpeg(
+            info.absolutePath,
+            info.inputSha256,
+            timestampMs,
+            frameIndex,
+            frameHash,
+            width,
+            thumbnailCacheRoot
+          );
+          writeRemoteBytes(response, 200, jpg, "image/jpeg");
+          return;
+        }
+
+        const contentMatch = /^\/api\/media\/(\d+)\/content$/.exec(pathname);
+        if ((method === "GET" || method === "HEAD") && contentMatch) {
+          await streamRemoteMedia(
+            request,
+            response,
+            Number(contentMatch[1]),
+            requestUrl.searchParams.get("download") === "1"
+          );
+          return;
+        }
+
+        if (method === "GET" && pathname === "/api/identity-options") {
+          if (!catalog) throw new Error("Katalog ist noch nicht bereit.");
+          const facets = await catalog.request<SearchFacets>("getSearchFacets");
+          writeRemoteJson(response, 200, {
+            people: facets.persons,
+            pets: facets.pets
+          });
+          return;
+        }
+
+        if (method === "GET" && pathname === "/api/people") {
+          if (!personService) throw new Error("Personenerkennung ist noch nicht bereit.");
+          const limit = Math.max(
+            1,
+            Math.min(50, Math.trunc(Number(requestUrl.searchParams.get("limit")) || 10))
+          );
+          const offset = Math.max(
+            0,
+            Math.trunc(Number(requestUrl.searchParams.get("offset")) || 0)
+          );
+          const forceRefresh = requestUrl.searchParams.get("refresh") === "1";
+          if (forceRefresh) schedulePersonRefresh(true, 0);
+          const overview = await personService.getCombinedOverview(
+            false,
+            limit,
+            offset,
+            false,
+            true,
+            true
+          );
+          writeRemoteJson(response, 200, overview);
+          return;
+        }
+
+        if (method === "GET" && pathname === "/api/pets") {
+          if (!petService) throw new Error("Tiererkennung ist noch nicht bereit.");
+          const limit = Math.max(
+            1,
+            Math.min(50, Math.trunc(Number(requestUrl.searchParams.get("limit")) || 10))
+          );
+          const offset = Math.max(
+            0,
+            Math.trunc(Number(requestUrl.searchParams.get("offset")) || 0)
+          );
+          const forceRefresh = requestUrl.searchParams.get("refresh") === "1";
+          if (forceRefresh) schedulePersonRefresh(true, 0);
+          const overview = await petService.getCombinedOverview(
+            false,
+            limit,
+            offset,
+            false,
+            true,
+            true
+          );
+          writeRemoteJson(response, 200, overview);
+          return;
+        }
+
+        const peopleItemsMatch = /^\/api\/people\/(\d+)\/items$/.exec(pathname);
+        if (method === "GET" && peopleItemsMatch) {
+          if (!personService) throw new Error("Personenerkennung ist noch nicht bereit.");
+          const limit = Math.max(
+            1,
+            Math.min(5000, Math.trunc(Number(requestUrl.searchParams.get("limit")) || 5000))
+          );
+          const offset = Math.max(
+            0,
+            Math.trunc(Number(requestUrl.searchParams.get("offset")) || 0)
+          );
+          const items = await personService.listCandidateItems(
+            Number(peopleItemsMatch[1]),
+            limit,
+            offset
+          );
+          writeRemoteJson(response, 200, { items });
+          return;
+        }
+
+        if (method === "POST" && pathname === "/api/people/confirm") {
+          if (!personService) throw new Error("Personenerkennung ist noch nicht bereit.");
+          const body = await readRemoteJsonBody(request) as Record<string, unknown>;
+          const result = await personService.confirmCandidate(
+            Number(body.candidateId),
+            String(body.name ?? ""),
+            Number(body.fallbackFaceDetectionId) || undefined,
+            Number(body.expectedFaceCount) || undefined,
+            typeof body.expectedMemberSignature === "string"
+              ? body.expectedMemberSignature
+              : undefined
+          );
+          schedulePersonRefresh();
+          writeRemoteJson(response, 200, result);
+          return;
+        }
+
+        if (method === "POST" && pathname === "/api/people/assign-selection") {
+          if (!personService) throw new Error("Personenerkennung ist noch nicht bereit.");
+          const body = await readRemoteJsonBody(request) as Record<string, unknown>;
+          const faceDetectionIds = Array.isArray(body.detectionIds)
+            ? body.detectionIds
+                .map((value) => Number(value))
+                .filter((value) => Number.isSafeInteger(value) && value > 0)
+            : [];
+          const name = String(body.name ?? "").trim();
+          if (faceDetectionIds.length === 0 || !name) {
+            writeRemoteJson(response, 400, {
+              ok: false,
+              error: "Keine gültigen Gesichter oder kein Name ausgewählt."
+            });
+            return;
+          }
+          const result = await personService.assignCandidateSelection(
+            Number(body.candidateId),
+            faceDetectionIds,
+            name
+          );
+          schedulePersonRefresh();
+          writeRemoteJson(response, 200, result);
+          return;
+        }
+
+        if (method === "POST" && pathname === "/api/people/ignore") {
+          if (!personService) throw new Error("Personenerkennung ist noch nicht bereit.");
+          const body = await readRemoteJsonBody(request) as Record<string, unknown>;
+          const result = await personService.ignoreCandidate(
+            Number(body.candidateId),
+            Number(body.fallbackFaceDetectionId) || undefined,
+            Number(body.expectedFaceCount) || undefined,
+            typeof body.expectedMemberSignature === "string"
+              ? body.expectedMemberSignature
+              : undefined,
+            Number(body.ignoredIdentityId) || undefined
+          );
+          schedulePersonRefresh();
+          writeRemoteJson(response, 200, result);
+          return;
+        }
+
+        const petItemsMatch = /^\/api\/pets\/(\d+)\/items$/.exec(pathname);
+        if (method === "GET" && petItemsMatch) {
+          if (!petService) throw new Error("Tiererkennung ist noch nicht bereit.");
+          const limit = Math.max(
+            1,
+            Math.min(5000, Math.trunc(Number(requestUrl.searchParams.get("limit")) || 5000))
+          );
+          const offset = Math.max(
+            0,
+            Math.trunc(Number(requestUrl.searchParams.get("offset")) || 0)
+          );
+          const items = await petService.listCandidateItems(
+            Number(petItemsMatch[1]),
+            limit,
+            offset
+          );
+          writeRemoteJson(response, 200, { items });
+          return;
+        }
+
+        if (method === "POST" && pathname === "/api/pets/confirm") {
+          if (!petService) throw new Error("Tiererkennung ist noch nicht bereit.");
+          const body = await readRemoteJsonBody(request) as Record<string, unknown>;
+          const result = await petService.confirmCandidate(
+            Number(body.candidateId),
+            String(body.name ?? ""),
+            Number(body.rejectedPetId) || undefined,
+            Number(body.fallbackPetDetectionId) || undefined,
+            Number(body.expectedDetectionCount) || undefined,
+            typeof body.expectedMemberSignature === "string"
+              ? body.expectedMemberSignature
+              : undefined
+          );
+          schedulePersonRefresh();
+          writeRemoteJson(response, 200, result);
+          return;
+        }
+
+        if (method === "POST" && pathname === "/api/pets/assign-selection") {
+          if (!petService) throw new Error("Tiererkennung ist noch nicht bereit.");
+          const body = await readRemoteJsonBody(request) as Record<string, unknown>;
+          const petDetectionIds = Array.isArray(body.detectionIds)
+            ? body.detectionIds
+                .map((value) => Number(value))
+                .filter((value) => Number.isSafeInteger(value) && value > 0)
+            : [];
+          const name = String(body.name ?? "").trim();
+          if (petDetectionIds.length === 0 || !name) {
+            writeRemoteJson(response, 400, {
+              ok: false,
+              error: "Keine gültigen Fundstellen oder kein Name ausgewählt."
+            });
+            return;
+          }
+          const result = await petService.assignCandidateSelection(
+            Number(body.candidateId),
+            petDetectionIds,
+            name
+          );
+          schedulePersonRefresh();
+          writeRemoteJson(response, 200, result);
+          return;
+        }
+
+        if (method === "POST" && pathname === "/api/pets/ignore") {
+          if (!petService) throw new Error("Tiererkennung ist noch nicht bereit.");
+          const body = await readRemoteJsonBody(request) as Record<string, unknown>;
+          const result = await petService.ignoreCandidate(
+            Number(body.candidateId),
+            Number(body.fallbackPetDetectionId) || undefined,
+            Number(body.expectedDetectionCount) || undefined,
+            typeof body.expectedMemberSignature === "string"
+              ? body.expectedMemberSignature
+              : undefined,
+            Number(body.ignoredIdentityId) || undefined
+          );
+          schedulePersonRefresh();
+          writeRemoteJson(response, 200, result);
+          return;
+        }
+
+        if (method === "POST" && pathname === "/api/identity/assign") {
+          const body = await readRemoteJsonBody(request) as Record<string, unknown>;
+          const kind = body.kind === "pet" ? "pet" : "person";
+          const detectionId = Number(body.detectionId);
+          const name = String(body.name ?? "").trim();
+          if (!Number.isSafeInteger(detectionId) || detectionId <= 0 || !name) {
+            writeRemoteJson(response, 400, { ok: false, error: "Ungültige Zuordnung." });
+            return;
+          }
+          const result =
+            kind === "person"
+              ? await personService!.assignDetectionName(detectionId, name)
+              : await petService!.assignDetectionName(detectionId, name);
+          schedulePersonRefresh();
+          writeRemoteJson(response, 200, result);
+          return;
+        }
+
+        if (method === "POST" && pathname === "/api/video/assign") {
+          if (!catalog) throw new Error("Katalog ist noch nicht bereit.");
+          const body = await readRemoteJsonBody(request) as Record<string, unknown>;
+          const kind = body.kind === "pet" ? "pet" : "person";
+          const result = await catalog.request("assignVideoFrameIdentityName", {
+            mediaId: Number(body.mediaId),
+            timestampMs: Number(body.timestampMs),
+            kind,
+            detectionIndex: Number(body.detectionIndex),
+            petClass:
+              body.petClass === "dog" || body.petClass === "cat"
+                ? body.petClass
+                : null,
+            name: String(body.name ?? "").trim()
+          });
+          writeRemoteJson(response, 200, result);
+          return;
+        }
+
+        const confirmAllMatch = /^\/api\/media\/(\d+)\/confirm-all$/.exec(pathname);
+        if (method === "POST" && confirmAllMatch) {
+          if (!catalog || !personService || !petService) {
+            throw new Error("Identitätsdienste sind noch nicht bereit.");
+          }
+          const mediaId = Number(confirmAllMatch[1]);
+          const details = await catalog.request<MediaDetails | null>(
+            "getMediaDetails",
+            { mediaId }
+          );
+          if (!details) {
+            writeRemoteJson(response, 404, { ok: false, error: "Medium nicht gefunden." });
+            return;
+          }
+
+          let confirmed = 0;
+          for (const face of details.faces) {
+            if (!face.personName) continue;
+            await personService.assignDetectionName(face.id, face.personName);
+            confirmed += 1;
+          }
+          for (const pet of details.pets) {
+            if (!pet.petName) continue;
+            await petService.assignDetectionName(pet.id, pet.petName);
+            confirmed += 1;
+          }
+          schedulePersonRefresh();
+          writeRemoteJson(response, 200, { ok: true, confirmed });
+          return;
+        }
+
+        if (method === "POST" && pathname === "/api/analysis/boost") {
+          if (!analysis) throw new Error("Analyse ist noch nicht bereit.");
+          const body = await readRemoteJsonBody(request) as Record<string, unknown>;
+          const status = await analysis.setBoostEnabled(body.enabled === true);
+          writeRemoteJson(response, 200, status);
+          return;
+        }
+
+        if (method === "POST" && pathname === "/api/analysis/pause") {
+          const body = await readRemoteJsonBody(request) as Record<string, unknown>;
+          const state = await setBackgroundPaused(body.paused === true);
+          writeRemoteJson(response, 200, state);
+          return;
+        }
+
+        if (method === "GET" && pathname === "/api/analysis/history") {
+          if (!catalog) throw new Error("Katalog ist noch nicht bereit.");
+          const days = Math.max(
+            1,
+            Math.min(90, Math.trunc(Number(requestUrl.searchParams.get("days")) || 30))
+          );
+          const history = await catalog.request("getAnalysisHistory", { days });
+          writeRemoteJson(response, 200, history);
+          return;
+        }
+
+        if (method === "POST" && pathname === "/api/remote-echo") {
+          const echo = await readRemoteJsonBody(request);
+          writeRemoteJson(response, 200, {
+            ok: true,
+            receivedAt: new Date().toISOString(),
+            echo
+          });
+          return;
+        }
+
+        response.writeHead(404, {
+          ...REMOTE_WEB_SECURITY_HEADERS,
+          "Content-Type": "text/plain; charset=utf-8"
+        });
+        response.end("Not Found");
+      } catch (error) {
+        analysis?.logDiagnostic("REMOTE_WEB_REQUEST_ERROR", {
+          method,
+          pathname,
+          error: error instanceof Error ? error.message : String(error)
+        });
+        writeRemoteJson(response, 500, {
+          ok: false,
+          error: error instanceof Error ? error.message : String(error)
+        });
+      }
+    });
+
+    let settled = false;
+
+    server.once("error", (error) => {
+      if (remoteWebServer === server) remoteWebServer = null;
+      if (!settled) {
+        settled = true;
+        reject(error);
+      }
+    });
+
+    server.listen(
+      {
+        host: REMOTE_WEB_HOST,
+        port: REMOTE_WEB_PORT,
+        ipv6Only: false
+      },
+      () => {
+        remoteWebServer = server;
+        settled = true;
+        analysis?.logDiagnostic("REMOTE_WEB_SERVER_STARTED", {
+          host: REMOTE_WEB_HOST,
+          port: REMOTE_WEB_PORT
+        });
+        resolve();
+      }
+    );
+  });
+}
+
+function stopRemoteWebServer(): Promise<void> {
+  const server = remoteWebServer;
+  remoteWebServer = null;
+  if (!server) return Promise.resolve();
+
+  return new Promise<void>((resolve) => {
+    server.close(() => resolve());
+    setTimeout(resolve, 1000).unref();
+  });
+}
 
 const IDENTITY_FACE_BATCH_SIZE = 250;
 const IDENTITY_DOG_BATCH_SIZE = 50;
@@ -261,41 +1136,57 @@ async function waitForIdentityRefreshIdle(timeoutMs = 15000): Promise<void> {
   }
 }
 
-function schedulePersonRefresh(): void {
+function schedulePersonRefresh(
+  forceRefresh = false,
+  delayMs = 30000
+): void {
+  if (forceRefresh) {
+    personRefreshForceRequested = true;
+  }
+
   if (
     isQuitting ||
     shutdownInProgress ||
     backgroundPaused ||
-    (!personService && !petService) ||
-    personRefreshRunning ||
-    personRefreshTimer
+    (!personService && !petService)
   ) {
     return;
   }
 
-  // Kandidaten werden weiterhin während der Fast-Lane nachgezogen, aber nicht
-  // mehr wegen jedes abgeschlossenen Embedding-Jobs. Jobs ohne Gesicht/Hund
-  // erhöhen nur den DONE-Zähler und dürfen kein komplettes Re-Clustering aller
-  // vorhandenen Identitäten auslösen.
+  if (personRefreshRunning) {
+    personRefreshRescheduleRequested = true;
+    return;
+  }
+
+  if (personRefreshTimer) {
+    if (!forceRefresh && delayMs >= 30000) return;
+    clearTimeout(personRefreshTimer);
+    personRefreshTimer = null;
+  }
+
   personRefreshTimer = setTimeout(() => {
     personRefreshTimer = null;
     if (
       (!personService && !petService) ||
       isQuitting ||
-      backgroundPaused ||
-      personRefreshRunning
+      shutdownInProgress ||
+      backgroundPaused
     ) {
       return;
     }
 
+    if (personRefreshRunning) {
+      personRefreshRescheduleRequested = true;
+      return;
+    }
+
     personRefreshRunning = true;
+    const forceThisRun = personRefreshForceRequested;
+    personRefreshForceRequested = false;
 
     void (async () => {
       const counts = await getIdentityEmbeddingCounts();
 
-      // Der Katalogaufruf kann bei großen Importen einige Sekunden warten.
-      // Falls in dieser Zeit der App-Shutdown begonnen hat, darf danach weder
-      // Clustering noch ein neuer Python-Request gestartet werden.
       if (shutdownInProgress || isQuitting || backgroundPaused) {
         return;
       }
@@ -308,6 +1199,7 @@ function schedulePersonRefresh(): void {
         pipelineStatus.petEmbeddings.running === 0;
 
       const faceChangedSources = counts.filter((entry) => {
+        if (forceThisRun) return true;
         const previous = groupedFaceEmbeddingCounts.get(entry.sourceId) ?? 0;
         const delta = entry.faces - previous;
         return (
@@ -318,6 +1210,7 @@ function schedulePersonRefresh(): void {
       });
 
       const petChangedSources = counts.filter((entry) => {
+        if (forceThisRun) return true;
         const previous = groupedPetEmbeddingCounts.get(entry.sourceId) ?? 0;
         const delta = entry.dogs - previous;
         return (
@@ -331,7 +1224,13 @@ function schedulePersonRefresh(): void {
         return;
       }
 
+      analysis?.setIdentityGroupingActivity(
+        faceChangedSources.length > 0,
+        petChangedSources.length > 0
+      );
+
       analysis?.logDiagnostic("IDENTITY_REFRESH_BEGIN", {
+        forced: forceThisRun,
         faceSources: faceChangedSources.map((entry) => ({
           sourceId: entry.sourceId,
           embeddings: entry.faces,
@@ -344,21 +1243,19 @@ function schedulePersonRefresh(): void {
         }))
       });
 
-      // Gruppierung läuft jetzt als normaler paralleler Python-Job mit.
-      // Sie darf die Bild-/Video-Lanes nicht mehr exklusiv anhalten.
       try {
         if (shutdownInProgress || isQuitting || backgroundPaused) return;
 
         if (personService) {
           for (const entry of faceChangedSources) {
-            // Nur die tatsächlich geänderte Quelle prüfen. forceRefresh=false
-            // verhindert beim App-Start einen teuren Neuaufbau, wenn die
-            // gespeicherte Cluster-Revision bereits exakt aktuell ist.
             await personService.getOverview(
               entry.sourceId,
-              false,
+              forceThisRun,
               true,
-              true
+              true,
+              1,
+              false,
+              false
             );
             groupedFaceEmbeddingCounts.set(entry.sourceId, entry.faces);
             if (shutdownInProgress || isQuitting || backgroundPaused) return;
@@ -372,9 +1269,12 @@ function schedulePersonRefresh(): void {
           for (const entry of petChangedSources) {
             await petService.getOverview(
               entry.sourceId,
-              false,
+              forceThisRun,
               true,
-              true
+              true,
+              1,
+              false,
+              false
             );
             groupedPetEmbeddingCounts.set(entry.sourceId, entry.dogs);
             if (shutdownInProgress || isQuitting || backgroundPaused) return;
@@ -392,20 +1292,27 @@ function schedulePersonRefresh(): void {
           if (!activeSourceIds.has(sourceId)) groupedPetEmbeddingCounts.delete(sourceId);
         }
       } finally {
-        // Kein exklusiver Maintenance-Stopp mehr nötig.
+        analysis?.setIdentityGroupingActivity(false, false);
       }
     })()
       .catch((error) => {
-        // Bei einem temporären Clusterfehler bleiben die Embedding-Zähler
-        // unverändert; der nächste Sammellauf versucht denselben Stand erneut.
+        personRefreshRescheduleRequested = true;
+        if (forceThisRun) personRefreshForceRequested = true;
         analysis?.logDiagnostic("IDENTITY_REFRESH_ERROR", {
           error: error instanceof Error ? error.message : String(error)
         });
       })
       .finally(() => {
         personRefreshRunning = false;
+
+        if (personRefreshRescheduleRequested || personRefreshForceRequested) {
+          const forceNext = personRefreshForceRequested;
+          personRefreshRescheduleRequested = false;
+          personRefreshForceRequested = false;
+          schedulePersonRefresh(forceNext, forceNext ? 0 : 30000);
+        }
       });
-  }, 30000);
+  }, Math.max(0, Math.trunc(delayMs)));
   personRefreshTimer.unref();
 }
 
@@ -1103,40 +2010,89 @@ function registerIpc(): void {
   );
 
   ipcMain.handle(
+    "catalog:assignVideoFrameIdentityNames",
+    (
+      _event,
+      mediaId: number,
+      assignments: Array<{
+        timestampMs: number;
+        kind: "person" | "pet";
+        detectionIndex: number;
+        petClass: "dog" | "cat" | null;
+        name: string;
+      }>
+    ) =>
+      catalog!.request("assignVideoFrameIdentityNames", {
+        mediaId,
+        assignments
+      })
+  );
+
+  ipcMain.handle(
     "catalog:reanalyzeMedia",
     async (_event, mediaId: number): Promise<ReanalyzeMediaResult> => {
-      // Keine laufende Analyse darf nach dem Reset alte Ergebnisse wieder
-      // eintragen. Deshalb beide Pipelines kurz sauber anhalten.
-      await analysisCoordinator?.pauseForMaintenance();
+      const requeueStartedAt = Date.now();
+      analysis?.logDiagnostic("REANALYZE_REQUEST_BEGIN", { mediaId });
+      // For video, rebuilding tracks does not touch image identity groups.
+      // Avoid waiting for a potentially lengthy global clustering refresh.
+      const info = await catalog!.request<MediaPreviewInfo | null>(
+        "getMediaPreviewInfo", { mediaId }
+      );
+      if (!info) throw new Error("Medium wurde nicht gefunden.");
+      const isVideo = VIDEO_EXTENSIONS.has(path.extname(info.absolutePath).toLowerCase());
+
+      // Old in-flight jobs keep their own IDs and are rejected if their result
+      // arrives after requeue. Only outstanding job claims must settle first.
+      await analysisCoordinator?.pauseForMaintenance(mediaId, false);
       thumbnailCoordinator?.stop();
 
-      if (personRefreshTimer) {
+      if (!isVideo && personRefreshTimer) {
         clearTimeout(personRefreshTimer);
         personRefreshTimer = null;
       }
 
       try {
-        await Promise.all([
-          thumbnailCoordinator?.waitUntilIdle() ?? Promise.resolve(),
-          waitForIdentityRefreshIdle()
-        ]);
+        // A single-media reset no longer waits for global identity clustering.
+        // The clustering snapshot is independent of this maintenance action;
+        // after requeue the source counters are invalidated and a fresh pass is
+        // guaranteed via personRefreshRescheduleRequested.
+        if (!isVideo && personRefreshRunning) {
+          personRefreshRescheduleRequested = true;
+          analysis?.logDiagnostic("REANALYZE_IDENTITY_REFRESH_DEFERRED", {
+            mediaId
+          });
+        }
+
+        await (
+          thumbnailCoordinator?.waitUntilClaimsSettled() ?? Promise.resolve()
+        );
         const result = await catalog!.request<ReanalyzeMediaResult>(
-          "reanalyzeMedia",
-          { mediaId }
+          "reanalyzeMedia", { mediaId }
         );
 
-        // Die gespeicherten Vergleichszähler dürfen den Neuaufbau nicht
-        // überspringen, falls nach der Neuanalyse wieder gleich viele Treffer
-        // entstehen wie zuvor.
-        groupedFaceEmbeddingCounts.delete(result.sourceId);
-        groupedPetEmbeddingCounts.delete(result.sourceId);
-        schedulePersonRefresh();
+        if (!isVideo) {
+          groupedFaceEmbeddingCounts.delete(result.sourceId);
+          groupedPetEmbeddingCounts.delete(result.sourceId);
+          schedulePersonRefresh();
+        }
         scheduleLifeAreaRuleRefresh();
+        analysis?.logDiagnostic("REANALYZE_QUEUED", {
+          mediaId,
+          isVideo,
+          stages: result.requeued,
+          elapsedMs: Date.now() - requeueStartedAt
+        });
 
         return result;
       } finally {
         analysisCoordinator?.resumeAfterMaintenance();
-        await thumbnailCoordinator?.start();
+        // Thumbnail restart can enqueue catalog backfill work; do not make the
+        // user's requeue response wait for these unrelated UI updates.
+        void thumbnailCoordinator?.start().catch((error) => {
+          analysis?.logDiagnostic("THUMBNAIL_RESTART_ERROR", {
+            mediaId, error: error instanceof Error ? error.message : String(error)
+          });
+        });
       }
     }
   );
@@ -1185,6 +2141,8 @@ function registerIpc(): void {
       clearTimeout(personRefreshTimer);
       personRefreshTimer = null;
     }
+    personRefreshRescheduleRequested = false;
+    personRefreshForceRequested = false;
 
     // Harter Stopp beendet auch einen eventuell laufenden Qwen/llama.cpp-
     // Prozessbaum und verwirft alle offenen Python-Requests sofort.
@@ -1278,6 +2236,10 @@ function registerIpc(): void {
     const maxConcurrentJobs = await analysis!.setMaxConcurrentJobs(requested);
     return { maxConcurrentJobs };
   });
+
+  ipcMain.handle("analysis:setBoostEnabled", async (_event, enabled: boolean) =>
+    analysis!.setBoostEnabled(enabled === true)
+  );
 
   ipcMain.handle("analysis:openDevLog", async () => {
     const logPath = analysis!.getDevLogPath();
@@ -1459,6 +2421,30 @@ function registerIpc(): void {
   );
 
   ipcMain.handle(
+    "analysis:errorOverview",
+    (_event, sourceId?: number): Promise<AnalysisErrorOverview> =>
+      catalog!.request<AnalysisErrorOverview>("getAnalysisErrorOverview", {sourceId})
+  );
+
+  ipcMain.handle(
+    "analysis:errorPage",
+    (_event, filter: AnalysisErrorPageFilter): Promise<AnalysisErrorPage> =>
+      catalog!.request<AnalysisErrorPage>("listAnalysisErrorPage", filter ?? {})
+  );
+
+  ipcMain.handle(
+    "analysis:recentLog",
+    (_event, limit = 250, onlyProblems = false): DiagnosticLogEntry[] =>
+      analysis?.readRecentDevLog(limit, onlyProblems) ?? []
+  );
+
+  ipcMain.handle(
+    "analysis:retrySample",
+    (_event, filter: AnalysisErrorPageFilter): Promise<RetryAnalysisResult> =>
+      catalog!.request<RetryAnalysisResult>("retryErrorSample", filter ?? {})
+  );
+
+  ipcMain.handle(
     "analysis:countErrors",
     (_event, sourceId?: number): Promise<number> =>
       catalog!.request<number>("countAnalysisErrors", { sourceId })
@@ -1573,8 +2559,34 @@ function registerIpc(): void {
 
   ipcMain.handle(
     "people:getOverview",
-    (_event, _sourceId: number, forceRefresh = false): Promise<PersonOverview> =>
-      personService!.getCombinedOverview(Boolean(forceRefresh))
+    async (
+      _event,
+      _sourceId: number,
+      forceRefresh = false,
+      candidateLimit = 10,
+      candidateOffset = 0,
+      summaryOnly = true
+    ): Promise<PersonOverview> => {
+      if (forceRefresh) schedulePersonRefresh(true, 0);
+      return personService!.getCombinedOverview(
+        false,
+        candidateLimit,
+        candidateOffset,
+        true,
+        true,
+        summaryOnly
+      );
+    }
+  );
+
+  ipcMain.handle(
+    "people:getCandidateItems",
+    (
+      _event,
+      candidateId: number,
+      limit = 5000,
+      offset = 0
+    ) => personService!.listCandidateItems(candidateId, limit, offset)
   );
 
   ipcMain.handle(
@@ -1624,6 +2636,16 @@ function registerIpc(): void {
         expectedMemberSignature,
         ignoredIdentityId
       )
+  );
+
+  ipcMain.handle(
+    "people:rejectDetectionSuggestion",
+    (
+      _event,
+      faceDetectionId: number,
+      personId: number
+    ): Promise<PersonCorrectionResult> =>
+      personService!.rejectDetectionSuggestion(faceDetectionId, personId)
   );
 
   ipcMain.handle(
@@ -1678,8 +2700,34 @@ function registerIpc(): void {
 
   ipcMain.handle(
     "pets:getOverview",
-    (_event, _sourceId: number, forceRefresh = false): Promise<PetOverview> =>
-      petService!.getCombinedOverview(Boolean(forceRefresh))
+    async (
+      _event,
+      _sourceId: number,
+      forceRefresh = false,
+      candidateLimit = 10,
+      candidateOffset = 0,
+      summaryOnly = true
+    ): Promise<PetOverview> => {
+      if (forceRefresh) schedulePersonRefresh(true, 0);
+      return petService!.getCombinedOverview(
+        false,
+        candidateLimit,
+        candidateOffset,
+        true,
+        true,
+        summaryOnly
+      );
+    }
+  );
+
+  ipcMain.handle(
+    "pets:getCandidateItems",
+    (
+      _event,
+      candidateId: number,
+      limit = 5000,
+      offset = 0
+    ) => petService!.listCandidateItems(candidateId, limit, offset)
   );
 
   ipcMain.handle(
@@ -1720,6 +2768,16 @@ function registerIpc(): void {
         expectedMemberSignature,
         ignoredIdentityId
       )
+  );
+
+  ipcMain.handle(
+    "pets:rejectDetectionSuggestion",
+    (
+      _event,
+      petDetectionId: number,
+      petId: number
+    ): Promise<PetCorrectionResult> =>
+      petService!.rejectDetectionSuggestion(petDetectionId, petId)
   );
 
   ipcMain.handle(
@@ -1868,12 +2926,27 @@ app.whenReady().then(() => {
     (event) => {
       sendToRenderer("catalog:watchEvent", event);
     },
-    (event, fields = {}) => analysis?.logDiagnostic(event, fields)
+    (event, fields = {}) => analysis?.logDiagnostic(event, fields),
+    () => {
+      const status = analysis?.getStatus();
+      return (
+        personRefreshRunning ||
+        Boolean(status && (status.queuedJobs > 0 || status.activeJobs > 0))
+      );
+    }
   );
 
   catalog.start();
   thumbnailService.start();
   registerIpc();
+
+  void startRemoteWebServer().catch((error) => {
+    analysis?.logDiagnostic("REMOTE_WEB_SERVER_START_ERROR", {
+      host: REMOTE_WEB_HOST,
+      port: REMOTE_WEB_PORT,
+      error: error instanceof Error ? error.message : String(error)
+    });
+  });
 
   protocol.handle("image-sorter-thumb", async (request) => {
     try {
@@ -2163,6 +3236,7 @@ app.whenReady().then(() => {
   void analysis.start().then(() => {
     if (analysis?.getStatus().state === "READY") {
       void analysisCoordinator?.start();
+      schedulePersonRefresh(false, 1500);
     }
   });
 
@@ -2222,6 +3296,7 @@ async function prepareCatalogForShutdown(): Promise<boolean> {
 
 async function performGracefulShutdown(): Promise<void> {
   shutdownInProgress = true;
+  await stopRemoteWebServer();
   publishShutdownStatus(
     "PREPARING",
     "App wird sicher beendet. Neue Analysejobs und Dateiscans werden angehalten …"
@@ -2375,6 +3450,8 @@ function shutdownServicesImmediately(): void {
     personRefreshTimer = null;
   }
 
+  remoteWebServer?.close();
+  remoteWebServer = null;
   catalogWatchService?.stop();
   analysisCoordinator?.stop();
   thumbnailCoordinator?.stop();

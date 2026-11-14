@@ -1,6 +1,10 @@
 import { contextBridge, ipcRenderer } from "electron";
 import type {
   AnalysisErrorRecord,
+  AnalysisErrorOverview,
+  AnalysisErrorPageFilter,
+  AnalysisErrorPage,
+  DiagnosticLogEntry,
   AnalysisWorkerStatus,
   BackgroundPauseState,
   AssignPersonSelectionResult,
@@ -79,6 +83,8 @@ const api = {
     getStatus: (): Promise<AnalysisWorkerStatus> => ipcRenderer.invoke("analysis:getStatus"),
     setMaxConcurrentJobs: (value: number): Promise<{ maxConcurrentJobs: number }> =>
       ipcRenderer.invoke("analysis:setMaxConcurrentJobs", value),
+    setBoostEnabled: (enabled: boolean): Promise<AnalysisWorkerStatus> =>
+      ipcRenderer.invoke("analysis:setBoostEnabled", enabled),
     getPipelineStatus: (sourceId?: number): Promise<PipelineStatus> =>
       ipcRenderer.invoke("analysis:getPipelineStatus", sourceId),
     openDevLog: (): Promise<{ opened: true; path: string }> =>
@@ -118,6 +124,14 @@ const api = {
     },
     listErrors: (sourceId?: number, limit = 200): Promise<AnalysisErrorRecord[]> =>
       ipcRenderer.invoke("analysis:listErrors", sourceId, limit),
+    getErrorOverview: (sourceId?: number): Promise<AnalysisErrorOverview> =>
+      ipcRenderer.invoke("analysis:errorOverview", sourceId),
+    getErrorPage: (filter: AnalysisErrorPageFilter): Promise<AnalysisErrorPage> =>
+      ipcRenderer.invoke("analysis:errorPage", filter),
+    getRecentLog: (limit = 250, onlyProblems = false): Promise<DiagnosticLogEntry[]> =>
+      ipcRenderer.invoke("analysis:recentLog", limit, onlyProblems),
+    retrySample: (filter: AnalysisErrorPageFilter): Promise<RetryAnalysisResult> =>
+      ipcRenderer.invoke("analysis:retrySample", filter),
     countErrors: (sourceId?: number): Promise<number> =>
       ipcRenderer.invoke("analysis:countErrors", sourceId),
     retryJob: (jobId: number): Promise<RetryAnalysisResult> =>
@@ -140,8 +154,27 @@ const api = {
     }
   },
   people: {
-    getOverview: (sourceId: number, forceRefresh = false): Promise<PersonOverview> =>
-      ipcRenderer.invoke("people:getOverview", sourceId, forceRefresh),
+    getOverview: (
+      sourceId: number,
+      forceRefresh = false,
+      candidateLimit = 10,
+      candidateOffset = 0,
+      summaryOnly = true
+    ): Promise<PersonOverview> =>
+      ipcRenderer.invoke(
+        "people:getOverview",
+        sourceId,
+        forceRefresh,
+        candidateLimit,
+        candidateOffset,
+        summaryOnly
+      ),
+    getCandidateItems: (
+      candidateId: number,
+      limit = 5000,
+      offset = 0
+    ): Promise<PersonOverview["candidates"][number]["faces"]> =>
+      ipcRenderer.invoke("people:getCandidateItems", candidateId, limit, offset),
     confirmCandidate: (
       candidateId: number,
       name: string,
@@ -183,6 +216,15 @@ const api = {
         expectedMemberSignature,
         ignoredIdentityId
       ),
+    rejectDetectionSuggestion: (
+      faceDetectionId: number,
+      personId: number
+    ): Promise<PersonCorrectionResult> =>
+      ipcRenderer.invoke(
+        "people:rejectDetectionSuggestion",
+        faceDetectionId,
+        personId
+      ),
     removeCandidateFace: (
       candidateId: number,
       faceDetectionId: number
@@ -215,8 +257,27 @@ const api = {
     }
   },
   pets: {
-    getOverview: (sourceId: number, forceRefresh = false): Promise<PetOverview> =>
-      ipcRenderer.invoke("pets:getOverview", sourceId, forceRefresh),
+    getOverview: (
+      sourceId: number,
+      forceRefresh = false,
+      candidateLimit = 10,
+      candidateOffset = 0,
+      summaryOnly = true
+    ): Promise<PetOverview> =>
+      ipcRenderer.invoke(
+        "pets:getOverview",
+        sourceId,
+        forceRefresh,
+        candidateLimit,
+        candidateOffset,
+        summaryOnly
+      ),
+    getCandidateItems: (
+      candidateId: number,
+      limit = 5000,
+      offset = 0
+    ): Promise<PetOverview["candidates"][number]["pets"]> =>
+      ipcRenderer.invoke("pets:getCandidateItems", candidateId, limit, offset),
     confirmCandidate: (
       candidateId: number,
       name: string,
@@ -248,6 +309,15 @@ const api = {
         expectedDetectionCount,
         expectedMemberSignature,
         ignoredIdentityId
+      ),
+    rejectDetectionSuggestion: (
+      petDetectionId: number,
+      petId: number
+    ): Promise<PetCorrectionResult> =>
+      ipcRenderer.invoke(
+        "pets:rejectDetectionSuggestion",
+        petDetectionId,
+        petId
       ),
     removeCandidatePet: (
       candidateId: number,
@@ -400,6 +470,21 @@ const api = {
         detectionIndex,
         petClass,
         name
+      ),
+    assignVideoFrameIdentityNames: (
+      mediaId: number,
+      assignments: Array<{
+        timestampMs: number;
+        kind: "person" | "pet";
+        detectionIndex: number;
+        petClass: "dog" | "cat" | null;
+        name: string;
+      }>
+    ): Promise<{ mediaId: number; affected: number }> =>
+      ipcRenderer.invoke(
+        "catalog:assignVideoFrameIdentityNames",
+        mediaId,
+        assignments
       ),
     reanalyzeMedia: (
       mediaId: number

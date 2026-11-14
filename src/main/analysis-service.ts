@@ -6,6 +6,9 @@ import {
 } from "node:child_process";
 import {
   appendFileSync,
+  openSync,
+  readSync,
+  closeSync,
   existsSync,
   mkdirSync,
   readdirSync,
@@ -19,7 +22,8 @@ import os from "node:os";
 import readline from "node:readline";
 import type {
   AnalysisWorkerProgress,
-  AnalysisWorkerStatus
+  AnalysisWorkerStatus,
+  DiagnosticLogEntry
 } from "../shared/protocol";
 
 type Pending = {
@@ -95,6 +99,8 @@ const DEFAULT_STATUS: AnalysisWorkerStatus = {
   pid: null,
   python: null,
   processPriority: "below-normal",
+  boostEnabled: false,
+  identityGrouping: "none",
   cpuBudgetPercent: 50,
   maxConcurrentJobs: 2,
   queuedJobs: 0,
@@ -106,7 +112,9 @@ const DEFAULT_STATUS: AnalysisWorkerStatus = {
 export class AnalysisService {
   private child: ChildProcessWithoutNullStreams | null = null;
   private readonly pending = new Map<string, Pending>();
+  private stdinWriteChain: Promise<void> = Promise.resolve();
   private stopping = false;
+  private devLogWriteCount = 0;
   private qwenServerPid: number | null = null;
   private workerCapabilities: Record<string, unknown> = {};
   private qwen3vl4bAvailable = false;
@@ -129,6 +137,51 @@ export class AnalysisService {
 
   getDevLogPath(): string {
     return this.devLogPath;
+  }
+
+  readRecentDevLog(limit = 250, onlyProblems = false): DiagnosticLogEntry[] {
+    // Nur den Dateischwanz lesen, auch für das Archiv .1. Ein altes
+    // 200-MB-Protokoll wird niemals vollständig in den Speicher geladen.
+    const rows: DiagnosticLogEntry[] = [];
+    for (const file of [this.devLogPath + ".1", this.devLogPath]) {
+      if (!existsSync(file)) continue;
+      let fd: number | null = null;
+      try {
+        fd = openSync(file, "r");
+        const fileSize = statSync(file).size;
+        const bytes = Math.min(fileSize, 2 * 1024 * 1024);
+        if (bytes === 0) continue;
+        const buffer = Buffer.alloc(bytes);
+        const read = readSync(fd, buffer, 0, bytes, fileSize - bytes);
+        const lines = buffer.subarray(0, read).toString("utf8").split("\n");
+        if (fileSize > bytes) lines.shift();
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          try {
+            const record = JSON.parse(line) as Record<string, unknown>;
+            const event = String(record.event ?? "UNKNOWN");
+            if (onlyProblems && !/ERROR|FAIL|TIMEOUT|WARNING|WARN|UNAVAILABLE/i.test(event)) {
+              continue;
+            }
+            const { ts, source, event: _event, ...fields } = record;
+            rows.push({
+              ts: String(ts ?? ""),
+              source: String(source ?? ""),
+              event,
+              detail: JSON.stringify(fields).slice(0, 2500)
+            });
+          } catch {
+            // Angebrochene JSONL-Zeilen im Archiv ignorieren.
+          }
+        }
+      } catch {
+        // Protokolllesen ist nicht kritisch für die App.
+      } finally {
+        if (fd !== null) try { closeSync(fd); } catch { /* nur Diagnose */ }
+      }
+    }
+    const safeLimit = Math.max(1, Math.min(500, Math.trunc(limit || 250)));
+    return rows.slice(-safeLimit).reverse();
   }
 
   clearDevLog(): { path: string; cleared: true } {
@@ -174,7 +227,26 @@ export class AnalysisService {
             // Rotation ist nur Komfort; Logging selbst soll weiterlaufen.
           }
           try {
-            renameSync(this.devLogPath, rotated);
+            if (size > maxBytes * 2) {
+              // Bestehende 200-MB-Protokolle nicht als 200-MB-Archiv behalten.
+              // Nur die letzten ~8 MiB der alten Datei sichern.
+              let fd: number | null = null;
+              let tail = Buffer.alloc(0);
+              try {
+                fd = openSync(this.devLogPath, "r");
+                const buffer = Buffer.alloc(maxBytes);
+                const count = readSync(fd, buffer, 0, maxBytes, size - maxBytes);
+                tail = buffer.subarray(0, count);
+              } finally {
+                if (fd !== null) closeSync(fd);
+              }
+              const firstLineEnd = tail.indexOf(10);
+              if (firstLineEnd >= 0) tail = tail.subarray(firstLineEnd + 1);
+              writeFileSync(rotated, tail);
+              writeFileSync(this.devLogPath, "", "utf8");
+            } else {
+              renameSync(this.devLogPath, rotated);
+            }
           } catch {
             // Falls AV/Editor die Datei kurz blockiert, hängen wir weiter an.
           }
@@ -187,6 +259,11 @@ export class AnalysisService {
 
   private appendDevLogRecord(record: Record<string, unknown>): void {
     try {
+      // Nicht nur beim Start rotieren: bei 200 MB Dauerbetrieb sonst keine Grenze.
+      // Prüfungen gebündelt durchführen, damit nicht jeder Logeintrag ein stat()
+      // auslöst. Die zweite Datei .1 wird zyklisch ersetzt (ca. 16 MB gesamt).
+      this.devLogWriteCount += 1;
+      if (this.devLogWriteCount % 128 === 0) this.prepareDevLog();
       appendFileSync(this.devLogPath, JSON.stringify(record) + "\n", "utf8");
     } catch {
       // Diagnose darf die Anwendung nicht beeinflussen.
@@ -217,6 +294,14 @@ export class AnalysisService {
 
   getStatus(): AnalysisWorkerStatus {
     return { ...this.status };
+  }
+
+  setIdentityGroupingActivity(people: boolean, pets: boolean): void {
+    const identityGrouping: AnalysisWorkerStatus["identityGrouping"] =
+      people && pets ? "both" : people ? "people" : pets ? "pets" : "none";
+
+    if (this.status.identityGrouping === identityGrouping) return;
+    this.publish({ identityGrouping });
   }
 
   isQwen3vl4bAvailable(): boolean {
@@ -422,8 +507,8 @@ export class AnalysisService {
           "configure",
           {
             maxConcurrentJobs: this.status.maxConcurrentJobs,
-            cpuBudgetPercent: 50,
-            profile: "background"
+            cpuBudgetPercent: this.status.boostEnabled ? 100 : 50,
+            profile: this.status.boostEnabled ? "full" : "background"
           },
           15000
         );
@@ -516,6 +601,9 @@ export class AnalysisService {
         settled = true;
 
         this.child = child;
+        // A new worker must not inherit backpressure from writes that belonged
+        // to an older, already terminated process.
+        this.stdinWriteChain = Promise.resolve();
         this.attachChild(child);
         this.devLog("SPAWN_EVENT", {
           label: candidate.label,
@@ -523,19 +611,14 @@ export class AnalysisService {
           elapsedMs: Date.now() - launchAt
         });
 
-        try {
-          if (child.pid !== undefined) {
-            os.setPriority(child.pid, os.constants.priority.PRIORITY_BELOW_NORMAL);
-          }
-        } catch {
-          // Prozessisolation und Parallelitätslimit bleiben auch dann aktiv.
-        }
+        this.applyProcessPriority(child.pid ?? null);
 
         this.publish({
           state: "STARTING",
           pid: child.pid ?? null,
           python: candidate.label,
-          processPriority: "below-normal",
+          processPriority: this.status.boostEnabled ? "high" : "below-normal",
+          cpuBudgetPercent: this.status.boostEnabled ? 100 : 50,
           message: "Analyse-Worker antwortet, Konfiguration wird gesetzt …"
         });
 
@@ -577,6 +660,7 @@ export class AnalysisService {
           message.pid > 0
         ) {
           this.qwenServerPid = message.pid;
+          this.applyProcessPriority(message.pid);
           this.devLog("QWEN_SERVER_TRACKED", {
             qwenServerPid: message.pid,
             port: message.port ?? null
@@ -741,11 +825,74 @@ export class AnalysisService {
     });
   }
 
+  private applyProcessPriority(pid: number | null | undefined): void {
+    if (!pid || pid <= 0) return;
+
+    try {
+      os.setPriority(
+        pid,
+        this.status.boostEnabled
+          ? os.constants.priority.PRIORITY_HIGH
+          : os.constants.priority.PRIORITY_BELOW_NORMAL
+      );
+    } catch (error) {
+      this.devLog("PROCESS_PRIORITY_UPDATE_ERROR", {
+        pid,
+        boostEnabled: this.status.boostEnabled,
+        error: error instanceof Error ? error.message : String(error)
+      });
+    }
+  }
+
   private applyWorkerResult(result: Record<string, unknown>): void {
     this.publish({
       cpuBudgetPercent: Number(result.cpu_budget_percent ?? this.status.cpuBudgetPercent),
       maxConcurrentJobs: Number(result.max_concurrent_jobs ?? this.status.maxConcurrentJobs)
     });
+  }
+
+  async setBoostEnabled(enabled: boolean): Promise<AnalysisWorkerStatus> {
+    const boostEnabled = enabled === true;
+    const cpuBudgetPercent = boostEnabled ? 100 : 50;
+    const processPriority: AnalysisWorkerStatus["processPriority"] =
+      boostEnabled ? "high" : "below-normal";
+
+    this.publish({
+      boostEnabled,
+      cpuBudgetPercent,
+      processPriority
+    });
+
+    this.applyProcessPriority(this.child?.pid ?? null);
+    this.applyProcessPriority(this.qwenServerPid);
+
+    if (!this.child || this.status.state !== "READY") {
+      this.devLog("BOOST_MODE_UPDATED", {
+        boostEnabled,
+        cpuBudgetPercent,
+        processPriority,
+        workerReady: false
+      });
+      return this.getStatus();
+    }
+
+    const configured = await this.request<Record<string, unknown>>(
+      "configure",
+      {
+        maxConcurrentJobs: this.status.maxConcurrentJobs,
+        cpuBudgetPercent,
+        profile: boostEnabled ? "full" : "background"
+      },
+      15000
+    );
+    this.applyWorkerResult(configured);
+    this.devLog("BOOST_MODE_UPDATED", {
+      boostEnabled,
+      cpuBudgetPercent: this.status.cpuBudgetPercent,
+      processPriority,
+      workerReady: true
+    });
+    return this.getStatus();
   }
 
   setQueueState(
@@ -759,6 +906,64 @@ export class AnalysisService {
       progress: null,
       ...(message ? { message } : {})
     });
+  }
+
+  private enqueueWorkerWrite(
+    child: ChildProcessWithoutNullStreams,
+    requestId: string,
+    method: string,
+    data: string
+  ): Promise<void> {
+    const write = async (): Promise<void> => {
+      // A request can time out while waiting behind pipe backpressure. In that
+      // case it must never be written later as a zombie request.
+      if (!this.pending.has(requestId)) {
+        this.devLog("REQUEST_WRITE_SKIPPED_STALE", {
+          requestId,
+          method
+        });
+        return;
+      }
+
+      if (
+        this.child !== child ||
+        !child.stdin.writable ||
+        child.stdin.destroyed ||
+        child.stdin.writableEnded ||
+        child.killed ||
+        this.stopping
+      ) {
+        throw new Error(
+          "Analyse-Worker wird beendet oder ist nicht mehr schreibbar."
+        );
+      }
+
+      await new Promise<void>((resolve, reject) => {
+        const accepted = child.stdin.write(data, (error) => {
+          if (error) {
+            reject(error);
+            return;
+          }
+          resolve();
+        });
+
+        if (!accepted) {
+          this.devLog("REQUEST_WRITE_BACKPRESSURE", {
+            requestId,
+            method,
+            pendingRequests: this.pending.size
+          });
+        }
+      });
+    };
+
+    // Serialize writes to the worker pipe. Node's stdin stream previously
+    // accepted hundreds of concurrent writes while Python was not reading,
+    // eventually failing with ENOBUFS. The chain makes the stream's own
+    // backpressure authoritative without serializing worker execution.
+    const queued = this.stdinWriteChain.then(write, write);
+    this.stdinWriteChain = queued.catch(() => undefined);
+    return queued;
   }
 
   private armPendingTimeout(id: string, pending: Pending): void {
@@ -858,36 +1063,39 @@ export class AnalysisService {
       return response;
     }
 
-    child.stdin.write(
-      JSON.stringify({ id, method, payload }) + "\n",
-      (error) => {
-        if (!error) return;
+    void this.enqueueWorkerWrite(
+      child,
+      id,
+      method,
+      JSON.stringify({ id, method, payload }) + "\n"
+    ).catch((error) => {
+      const writeError =
+        error instanceof Error ? error : new Error(String(error));
 
-        const pending = this.pending.get(id);
-        if (pending) {
-          clearTimeout(pending.timeout);
-          this.pending.delete(id);
-          pending.reject(error);
-        }
+      const pending = this.pending.get(id);
+      if (pending) {
+        clearTimeout(pending.timeout);
+        this.pending.delete(id);
+        pending.reject(writeError);
+      }
 
-        // Beim App-Shutdown kann der Worker stdin bereits geschlossen haben.
-        // Fehler wie EPIPE/EOF dürfen dann nicht als uncaught exception enden.
-        if (this.stopping || child.killed || child.stdin.destroyed) {
-          this.devLog("REQUEST_WRITE_IGNORED_DURING_SHUTDOWN", {
-            requestId: id,
-            method,
-            error: error.message
-          });
-          return;
-        }
-
-        this.devLog("REQUEST_WRITE_ERROR", {
+      // Beim App-Shutdown kann der Worker stdin bereits geschlossen haben.
+      // Fehler wie EPIPE/EOF dürfen dann nicht als uncaught exception enden.
+      if (this.stopping || child.killed || child.stdin.destroyed) {
+        this.devLog("REQUEST_WRITE_IGNORED_DURING_SHUTDOWN", {
           requestId: id,
           method,
-          error: error.message
+          error: writeError.message
         });
+        return;
       }
-    );
+
+      this.devLog("REQUEST_WRITE_ERROR", {
+        requestId: id,
+        method,
+        error: writeError.message
+      });
+    });
     return response;
   }
 
@@ -904,7 +1112,7 @@ export class AnalysisService {
       {
         maxConcurrentJobs,
         cpuBudgetPercent: this.status.cpuBudgetPercent,
-        profile: "background"
+        profile: this.status.boostEnabled ? "full" : "background"
       },
       15000
     );

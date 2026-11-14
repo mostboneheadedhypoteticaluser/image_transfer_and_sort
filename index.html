@@ -17,12 +17,26 @@
           <nav class="sidebar-nav" aria-label="Hauptnavigation">
             <button class="sidebar-nav-item active" type="button" data-app-page="sources"><span>▣</span>Medienquellen</button>
             <button class="sidebar-nav-item" type="button" data-app-page="analysis"><span>◫</span>Analyse &amp; KI</button>
+            <button class="sidebar-nav-item" type="button" data-app-page="diagnostics"><span>⚑</span>Fehler &amp; Protokoll</button>
             <button class="sidebar-nav-item" type="button" data-app-page="media"><span>▤</span>Medien</button>
             <button class="sidebar-nav-item" type="button" data-app-page="identities"><span>●</span>Personen &amp; Tiere</button>
             <button class="sidebar-nav-item" type="button" data-app-page="life-areas"><span>◆</span>Lebensbereiche</button>
             <button class="sidebar-nav-item" type="button" data-app-page="map"><span>⌖</span>Karte</button>
           </nav>
           <div class="sidebar-status">
+            <button
+              id="analysisBoostButton"
+              class="analysis-boost-button"
+              type="button"
+              aria-pressed="false"
+              title="Analyse-Boost aktivieren: 100 % CPU-Zielbudget und hohe Prozesspriorität"
+            >
+              <span id="analysisBoostIcon" class="analysis-boost-icon">⚡</span>
+              <span class="analysis-boost-copy">
+                <strong id="analysisBoostLabel">Boost aktivieren</strong>
+                <small id="analysisBoostHint">100 % CPU · hohe Priorität</small>
+              </span>
+            </button>
             <button
               id="backgroundPauseButton"
               class="background-pause-button"
@@ -349,6 +363,85 @@
         </details>
         </section>
 
+        <section id="diagnosticsPage" class="workspace-page diagnostics-page" data-workspace-page="diagnostics" hidden>
+          <div class="workspace-page-heading">
+            <div>
+              <span class="section-kicker">Fehlerdiagnose</span>
+              <h1>Fehler &amp; Protokoll</h1>
+            </div>
+            <p>Fehlerursachen, betroffene Medien und Worker-Protokoll. Bereits erfolgreiche Analysen bleiben bei Wiederholungen erhalten.</p>
+          </div>
+
+          <section class="panel diagnostics-panel">
+            <div class="panel-heading">
+              <div><h2>Fehlerübersicht</h2><p id="diagnosticsSummary">Wird geladen …</p></div>
+              <button id="diagnosticsRefresh" class="ghost" type="button">Aktualisieren</button>
+            </div>
+            <div id="diagnosticsGroups" class="diagnostics-groups"></div>
+          </section>
+
+          <section class="panel diagnostics-panel">
+            <div class="panel-heading">
+              <div>
+                <h2>Betroffene Analysen</h2>
+                <p>Ein Fehler kann mehrere abhängige Jobs betreffen. Pro Seite werden höchstens 75 Ergebnisse geladen.</p>
+              </div>
+            </div>
+            <div class="diagnostics-filters">
+              <label>Quellen
+                <select id="diagnosticsScope">
+                  <option value="all">Alle Quellen</option>
+                  <option value="source">Aktuelle Medienquelle</option>
+                </select>
+              </label>
+              <label>Analyseschritt
+                <select id="diagnosticsModule"><option value="">Alle Analyseschritte</option></select>
+              </label>
+              <label>Fehlerursache
+                <select id="diagnosticsCause">
+                  <option value="">Alle Ursachen</option>
+                  <option value="UNAVAILABLE">Datei nicht erreichbar</option>
+                  <option value="DEPENDENCY">Folgefehler</option>
+                  <option value="HEIC">HEIC / HEIF</option>
+                  <option value="LARGE_IMAGE">Sehr großes Bild</option>
+                  <option value="TIMEOUT">Zeitüberschreitung</option>
+                  <option value="FORMAT">Dateiformat / Decoder</option>
+                  <option value="DECODE">Bilddecoder</option>
+                  <option value="OTHER">Sonstige</option>
+                </select>
+              </label>
+              <label>Suche
+                <input id="diagnosticsSearch" type="search" placeholder="Datei, Pfad oder Fehlermeldung …" />
+              </label>
+              <button id="diagnosticsResetFilters" type="button" class="ghost">Filter zurücksetzen</button>
+            </div>
+            <div class="diagnostics-actions">
+              <button id="diagnosticsRetrySample" type="button" class="secondary">50 Fehler testweise erneut</button>
+              <button id="diagnosticsRetryAll" type="button" class="ghost">Alle Fehler der Quelle erneut</button>
+              <button id="diagnosticsCopyVisible" type="button" class="ghost">Sichtbare Fehler kopieren</button>
+            </div>
+            <div id="diagnosticsErrors" class="diagnostics-errors"></div>
+            <div class="diagnostics-pagination">
+              <button id="diagnosticsPrevious" type="button" class="ghost">Vorherige</button>
+              <span id="diagnosticsPageStatus">0–0 von 0</span>
+              <button id="diagnosticsNext" type="button" class="ghost">Nächste</button>
+            </div>
+          </section>
+
+          <section class="panel diagnostics-panel">
+            <div class="panel-heading">
+              <div><h2>Worker-Protokoll</h2><p>Nur die jüngsten Protokolleinträge werden aus der Datei gelesen – kein vollständiger Import großer Logs.</p></div>
+            </div>
+            <div class="diagnostics-actions">
+              <label class="diagnostics-checkbox"><input id="diagnosticsLogOnlyProblems" type="checkbox" checked /> Nur Fehler und Warnungen</label>
+              <button id="diagnosticsRefreshLog" type="button" class="ghost">Protokoll aktualisieren</button>
+              <button id="diagnosticsCopyLog" type="button" class="ghost">Sichtbares Protokoll kopieren</button>
+              <button id="diagnosticsOpenLog" type="button" class="ghost">Logdatei öffnen</button>
+            </div>
+            <div id="diagnosticsLog" class="diagnostics-log"></div>
+          </section>
+        </section>
+
         <section class="workspace-page" data-workspace-page="media" hidden>
           <div class="workspace-page-heading">
             <div><span class="section-kicker">Bibliothek</span><h1>Medien</h1></div>
@@ -484,6 +577,8 @@
                   <select id="librarySort">
                     <option value="captured-desc">Aufnahme · neueste zuerst</option>
                     <option value="captured-asc">Aufnahme · älteste zuerst</option>
+                    <option value="analyzed-desc">Letzte Analyse · neueste zuerst</option>
+                    <option value="analyzed-asc">Letzte Analyse · älteste zuerst</option>
                     <option value="path-asc">Pfad · A–Z</option>
                     <option value="path-desc">Pfad · Z–A</option>
                     <option value="size-desc">Größe · absteigend</option>
@@ -529,6 +624,7 @@
                     <th>Größe</th>
                     <th>Status</th>
                     <th>Analyse bis</th>
+                    <th>Letzte Analyse</th>
                     <th>Aktion</th>
                   </tr>
                 </thead>
@@ -548,6 +644,10 @@
                 <p id="personStatus">
                   Ähnliche Gesichter werden vorsichtig gruppiert. Erst deine Bestätigung macht daraus eine Person.
                 </p>
+                <div class="confirmation-view-switch" role="group" aria-label="Ansicht für Personenbestätigung">
+                  <button id="personViewGrouped" class="active" type="button">Gruppiert</button>
+                  <button id="personViewSerial" type="button">Seriell</button>
+                </div>
                 <div class="confirmation-media-filter" role="group" aria-label="Personen nach Medientyp filtern">
                   <span>Vorkommen</span>
                   <div>
@@ -560,20 +660,75 @@
               <button id="refreshPeople" class="ghost" type="button">Vorschläge neu berechnen</button>
             </div>
 
-            <section class="person-section">
-              <div class="person-section-heading">
-                <h3>Zu bestätigen</h3>
-                <p>Ein falsches Zusammenführen ist problematischer als zwei getrennte Vorschläge – deshalb gruppieren wir konservativ.</p>
-              </div>
-              <div id="personCandidates" class="person-candidates"></div>
-            </section>
+            <div id="personGroupedView">
+              <section class="person-section">
+                <div class="person-section-heading">
+                  <h3>Zu bestätigen</h3>
+                  <p>Ein falsches Zusammenführen ist problematischer als zwei getrennte Vorschläge – deshalb gruppieren wir konservativ.</p>
+                </div>
+                <div id="personCandidates" class="person-candidates"></div>
+              </section>
 
-            <section class="person-section confirmed-section">
-              <div class="person-section-heading">
-                <h3>Bestätigte Personen</h3>
-                <p>Diese Zuordnungen bleiben erhalten und werden bei späteren Neuberechnungen nicht überschrieben.</p>
+              <section class="person-section confirmed-section">
+                <div class="person-section-heading">
+                  <h3>Bestätigte Personen</h3>
+                  <p>Diese Zuordnungen bleiben erhalten und werden bei späteren Neuberechnungen nicht überschrieben.</p>
+                </div>
+                <div id="confirmedPersons" class="confirmed-persons"></div>
+              </section>
+            </div>
+
+            <section id="personSerialView" class="serial-review-view" hidden>
+              <div class="serial-review-toolbar">
+                <div class="serial-queue-tabs" role="group" aria-label="Serielle Personenrunde">
+                  <button id="personSerialSuggested" class="active" type="button">Vorschläge bestätigen</button>
+                  <button id="personSerialUnknown" type="button">Unbekannte zuordnen</button>
+                </div>
+                <span id="personSerialSummary">—</span>
+                <button id="personSerialExit" class="ghost serial-exit" type="button">Zurück zu Gruppiert</button>
               </div>
-              <div id="confirmedPersons" class="confirmed-persons"></div>
+              <div class="serial-review-layout">
+                <aside class="serial-review-groups">
+                  <h4>Gruppen</h4>
+                  <div id="personSerialGroups" class="serial-group-list"></div>
+                </aside>
+
+                <main class="serial-review-main">
+                  <div id="personSerialStage" class="serial-review-stage">
+                    <div class="serial-image-wrap">
+                      <img id="personSerialImage" alt="" />
+                    </div>
+                    <div id="personSerialBox" class="serial-detection-box" hidden></div>
+                  </div>
+                  <p id="personSerialPath" class="serial-review-path"></p>
+                </main>
+
+                <aside class="serial-review-info">
+                  <aside id="personSerialPip" class="serial-face-pip" hidden aria-label="Vergrößerter Gesichtsausschnitt">
+                    <span>Gesicht vergrößert</span>
+                    <img id="personSerialPipImage" alt="" />
+                  </aside>
+                  <div id="personSerialPrimary" class="serial-primary"></div>
+                  <section class="serial-alternatives-section">
+                    <h4>Weitere Vorschläge</h4>
+                    <div id="personSerialAlternatives" class="serial-alternative-list"></div>
+                  </section>
+                  <div id="personSerialEmpty" class="serial-empty" hidden>Keine offenen Fundstellen.</div>
+                </aside>
+              </div>
+
+              <div class="serial-floating-actions">
+                <div id="personSerialKnownActions" class="serial-decision-actions">
+                  <button id="personSerialYes" class="serial-yes" type="button">Ja</button>
+                  <button id="personSerialNo" class="serial-no" type="button">Nein</button>
+                  <button id="personSerialPass" class="serial-pass ghost" type="button">Überspringen</button>
+                </div>
+                <div id="personSerialUnknownActions" class="serial-unknown-actions" hidden>
+                  <div id="personSerialNameMount"></div>
+                  <button id="personSerialAssign" class="primary" type="button">Zuordnen</button>
+                  <button id="personSerialSkip" class="ghost serial-skip" type="button">Diese Gesichtergruppe überspringen</button>
+                </div>
+              </div>
             </section>
           </div>
 
@@ -584,6 +739,10 @@
                 <p id="petStatus">
                   Fusionierte Hundefundstellen werden mit einem spezialisierten Dog-ReID-Modell gruppiert. Namen werden erst nach deiner Bestätigung gespeichert.
                 </p>
+                <div class="confirmation-view-switch" role="group" aria-label="Ansicht für Haustierbestätigung">
+                  <button id="petViewGrouped" class="active" type="button">Gruppiert</button>
+                  <button id="petViewSerial" type="button">Seriell</button>
+                </div>
                 <div class="confirmation-media-filter" role="group" aria-label="Haustiere nach Medientyp filtern">
                   <span>Vorkommen</span>
                   <div>
@@ -596,20 +755,71 @@
               <button id="refreshPets" class="ghost" type="button">Vorschläge neu berechnen</button>
             </div>
 
-            <section class="person-section">
-              <div class="person-section-heading">
-                <h3>Hunde zu bestätigen</h3>
-                <p>Die Gruppierung ist bewusst konservativ. Zwei getrennte Gruppen kannst du später mit demselben Namen bestätigen.</p>
-              </div>
-              <div id="petCandidates" class="person-candidates"></div>
-            </section>
+            <div id="petGroupedView">
+              <section class="person-section">
+                <div class="person-section-heading">
+                  <h3>Hunde zu bestätigen</h3>
+                  <p>Die Gruppierung ist bewusst konservativ. Zwei getrennte Gruppen kannst du später mit demselben Namen bestätigen.</p>
+                </div>
+                <div id="petCandidates" class="person-candidates"></div>
+              </section>
 
-            <section class="person-section confirmed-section">
-              <div class="person-section-heading">
-                <h3>Bestätigte Haustiere</h3>
-                <p>Aktuell unterstützt die individuelle Wiedererkennung Hunde. Katzen werden erkannt, aber noch nicht individuell gruppiert.</p>
+              <section class="person-section confirmed-section">
+                <div class="person-section-heading">
+                  <h3>Bestätigte Haustiere</h3>
+                  <p>Aktuell unterstützt die individuelle Wiedererkennung Hunde. Katzen werden erkannt, aber noch nicht individuell gruppiert.</p>
+                </div>
+                <div id="confirmedPets" class="confirmed-persons"></div>
+              </section>
+            </div>
+
+            <section id="petSerialView" class="serial-review-view" hidden>
+              <div class="serial-review-toolbar">
+                <div class="serial-queue-tabs" role="group" aria-label="Serielle Haustierrunde">
+                  <button id="petSerialSuggested" class="active" type="button">Vorschläge bestätigen</button>
+                  <button id="petSerialUnknown" type="button">Unbekannte zuordnen</button>
+                </div>
+                <span id="petSerialSummary">—</span>
+                <button id="petSerialExit" class="ghost serial-exit" type="button">Zurück zu Gruppiert</button>
               </div>
-              <div id="confirmedPets" class="confirmed-persons"></div>
+              <div class="serial-review-layout">
+                <aside class="serial-review-groups">
+                  <h4>Gruppen</h4>
+                  <div id="petSerialGroups" class="serial-group-list"></div>
+                </aside>
+
+                <main class="serial-review-main">
+                  <div id="petSerialStage" class="serial-review-stage">
+                    <div class="serial-image-wrap">
+                      <img id="petSerialImage" alt="" />
+                    </div>
+                    <div id="petSerialBox" class="serial-detection-box" hidden></div>
+                  </div>
+                  <p id="petSerialPath" class="serial-review-path"></p>
+                </main>
+
+                <aside class="serial-review-info">
+                  <div id="petSerialPrimary" class="serial-primary"></div>
+                  <section class="serial-alternatives-section">
+                    <h4>Weitere Vorschläge</h4>
+                    <div id="petSerialAlternatives" class="serial-alternative-list"></div>
+                  </section>
+                  <div id="petSerialEmpty" class="serial-empty" hidden>Keine offenen Fundstellen.</div>
+                </aside>
+              </div>
+
+              <div class="serial-floating-actions">
+                <div id="petSerialKnownActions" class="serial-decision-actions">
+                  <button id="petSerialYes" class="serial-yes" type="button">Ja</button>
+                  <button id="petSerialNo" class="serial-no" type="button">Nein</button>
+                  <button id="petSerialPass" class="serial-pass ghost" type="button">Überspringen</button>
+                </div>
+                <div id="petSerialUnknownActions" class="serial-unknown-actions" hidden>
+                  <div id="petSerialNameMount"></div>
+                  <button id="petSerialAssign" class="primary" type="button">Zuordnen</button>
+                  <button id="petSerialSkip" class="ghost serial-skip" type="button">Diese Haustiergruppe überspringen</button>
+                </div>
+              </div>
             </section>
           </div>
         </section>
@@ -820,12 +1030,77 @@
 
         <section class="workspace-page map-workspace-page" data-workspace-page="map" hidden>
           <div class="workspace-page-heading map-page-heading">
-            <div><span class="section-kicker">Geodaten</span><h1>Karte</h1></div>
-            <p><strong id="mapGeoCount">0</strong> georeferenzierte Medien · Punkte werden abhängig vom Zoom zusammengefasst.</p>
+            <div>
+              <span class="section-kicker">Geodaten</span>
+              <h1>Karte</h1>
+              <p>Aufnahmeorte durchsuchen, eingrenzen und die Bilder des aktuellen Kartenausschnitts ansehen.</p>
+            </div>
+            <div class="map-heading-stats" aria-label="Kartenstatistik">
+              <span><strong id="mapGeoCount">0</strong><small>mit GPS</small></span>
+              <span><strong id="mapFilteredCount">0</strong><small>nach Filter</small></span>
+              <span><strong id="mapVisibleCount">0</strong><small>im Ausschnitt</small></span>
+            </div>
           </div>
+
+          <section class="panel map-filter-panel" aria-label="Kartenfilter">
+            <div class="map-filter-grid">
+              <label class="map-filter-search">
+                <span>Datei oder Ordner</span>
+                <input id="mapTextFilter" type="search" placeholder="z. B. Urlaub, DRK, IMG_2026 …" autocomplete="off" />
+              </label>
+              <label>
+                <span>Quelle</span>
+                <select id="mapSourceFilter">
+                  <option value="">Alle Quellen</option>
+                </select>
+              </label>
+              <label>
+                <span>Medientyp</span>
+                <select id="mapMediaTypeFilter">
+                  <option value="all">Fotos &amp; Videos</option>
+                  <option value="image">Nur Fotos</option>
+                  <option value="video">Nur Videos</option>
+                </select>
+              </label>
+              <label>
+                <span>Von</span>
+                <input id="mapDateFrom" type="date" />
+              </label>
+              <label>
+                <span>Bis</span>
+                <input id="mapDateTo" type="date" />
+              </label>
+              <div class="map-filter-actions">
+                <button id="mapFitFiltered" class="secondary" type="button">Treffer fokussieren</button>
+                <button id="mapFilterReset" class="ghost" type="button">Filter zurücksetzen</button>
+              </div>
+            </div>
+            <div id="mapFilterState" class="map-filter-state">Alle georeferenzierten Medien</div>
+          </section>
+
           <section class="panel map-panel">
-            <div id="mapEmptyState" class="map-empty-state">Noch keine Medien mit GPS-Koordinaten im Katalog.</div>
-            <div id="mediaMap" class="media-map" aria-label="Karte der Aufnahmeorte"></div>
+            <div class="map-browser-map map-browser-map-full">
+              <div id="mapEmptyState" class="map-empty-state">Noch keine Medien mit GPS-Koordinaten im Katalog.</div>
+              <div id="mediaMap" class="media-map" aria-label="Karte der Aufnahmeorte"></div>
+            </div>
+          </section>
+
+          <section class="panel map-gallery-panel">
+            <div class="map-gallery-toolbar">
+              <div>
+                <strong id="mapVisibleCountText">Medien im Kartenausschnitt</strong>
+                <small>Die Galerie aktualisiert sich beim Verschieben und Zoomen der Karte.</small>
+              </div>
+              <label>
+                <span>Sortierung</span>
+                <select id="mapMediaSort">
+                  <option value="newest">Neueste zuerst</option>
+                  <option value="oldest">Älteste zuerst</option>
+                  <option value="name">Dateiname</option>
+                </select>
+              </label>
+            </div>
+            <div id="mapMediaGallery" class="map-media-gallery"></div>
           </section>
         </section>
       </main>

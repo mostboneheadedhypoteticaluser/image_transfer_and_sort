@@ -46,7 +46,11 @@ export class PetService {
     sourceId: number,
     forceRefresh = false,
     allowWhilePending = false,
-    rebuildIfNeeded = true
+    rebuildIfNeeded = true,
+    candidateLimit = 500,
+    includeSupporting = true,
+    readOnly = false,
+    summaryOnly = false
   ): Promise<PetOverview> {
     const queue = await this.catalog.request<AnalysisQueueStats>(
       "getAnalysisQueueStats",
@@ -59,6 +63,7 @@ export class PetService {
     const clusteringPending = queue.pending > 0 || queue.running > 0;
 
     if (
+      !readOnly &&
       (!clusteringPending || allowWhilePending) &&
       this.analysis.getStatus().state === "READY"
     ) {
@@ -86,7 +91,7 @@ export class PetService {
             verificationThreshold: VERIFICATION_THRESHOLD,
             minClusterSize: 2
           },
-          120000
+          600000
         );
 
         const replaced =
@@ -128,23 +133,63 @@ export class PetService {
       await this.catalog.request("autoAssignKnownPetCandidates", { sourceId });
     }
 
+    const normalizedCandidateLimit = Math.max(
+      1,
+      Math.min(2000, Math.trunc(candidateLimit || 500))
+    );
     const candidates = await this.catalog.request<PetCandidate[]>(
       "listPetCandidates",
       {
         sourceId,
-        limit: 500,
+        limit: normalizedCandidateLimit,
         ignoreDefiniteThreshold: CLUSTER_THRESHOLD,
-        ignoreDoubtThreshold: VERIFICATION_THRESHOLD
+        ignoreDoubtThreshold: VERIFICATION_THRESHOLD,
+        summaryOnly
       }
     );
-    const [pets, stats] = await Promise.all([
-      this.catalog.request<PetRecord[]>("listPets", { sourceId }),
-      this.catalog.request<CatalogStats>("getStats", { sourceId })
+    if (summaryOnly) {
+      const [stats, pets] = await Promise.all([
+        this.catalog.request<{
+          petCandidates: number;
+          petCandidateDetections: number;
+        }>("getIdentityCandidateSummaryStats", { sourceId }),
+        includeSupporting
+          ? this.catalog.request<PetRecord[]>("listPets", {
+              sourceId,
+              summaryOnly: true
+            })
+          : Promise.resolve([] as PetRecord[])
+      ]);
+
+      return {
+        summaryOnly: true,
+        candidates,
+        pets,
+        ungroupedPets: [],
+        clusteringPending,
+        candidateTotal: stats.petCandidates,
+        candidateDetectionTotal: stats.petCandidateDetections,
+        ungroupedDetectionTotal: 0
+      };
+    }
+
+    const [pets, stats, ungroupedPets] = await Promise.all([
+      includeSupporting
+        ? this.catalog.request<PetRecord[]>("listPets", { sourceId })
+        : Promise.resolve([] as PetRecord[]),
+      this.catalog.request<CatalogStats>("getStats", { sourceId }),
+      includeSupporting
+        ? this.catalog.request<PetOverview["ungroupedPets"]>(
+            "listUngroupedPetDetections",
+            { sourceId, limit: 1000 }
+          )
+        : Promise.resolve([] as PetOverview["ungroupedPets"])
     ]);
 
     return {
       candidates,
       pets,
+      ungroupedPets,
       clusteringPending,
       candidateTotal: stats.petCandidates,
       candidateDetectionTotal: stats.petCandidateDetections,
@@ -155,16 +200,39 @@ export class PetService {
     };
   }
 
-  async getCombinedOverview(forceRefresh = false): Promise<PetOverview> {
+  async getCombinedOverview(
+    forceRefresh = false,
+    candidateLimit = 500,
+    candidateOffset = 0,
+    includeSupporting = true,
+    readOnly = false,
+    summaryOnly = false
+  ): Promise<PetOverview> {
     const sources = await this.catalog.request<SourceRecord[]>("listSources");
     const enabledSources = sources.filter((source) => source.enabled);
+
+    const normalizedLimit = Math.max(
+      1,
+      Math.min(100, Math.trunc(candidateLimit || 10))
+    );
+    const normalizedOffset = Math.max(0, Math.trunc(candidateOffset || 0));
+    const sourceWindow = Math.min(2000, normalizedOffset + normalizedLimit);
 
     const overviews: PetOverview[] = [];
     for (const source of enabledSources) {
       // Normales Öffnen ist read-only; nur explizites Aktualisieren oder ein
       // Algorithmuswechsel darf synchron neu gruppieren.
       overviews.push(
-        await this.getOverview(source.id, forceRefresh, false, forceRefresh)
+        await this.getOverview(
+          source.id,
+          forceRefresh,
+          false,
+          forceRefresh,
+          sourceWindow,
+          includeSupporting,
+          readOnly,
+          summaryOnly
+        )
       );
     }
 
@@ -221,13 +289,18 @@ export class PetService {
           b.averageSimilarity - a.averageSimilarity ||
           b.newestPetId - a.newestPetId
       )
-      .slice(0, 500);
+      .slice(normalizedOffset, normalizedOffset + normalizedLimit);
 
     return {
+      summaryOnly,
       candidates,
       pets: [...petMap.values()].sort(
         (a, b) => a.name.localeCompare(b.name, "de", { sensitivity: "base" })
       ),
+      ungroupedPets: overviews
+        .flatMap((overview) => overview.ungroupedPets)
+        .sort((a, b) => b.petDetectionId - a.petDetectionId)
+        .slice(0, 4000),
       clusteringPending: overviews.some((overview) => overview.clusteringPending),
       candidateTotal: overviews.reduce(
         (sum, overview) => sum + overview.candidateTotal,
@@ -251,6 +324,17 @@ export class PetService {
       if (!source.enabled) continue;
       await this.getOverview(source.id, incremental, incremental);
     }
+  }
+
+  async listCandidateItems(
+    candidateId: number,
+    limit = 5000,
+    offset = 0
+  ): Promise<PetCandidate["pets"]> {
+    return this.catalog.request<PetCandidate["pets"]>(
+      "listPetCandidateItems",
+      { candidateId, limit, offset }
+    );
   }
 
   async confirmCandidate(
@@ -290,6 +374,16 @@ export class PetService {
         expectedMemberSignature,
         ignoredIdentityId
       }
+    );
+  }
+
+  async rejectDetectionSuggestion(
+    petDetectionId: number,
+    petId: number
+  ): Promise<PetCorrectionResult> {
+    return this.catalog.request<PetCorrectionResult>(
+      "rejectPetDetectionSuggestion",
+      { petDetectionId, petId }
     );
   }
 

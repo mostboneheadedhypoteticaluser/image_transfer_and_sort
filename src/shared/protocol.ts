@@ -10,7 +10,9 @@ export type AnalysisWorkerStatus = {
   state: "STARTING" | "READY" | "STOPPED" | "ERROR";
   pid: number | null;
   python: string | null;
-  processPriority: "below-normal";
+  processPriority: "below-normal" | "high";
+  boostEnabled: boolean;
+  identityGrouping: "none" | "people" | "pets" | "both";
   cpuBudgetPercent: number;
   maxConcurrentJobs: number;
   queuedJobs: number;
@@ -155,6 +157,45 @@ export type AnalysisErrorRecord = {
   finishedAt: string | null;
 };
 
+export type AnalysisErrorCause =
+  | "UNAVAILABLE" | "DEPENDENCY" | "HEIC" | "LARGE_IMAGE"
+  | "TIMEOUT" | "FORMAT" | "DECODE" | "OTHER";
+
+export type AnalysisErrorOverview = {
+  totalJobs: number;
+  mediaCount: number;
+  dependentJobs: number;
+  unavailableJobs: number;
+  groups: Array<{
+    module: string;
+    cause: AnalysisErrorCause;
+    count: number;
+    mediaCount: number;
+    example: string;
+  }>;
+};
+
+export type AnalysisErrorPageFilter = {
+  sourceId?: number;
+  module?: string;
+  cause?: AnalysisErrorCause | "";
+  search?: string;
+  limit?: number;
+  offset?: number;
+};
+
+export type AnalysisErrorPage = {
+  total: number;
+  items: Array<AnalysisErrorRecord & { cause: AnalysisErrorCause }>;
+};
+
+export type DiagnosticLogEntry = {
+  ts: string;
+  source: string;
+  event: string;
+  detail: string;
+};
+
 export type RetryAnalysisResult = {
   retried: number;
 };
@@ -251,6 +292,8 @@ export type GeoMediaPoint = {
   mediaId: number;
   sourceId: number;
   relativePath: string;
+  extension: string;
+  sizeBytes: number;
   latitude: number;
   longitude: number;
   capturedAt: string | null;
@@ -423,6 +466,18 @@ export type PetCandidateItem = {
   suggestedPets: PetMatchSuggestion[];
 };
 
+export type PetUngroupedItem = {
+  petDetectionId: number;
+  mediaId: number;
+  relativePath: string;
+  petClass: "dog" | "cat";
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  suggestedPets: PetMatchSuggestion[];
+};
+
 export type PetMatchSuggestion = {
   petId: number;
   petName: string;
@@ -474,8 +529,10 @@ export type PetRecord = {
 };
 
 export type PetOverview = {
+  summaryOnly?: boolean;
   candidates: PetCandidate[];
   pets: PetRecord[];
+  ungroupedPets: PetUngroupedItem[];
   clusteringPending: boolean;
   candidateTotal: number;
   candidateDetectionTotal: number;
@@ -578,6 +635,17 @@ export type PersonCandidateFace = {
   suggestedPersons: PersonMatchSuggestion[];
 };
 
+export type PersonUngroupedFace = {
+  faceDetectionId: number;
+  mediaId: number;
+  relativePath: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  suggestedPersons: PersonMatchSuggestion[];
+};
+
 export type PersonMatchSuggestion = {
   personId: number;
   personName: string;
@@ -623,8 +691,10 @@ export type PersonRecord = {
 };
 
 export type PersonOverview = {
+  summaryOnly?: boolean;
   candidates: PersonCandidate[];
   persons: PersonRecord[];
+  ungroupedFaces: PersonUngroupedFace[];
   clusteringPending: boolean;
   candidateTotal: number;
   candidateFaceTotal: number;
@@ -761,6 +831,8 @@ export type MediaRecord = {
   thumbnailReady: boolean;
   thumbnailVersion: string | null;
   capturedAt: string | null;
+  /** Neuester erfolgreicher Analysejob für den aktuellen Datei-SHA. */
+  lastAnalyzedAt: string | null;
   faceCount: number;
   faceEmbeddingCount: number;
   petCount: number;
@@ -980,6 +1052,8 @@ export type CatalogMethod =
   | "addSource"
   | "disableSource"
   | "getStats"
+  | "getIdentityCandidateSummaryStats"
+  | "getRemoteSummary"
   | "listMedia"
   | "listGeoMedia"
   | "listLifeAreas"
@@ -999,10 +1073,14 @@ export type CatalogMethod =
   | "enqueueAnalysisJobs"
   | "getAnalysisQueueStats"
   | "getPipelineQueueStats"
+  | "getAnalysisHistory"
   | "getPetDetectionQueueStats"
   | "getIdentityEmbeddingCounts"
   | "listAnalysisErrors"
   | "countAnalysisErrors"
+  | "getAnalysisErrorOverview"
+  | "listAnalysisErrorPage"
+  | "retryErrorSample"
   | "retryAnalysisJob"
   | "retryFailedAnalysisJobs"
   | "claimAnalysisJob"
@@ -1026,7 +1104,10 @@ export type CatalogMethod =
   | "getPetEmbeddingsForClustering"
   | "replacePetCandidates"
   | "autoAssignKnownPetCandidates"
+  | "listUngroupedPetDetections"
+  | "rejectPetDetectionSuggestion"
   | "listPetCandidates"
+  | "listPetCandidateItems"
   | "listPets"
   | "confirmPetCandidate"
   | "ignorePetCandidate"
@@ -1041,7 +1122,10 @@ export type CatalogMethod =
   | "getPetCropInfo"
   | "getFaceEmbeddingsForClustering"
   | "replacePersonCandidates"
+  | "listUngroupedPersonDetections"
+  | "rejectPersonDetectionSuggestion"
   | "listPersonCandidates"
+  | "listPersonCandidateItems"
   | "listPersons"
   | "confirmPersonCandidate"
   | "assignPersonCandidateSelection"
@@ -1056,6 +1140,7 @@ export type CatalogMethod =
   | "getMediaPreviewInfo"
   | "getMediaDetails"
   | "assignVideoFrameIdentityName"
+  | "assignVideoFrameIdentityNames"
   | "reanalyzeMedia"
   | "getMediaPath"
   | "scanSource"

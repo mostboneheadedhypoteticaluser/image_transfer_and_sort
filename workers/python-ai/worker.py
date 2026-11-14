@@ -85,6 +85,17 @@ _pil_started = time.perf_counter()
 _pil_error = None
 try:
     from PIL import Image, ImageDraw, ImageOps
+    # Große Original-JPEGs werden nicht allein aufgrund ihrer Pixelanzahl
+    # abgelehnt. Pillow bleibt durch die begrenzte Obergrenze geschützt.
+    Image.MAX_IMAGE_PIXELS = max(Image.MAX_IMAGE_PIXELS or 0, 250_000_000)
+    try:
+        from pillow_heif import register_heif_opener
+        register_heif_opener()
+        dev_log("HEIF_DECODER_READY")
+    except Exception as exc:
+        # Ein optionaler Codec darf den gesamten KI-Worker nicht blockieren.
+        dev_log("HEIF_DECODER_MISSING", error=str(exc),
+                hint="npm run setup:ai (pillow-heif)")
 except Exception as exc:
     Image = None
     ImageDraw = None
@@ -732,9 +743,30 @@ def gps_coordinate(values: Any, reference: Any) -> float | None:
     if degrees is None or minutes is None or seconds is None:
         return None
 
-    coordinate = degrees + minutes / 60.0 + seconds / 3600.0
-    ref = str(reference or "").upper()
+    # Pillow can return GPSLatitudeRef/GPSLongitudeRef either as text or bytes.
+    # str(b"W") would become "B'W'" and previously lost the west/south sign,
+    # which mirrored coordinates into the wrong hemisphere.
+    if isinstance(reference, (bytes, bytearray)):
+        try:
+            ref = bytes(reference).decode("ascii", errors="ignore")
+        except Exception:
+            ref = ""
+    else:
+        ref = str(reference or "")
+    ref = ref.strip().upper()
 
+    if ref not in {"N", "S", "E", "W"}:
+        return None
+    if degrees < 0 or minutes < 0 or minutes >= 60 or seconds < 0 or seconds >= 60:
+        return None
+
+    max_degrees = 90.0 if ref in {"N", "S"} else 180.0
+    if degrees > max_degrees:
+        return None
+    if degrees == max_degrees and (minutes > 0 or seconds > 0):
+        return None
+
+    coordinate = degrees + minutes / 60.0 + seconds / 3600.0
     if ref in {"S", "W"}:
         coordinate *= -1
 
@@ -844,18 +876,33 @@ def extract_image_metadata(file_path: str) -> dict:
 
 
 def read_oriented_face_image(file_path: str):
-    """Load the same EXIF-oriented pixels that sharp.rotate() previews show."""
-    if cv2 is None:
-        raise RuntimeError("OpenCV fehlt.")
-    if Image is not None and ImageOps is not None and np is not None:
+    """Bild mit EXIF-Orientierung lesen, auch bei Windows-Unicode-Pfaden.
+
+    OpenCV.imread() kann auf manchen Windows-Systemen Pfade mit Umlauten
+    nicht öffnen. NumPy.fromfile() verwendet dagegen die Python-Pfad-API.
+    """
+    if cv2 is None or np is None:
+        raise RuntimeError("OpenCV/Numpy fehlt.")
+    if Image is not None and ImageOps is not None:
         try:
             with Image.open(file_path) as source:
                 oriented = ImageOps.exif_transpose(source).convert("RGB")
                 return cv2.cvtColor(np.asarray(oriented), cv2.COLOR_RGB2BGR)
-        except Exception:
-            # Keep OpenCV as a fallback for formats Pillow cannot decode.
-            pass
-    return cv2.imread(file_path, cv2.IMREAD_COLOR)
+        except Exception as exc:
+            dev_log("PIL_IMAGE_READ_FALLBACK", target=file_path, error=str(exc))
+    try:
+        encoded = np.fromfile(file_path, dtype=np.uint8)
+        if encoded.size == 0:
+            return None
+        return cv2.imdecode(encoded, cv2.IMREAD_COLOR)
+    except (OSError, ValueError, cv2.error) as exc:
+        dev_log("OPENCV_IMAGE_READ_FAILED", target=file_path, error=str(exc))
+        return None
+
+
+def read_pet_image(file_path: str):
+    """Einheitlicher Decoder für beide Tierdetektoren und Dog-ReID."""
+    return read_oriented_face_image(file_path)
 
 
 def detect_faces(file_path: str) -> dict:
@@ -1128,7 +1175,7 @@ def detect_pets(file_path: str) -> dict:
             "NanoDet-Modell fehlt. Einmal 'npm.cmd run setup:ai' ausführen."
         )
 
-    image = cv2.imread(file_path, cv2.IMREAD_COLOR)
+    image = read_pet_image(file_path)
     if image is None:
         raise RuntimeError("Bild konnte von OpenCV nicht gelesen werden.")
 
@@ -1357,7 +1404,7 @@ def detect_pets_yolox(file_path: str) -> dict:
             "YOLOX-S-Modell fehlt. Einmal 'npm.cmd run setup:ai' ausführen."
         )
 
-    image = cv2.imread(file_path, cv2.IMREAD_COLOR)
+    image = read_pet_image(file_path)
     if image is None:
         raise RuntimeError("Bild konnte von OpenCV nicht gelesen werden.")
 
@@ -1928,7 +1975,7 @@ def extract_dog_embeddings(file_path: str, pets: list[dict]) -> dict:
             "embeddings": [],
         }
 
-    image = cv2.imread(file_path, cv2.IMREAD_COLOR)
+    image = read_pet_image(file_path)
     if image is None:
         raise RuntimeError("Bild konnte von OpenCV nicht gelesen werden.")
 
@@ -1993,6 +2040,141 @@ def extract_dog_embeddings(file_path: str, pets: list[dict]) -> dict:
         "model": "DogReID DINOv2-B14 0.2.0",
         "embeddings": embeddings,
     }
+
+
+def _greedy_complete_link_clusters(
+    canonical: list[dict],
+    blocked_content_pairs: set[tuple[str, str]],
+    cluster_threshold: float,
+    verification_threshold: float,
+) -> list[dict]:
+    """Greedy complete-link clustering with the same semantics as before.
+
+    The previous implementation performed Python-level dot products for every
+    item/cluster/member combination and rebuilt complete member matrices after
+    every assignment. With several thousand embeddings that became effectively
+    quadratic in Python and could occupy both fast worker slots for hours.
+
+    This version keeps the deterministic input/cluster order but moves centroid
+    scans and complete-link checks into NumPy. Member matrices grow
+    geometrically, so appending a detection is amortized instead of repeatedly
+    copying an ever-growing list.
+    """
+    if not canonical:
+        return []
+
+    dimension = int(np.asarray(canonical[0]["vector"]).reshape(-1).size)
+    centroid_matrix = np.zeros(
+        (len(canonical), dimension),
+        dtype=np.float32,
+    )
+
+    blocked_by_content: dict[str, set[str]] = {}
+    for left, right in blocked_content_pairs:
+        blocked_by_content.setdefault(left, set()).add(right)
+        blocked_by_content.setdefault(right, set()).add(left)
+
+    clusters: list[dict] = []
+    cluster_count = 0
+
+    for item in canonical:
+        vector = np.asarray(item["vector"], dtype=np.float32).reshape(-1)
+        item_content = str(item["contentKey"])
+        best_index: int | None = None
+
+        if cluster_count > 0:
+            centroid_similarities = centroid_matrix[:cluster_count] @ vector
+            candidate_indices = np.flatnonzero(
+                centroid_similarities >= cluster_threshold
+            )
+
+            if candidate_indices.size > 0:
+                # Stable sort preserves the old tie behaviour: if two clusters
+                # have exactly the same similarity, the earlier cluster wins.
+                ordered_candidates = candidate_indices[
+                    np.argsort(
+                        -centroid_similarities[candidate_indices],
+                        kind="stable",
+                    )
+                ]
+
+                blocked_targets = blocked_by_content.get(item_content)
+
+                for raw_index in ordered_candidates:
+                    index = int(raw_index)
+                    cluster = clusters[index]
+
+                    if (
+                        blocked_targets
+                        and not cluster["contentKeys"].isdisjoint(blocked_targets)
+                    ):
+                        continue
+
+                    member_count = int(cluster["memberCount"])
+                    member_matrix = cluster["memberMatrix"]
+                    member_similarities = (
+                        member_matrix[:member_count] @ vector
+                    )
+
+                    if (
+                        member_similarities.size > 0
+                        and float(np.min(member_similarities))
+                        < verification_threshold
+                    ):
+                        continue
+
+                    best_index = index
+                    break
+
+        if best_index is None:
+            capacity = 4
+            member_matrix = np.empty(
+                (capacity, dimension),
+                dtype=np.float32,
+            )
+            member_matrix[0] = vector
+
+            centroid = vector.copy()
+            clusters.append({
+                "centroid": centroid,
+                "sumVector": vector.copy(),
+                "canonicalMembers": [item],
+                "contentKeys": {item_content},
+                "memberMatrix": member_matrix,
+                "memberCount": 1,
+            })
+            centroid_matrix[cluster_count] = centroid
+            cluster_count += 1
+            continue
+
+        cluster = clusters[best_index]
+        member_count = int(cluster["memberCount"])
+        member_matrix = cluster["memberMatrix"]
+
+        if member_count >= int(member_matrix.shape[0]):
+            expanded = np.empty(
+                (max(4, int(member_matrix.shape[0]) * 2), dimension),
+                dtype=np.float32,
+            )
+            expanded[:member_count] = member_matrix[:member_count]
+            member_matrix = expanded
+            cluster["memberMatrix"] = member_matrix
+
+        member_matrix[member_count] = vector
+        cluster["memberCount"] = member_count + 1
+        cluster["canonicalMembers"].append(item)
+        cluster["contentKeys"].add(item_content)
+        cluster["sumVector"] += vector
+
+        centroid = cluster["sumVector"].copy()
+        centroid_norm = float(np.linalg.norm(centroid))
+        if centroid_norm > 0.0:
+            centroid = centroid / centroid_norm
+
+        cluster["centroid"] = centroid
+        centroid_matrix[best_index] = centroid
+
+    return clusters
 
 
 def cluster_pet_embeddings(
@@ -2071,63 +2253,12 @@ def cluster_pet_embeddings(
 
         blocked_content_pairs.add(tuple(sorted((content_a, content_b))))
 
-    clusters: list[dict] = []
-
-    for item in canonical:
-        vector = item["vector"]
-        best_index = None
-        best_similarity = -1.0
-
-        for index, cluster in enumerate(clusters):
-            item_content = str(item["contentKey"])
-            blocked = any(
-                tuple(sorted((item_content, str(member["contentKey"]))))
-                in blocked_content_pairs
-                for member in cluster["canonicalMembers"]
-            )
-            if blocked:
-                continue
-
-            centroid_similarity = float(np.dot(vector, cluster["centroid"]))
-            minimum_member_similarity = min(
-                float(np.dot(vector, member["vector"]))
-                for member in cluster["canonicalMembers"]
-            )
-
-            if (
-                centroid_similarity >= cluster_threshold
-                and minimum_member_similarity >= verification_threshold
-                and centroid_similarity > best_similarity
-            ):
-                best_index = index
-                best_similarity = centroid_similarity
-
-        if best_index is None:
-            clusters.append({
-                "centroid": vector.copy(),
-                "representativeVector": vector.copy(),
-                "canonicalMembers": [item],
-            })
-            continue
-
-        cluster = clusters[best_index]
-        cluster["canonicalMembers"].append(item)
-
-        stacked = np.vstack([
-            member["vector"]
-            for member in cluster["canonicalMembers"]
-        ])
-        centroid = np.mean(stacked, axis=0)
-        centroid_norm = float(np.linalg.norm(centroid))
-        if centroid_norm > 0.0:
-            centroid = centroid / centroid_norm
-        cluster["centroid"] = centroid
-
-        representative = max(
-            cluster["canonicalMembers"],
-            key=lambda member: float(np.dot(member["vector"], centroid)),
-        )
-        cluster["representativeVector"] = representative["vector"]
+    clusters = _greedy_complete_link_clusters(
+        canonical,
+        blocked_content_pairs,
+        cluster_threshold,
+        verification_threshold,
+    )
 
     result_clusters: list[dict] = []
 
@@ -2258,69 +2389,12 @@ def cluster_face_embeddings(
 
         blocked_content_pairs.add(tuple(sorted((content_a, content_b))))
 
-    clusters: list[dict] = []
-
-    for item in canonical:
-        vector = item["vector"]
-        best_index = None
-        best_similarity = -1.0
-
-        for index, cluster in enumerate(clusters):
-            item_content = str(item["contentKey"])
-            blocked = any(
-                tuple(sorted((item_content, str(member["contentKey"]))))
-                in blocked_content_pairs
-                for member in cluster["canonicalMembers"]
-            )
-            if blocked:
-                continue
-
-            centroid_similarity = float(np.dot(vector, cluster["centroid"]))
-
-            # Complete-link-Schutz gegen Cluster-Drift: Ein neues Gesicht muss
-            # nicht nur zum Schwerpunkt, sondern zu JEDEM bereits enthaltenen
-            # unabhängigen Gesicht mindestens die Verifikationsschwelle halten.
-            # Damit kann A~B, B~C nicht mehr dazu führen, dass A und C trotz
-            # mangelnder Ähnlichkeit in derselben Personengruppe landen.
-            minimum_member_similarity = min(
-                float(np.dot(vector, member["vector"]))
-                for member in cluster["canonicalMembers"]
-            )
-
-            if (
-                centroid_similarity >= cluster_threshold
-                and minimum_member_similarity >= verification_threshold
-                and centroid_similarity > best_similarity
-            ):
-                best_index = index
-                best_similarity = centroid_similarity
-
-        if best_index is None:
-            clusters.append({
-                "centroid": vector.copy(),
-                "representativeVector": vector.copy(),
-                "canonicalMembers": [item],
-            })
-            continue
-
-        cluster = clusters[best_index]
-        cluster["canonicalMembers"].append(item)
-
-        stacked = np.vstack([
-            member["vector"]
-            for member in cluster["canonicalMembers"]
-        ])
-        centroid = np.mean(stacked, axis=0)
-        centroid_norm = float(np.linalg.norm(centroid))
-        if centroid_norm > 0.0:
-            centroid = centroid / centroid_norm
-        cluster["centroid"] = centroid
-
-        representative = max(
-            cluster["canonicalMembers"],
-            key=lambda member: float(np.dot(member["vector"], centroid)),
-        )
-        cluster["representativeVector"] = representative["vector"]
+    clusters = _greedy_complete_link_clusters(
+        canonical,
+        blocked_content_pairs,
+        cluster_threshold,
+        verification_threshold,
+    )
 
     result_clusters: list[dict] = []
     ungrouped_count = 0
@@ -6829,6 +6903,13 @@ PARALLEL_FAST_METHODS = {
     "fuse_pet_detections",
     "extract_dog_embeddings",
     "analyze_video_frames",
+}
+
+# Identity grouping must never occupy the normal image/video fast lanes.
+# It has its own single lane and duplicate refresh requests are rejected while
+# one grouping run is active. This keeps stdin responsive and prevents the
+# Electron pipe from filling with requests that only start hours later.
+IDENTITY_BACKGROUND_METHODS = {
     "cluster_face_embeddings",
     "cluster_pet_embeddings",
 }
@@ -6932,8 +7013,13 @@ def main() -> int:
         max_workers=1,
         thread_name_prefix="image-sorter-heavy",
     )
+    identity_executor = ThreadPoolExecutor(
+        max_workers=1,
+        thread_name_prefix="image-sorter-identity",
+    )
     parallel_futures: set[Future[bool]] = set()
     heavy_future: Future[bool] | None = None
+    identity_future: Future[bool] | None = None
 
     try:
         for line in sys.stdin:
@@ -6958,6 +7044,38 @@ def main() -> int:
 
                     parallel_futures.add(
                         executor.submit(process_request_message, message)
+                    )
+                    continue
+
+                if method in IDENTITY_BACKGROUND_METHODS:
+                    if identity_future is not None:
+                        if identity_future.done():
+                            try:
+                                identity_future.result()
+                            except Exception as exc:
+                                dev_log(
+                                    "PY_IDENTITY_REQUEST_THREAD_ERROR",
+                                    error=str(exc),
+                                )
+                            identity_future = None
+                        else:
+                            respond(
+                                request_id,
+                                error=(
+                                    "Personen-/Haustiergruppierung läuft bereits; "
+                                    "doppelter Refresh wurde verworfen."
+                                ),
+                            )
+                            dev_log(
+                                "PY_IDENTITY_REQUEST_SKIPPED_BUSY",
+                                requestId=request_id,
+                                method=method,
+                            )
+                            continue
+
+                    identity_future = identity_executor.submit(
+                        process_request_message,
+                        message,
                     )
                     continue
 
@@ -6998,6 +7116,16 @@ def main() -> int:
                             )
                         heavy_future = None
 
+                    if identity_future is not None:
+                        try:
+                            identity_future.result()
+                        except Exception as exc:
+                            dev_log(
+                                "PY_IDENTITY_REQUEST_THREAD_ERROR",
+                                error=str(exc),
+                            )
+                        identity_future = None
+
                 keep_running = process_request_message(message)
                 if not keep_running:
                     break
@@ -7010,8 +7138,14 @@ def main() -> int:
                 heavy_future.result()
             except Exception as exc:
                 dev_log("PY_HEAVY_REQUEST_THREAD_ERROR", error=str(exc))
+        if identity_future is not None:
+            try:
+                identity_future.result()
+            except Exception as exc:
+                dev_log("PY_IDENTITY_REQUEST_THREAD_ERROR", error=str(exc))
         executor.shutdown(wait=True, cancel_futures=False)
         heavy_executor.shutdown(wait=True, cancel_futures=False)
+        identity_executor.shutdown(wait=True, cancel_futures=False)
         dev_log("PYTHON_WORKER_SHUTDOWN_BEGIN")
         unload_qwen3vl()
         dev_log(
