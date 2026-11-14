@@ -1,6 +1,10 @@
 import { contextBridge, ipcRenderer } from "electron";
 import type {
   AnalysisErrorRecord,
+  AnalysisErrorOverview,
+  AnalysisErrorPageFilter,
+  AnalysisErrorPage,
+  DiagnosticLogEntry,
   AnalysisWorkerStatus,
   BackgroundPauseState,
   AssignPersonSelectionResult,
@@ -120,6 +124,12 @@ const api = {
     },
     listErrors: (sourceId?: number, limit = 200): Promise<AnalysisErrorRecord[]> =>
       ipcRenderer.invoke("analysis:listErrors", sourceId, limit),
+    getErrorOverview: (sourceId?: number): Promise<AnalysisErrorOverview> =>
+      ipcRenderer.invoke("analysis:errorOverview", sourceId),
+    getErrorPage: (filter: AnalysisErrorPageFilter): Promise<AnalysisErrorPage> =>
+      ipcRenderer.invoke("analysis:errorPage", filter),
+    getRecentLog: (limit = 250, onlyProblems = false): Promise<DiagnosticLogEntry[]> =>
+      ipcRenderer.invoke("analysis:recentLog", limit, onlyProblems),
     countErrors: (sourceId?: number): Promise<number> =>
       ipcRenderer.invoke("analysis:countErrors", sourceId),
     retryJob: (jobId: number): Promise<RetryAnalysisResult> =>
