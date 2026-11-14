@@ -224,7 +224,26 @@ export class AnalysisService {
             // Rotation ist nur Komfort; Logging selbst soll weiterlaufen.
           }
           try {
-            renameSync(this.devLogPath, rotated);
+            if (size > maxBytes * 2) {
+              // Bestehende 200-MB-Protokolle nicht als 200-MB-Archiv behalten.
+              // Nur die letzten ~8 MiB der alten Datei sichern.
+              let fd: number | null = null;
+              let tail = Buffer.alloc(0);
+              try {
+                fd = openSync(this.devLogPath, "r");
+                const buffer = Buffer.alloc(maxBytes);
+                const count = readSync(fd, buffer, 0, maxBytes, size - maxBytes);
+                tail = buffer.subarray(0, count);
+              } finally {
+                if (fd !== null) closeSync(fd);
+              }
+              const firstLineEnd = tail.indexOf(10);
+              if (firstLineEnd >= 0) tail = tail.subarray(firstLineEnd + 1);
+              writeFileSync(rotated, tail);
+              writeFileSync(this.devLogPath, "", "utf8");
+            } else {
+              renameSync(this.devLogPath, rotated);
+            }
           } catch {
             // Falls AV/Editor die Datei kurz blockiert, hängen wir weiter an.
           }
