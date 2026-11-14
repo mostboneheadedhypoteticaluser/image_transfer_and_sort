@@ -85,6 +85,15 @@ _pil_started = time.perf_counter()
 _pil_error = None
 try:
     from PIL import Image, ImageDraw, ImageOps
+    # Große Original-JPEGs werden nicht allein aufgrund ihrer Pixelanzahl
+    # abgelehnt. Pillow bleibt durch die begrenzte Obergrenze geschützt.
+    Image.MAX_IMAGE_PIXELS = max(Image.MAX_IMAGE_PIXELS or 0, 250_000_000)
+    try:
+        from pillow_heif import register_heif_opener
+        register_heif_opener()
+        dev_log("HEIF_DECODER_READY")
+    except ImportError:
+        dev_log("HEIF_DECODER_MISSING", hint="npm run setup:ai (pillow-heif)")
 except Exception as exc:
     Image = None
     ImageDraw = None
@@ -865,18 +874,33 @@ def extract_image_metadata(file_path: str) -> dict:
 
 
 def read_oriented_face_image(file_path: str):
-    """Load the same EXIF-oriented pixels that sharp.rotate() previews show."""
-    if cv2 is None:
-        raise RuntimeError("OpenCV fehlt.")
-    if Image is not None and ImageOps is not None and np is not None:
+    """Bild mit EXIF-Orientierung lesen, auch bei Windows-Unicode-Pfaden.
+
+    OpenCV.imread() kann auf manchen Windows-Systemen Pfade mit Umlauten
+    nicht öffnen. NumPy.fromfile() verwendet dagegen die Python-Pfad-API.
+    """
+    if cv2 is None or np is None:
+        raise RuntimeError("OpenCV/Numpy fehlt.")
+    if Image is not None and ImageOps is not None:
         try:
             with Image.open(file_path) as source:
                 oriented = ImageOps.exif_transpose(source).convert("RGB")
                 return cv2.cvtColor(np.asarray(oriented), cv2.COLOR_RGB2BGR)
-        except Exception:
-            # Keep OpenCV as a fallback for formats Pillow cannot decode.
-            pass
-    return cv2.imread(file_path, cv2.IMREAD_COLOR)
+        except Exception as exc:
+            dev_log("PIL_IMAGE_READ_FALLBACK", target=file_path, error=str(exc))
+    try:
+        encoded = np.fromfile(file_path, dtype=np.uint8)
+        if encoded.size == 0:
+            return None
+        return cv2.imdecode(encoded, cv2.IMREAD_COLOR)
+    except (OSError, ValueError, cv2.error) as exc:
+        dev_log("OPENCV_IMAGE_READ_FAILED", target=file_path, error=str(exc))
+        return None
+
+
+def read_pet_image(file_path: str):
+    """Einheitlicher Decoder für beide Tierdetektoren und Dog-ReID."""
+    return read_oriented_face_image(file_path)
 
 
 def detect_faces(file_path: str) -> dict:
@@ -1149,7 +1173,7 @@ def detect_pets(file_path: str) -> dict:
             "NanoDet-Modell fehlt. Einmal 'npm.cmd run setup:ai' ausführen."
         )
 
-    image = cv2.imread(file_path, cv2.IMREAD_COLOR)
+    image = read_pet_image(file_path)
     if image is None:
         raise RuntimeError("Bild konnte von OpenCV nicht gelesen werden.")
 
@@ -1378,7 +1402,7 @@ def detect_pets_yolox(file_path: str) -> dict:
             "YOLOX-S-Modell fehlt. Einmal 'npm.cmd run setup:ai' ausführen."
         )
 
-    image = cv2.imread(file_path, cv2.IMREAD_COLOR)
+    image = read_pet_image(file_path)
     if image is None:
         raise RuntimeError("Bild konnte von OpenCV nicht gelesen werden.")
 
@@ -1949,7 +1973,7 @@ def extract_dog_embeddings(file_path: str, pets: list[dict]) -> dict:
             "embeddings": [],
         }
 
-    image = cv2.imread(file_path, cv2.IMREAD_COLOR)
+    image = read_pet_image(file_path)
     if image is None:
         raise RuntimeError("Bild konnte von OpenCV nicht gelesen werden.")
 
