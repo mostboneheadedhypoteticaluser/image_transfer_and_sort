@@ -130,6 +130,8 @@ const api = {
       ipcRenderer.invoke("analysis:errorPage", filter),
     getRecentLog: (limit = 250, onlyProblems = false): Promise<DiagnosticLogEntry[]> =>
       ipcRenderer.invoke("analysis:recentLog", limit, onlyProblems),
+    retrySample: (filter: AnalysisErrorPageFilter): Promise<RetryAnalysisResult> =>
+      ipcRenderer.invoke("analysis:retrySample", filter),
     countErrors: (sourceId?: number): Promise<number> =>
       ipcRenderer.invoke("analysis:countErrors", sourceId),
     retryJob: (jobId: number): Promise<RetryAnalysisResult> =>
