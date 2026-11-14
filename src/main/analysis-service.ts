@@ -140,45 +140,48 @@ export class AnalysisService {
   }
 
   readRecentDevLog(limit = 250, onlyProblems = false): DiagnosticLogEntry[] {
-    // Immer nur den Dateischwanz lesen – auch ein altes 200-MB-Log bleibt
-    // dadurch schnell und blockiert den Electron-Prozess nicht.
-    if (!existsSync(this.devLogPath)) return [];
-    let fd: number | null = null;
-    try {
-      fd = openSync(this.devLogPath, "r");
-      const fileSize = statSync(this.devLogPath).size;
-      const bytes = Math.min(fileSize, 2 * 1024 * 1024);
-      if (bytes === 0) return [];
-      const buffer = Buffer.alloc(bytes);
-      const read = readSync(fd, buffer, 0, bytes, fileSize - bytes);
-      const lines = buffer.subarray(0, read).toString("utf8").split("\n");
-      if (fileSize > bytes) lines.shift(); // erste Zeile ist angeschnitten
-      const rows: DiagnosticLogEntry[] = [];
-      for (const line of lines) {
-        if (!line.trim()) continue;
-        try {
-          const record = JSON.parse(line) as Record<string, unknown>;
-          const event = String(record.event ?? "UNKNOWN");
-          if (onlyProblems && !/ERROR|FAIL|TIMEOUT|WARNING|WARN|UNAVAILABLE/i.test(event)) {
-            continue;
+    // Nur den Dateischwanz lesen, auch für das Archiv .1. Ein altes
+    // 200-MB-Protokoll wird niemals vollständig in den Speicher geladen.
+    const rows: DiagnosticLogEntry[] = [];
+    for (const file of [this.devLogPath + ".1", this.devLogPath]) {
+      if (!existsSync(file)) continue;
+      let fd: number | null = null;
+      try {
+        fd = openSync(file, "r");
+        const fileSize = statSync(file).size;
+        const bytes = Math.min(fileSize, 2 * 1024 * 1024);
+        if (bytes === 0) continue;
+        const buffer = Buffer.alloc(bytes);
+        const read = readSync(fd, buffer, 0, bytes, fileSize - bytes);
+        const lines = buffer.subarray(0, read).toString("utf8").split("\n");
+        if (fileSize > bytes) lines.shift();
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          try {
+            const record = JSON.parse(line) as Record<string, unknown>;
+            const event = String(record.event ?? "UNKNOWN");
+            if (onlyProblems && !/ERROR|FAIL|TIMEOUT|WARNING|WARN|UNAVAILABLE/i.test(event)) {
+              continue;
+            }
+            const { ts, source, event: _event, ...fields } = record;
+            rows.push({
+              ts: String(ts ?? ""),
+              source: String(source ?? ""),
+              event,
+              detail: JSON.stringify(fields).slice(0, 2500)
+            });
+          } catch {
+            // Angebrochene JSONL-Zeilen im Archiv ignorieren.
           }
-          const { ts, source, event: _event, ...fields } = record;
-          rows.push({
-            ts: String(ts ?? ""),
-            source: String(source ?? ""),
-            event,
-            detail: JSON.stringify(fields).slice(0, 2500)
-          });
-        } catch {
-          // Unvollständige oder veraltete JSON-Zeilen ignorieren.
         }
+      } catch {
+        // Protokolllesen ist nicht kritisch für die App.
+      } finally {
+        if (fd !== null) try { closeSync(fd); } catch { /* nur Diagnose */ }
       }
-      return rows.slice(-Math.max(1,Math.min(500,Math.trunc(limit || 250)))).reverse();
-    } catch {
-      return [];
-    } finally {
-      if (fd !== null) try { closeSync(fd); } catch { /* nur Diagnose */ }
     }
+    const safeLimit = Math.max(1, Math.min(500, Math.trunc(limit || 250)));
+    return rows.slice(-safeLimit).reverse();
   }
 
   clearDevLog(): { path: string; cleared: true } {
