@@ -159,7 +159,7 @@ async function createThumbnail(request: Request) {
 
     try {
       const info = await sharp(request.inputPath, {
-        failOn: "warning",
+        failOn: "error",
         sequentialRead: true
       })
         .rotate()
@@ -194,7 +194,7 @@ async function createThumbnail(request: Request) {
 
   try {
     const info = await sharp(request.inputPath, {
-      failOn: "warning",
+      failOn: "error",
       sequentialRead: true
     })
       .rotate()
