@@ -4275,6 +4275,7 @@ function resetAnalysisJob(jobId: number): number {
       j.media_id,
       j.module,
       j.status,
+      j.error_message,
       m.sha256,
       m.absolute_path
     FROM analysis_jobs j
@@ -4320,6 +4321,23 @@ function resetAnalysisJob(jobId: number): number {
   const sha256 = String(job.sha256);
 
   const modules = new Set<string>([module]);
+
+  // Ein Folgefehler kann erst nach Reparatur des eigentlichen Ursprungjobs
+  // erneut laufen. Setze daher die betroffenen fehlerhaften Vorgänger zurück;
+  // erfolgreich abgeschlossene Jobs bleiben durch die WHERE-Bedingung unten
+  // unangetastet.
+  const causedByDependency = /abhängig/i.test(String(job.error_message ?? ""));
+  if (causedByDependency && module === "face-embed-sface-v1") {
+    modules.add("face-detect-yunet-v1");
+  }
+  if (causedByDependency && (
+    module === "pet-fuse-ensemble-v1" || module === "pet-embed-dogreid-v1"
+  )) {
+    modules.add("pet-detect-nanodet-v1");
+    modules.add("pet-detect-yolox-v1");
+    modules.add("pet-fuse-ensemble-v1");
+    modules.add("pet-embed-dogreid-v1");
+  }
 
   if (module === "face-detect-yunet-v1") {
     modules.add("face-embed-sface-v1");
