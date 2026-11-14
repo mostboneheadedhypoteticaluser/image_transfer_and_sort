@@ -6,6 +6,9 @@ import {
 } from "node:child_process";
 import {
   appendFileSync,
+  openSync,
+  readSync,
+  closeSync,
   existsSync,
   mkdirSync,
   readdirSync,
@@ -19,7 +22,8 @@ import os from "node:os";
 import readline from "node:readline";
 import type {
   AnalysisWorkerProgress,
-  AnalysisWorkerStatus
+  AnalysisWorkerStatus,
+  DiagnosticLogEntry
 } from "../shared/protocol";
 
 type Pending = {
@@ -133,6 +137,48 @@ export class AnalysisService {
 
   getDevLogPath(): string {
     return this.devLogPath;
+  }
+
+  readRecentDevLog(limit = 250, onlyProblems = false): DiagnosticLogEntry[] {
+    // Immer nur den Dateischwanz lesen – auch ein altes 200-MB-Log bleibt
+    // dadurch schnell und blockiert den Electron-Prozess nicht.
+    if (!existsSync(this.devLogPath)) return [];
+    let fd: number | null = null;
+    try {
+      fd = openSync(this.devLogPath, "r");
+      const fileSize = statSync(this.devLogPath).size;
+      const bytes = Math.min(fileSize, 2 * 1024 * 1024);
+      if (bytes === 0) return [];
+      const buffer = Buffer.alloc(bytes);
+      const read = readSync(fd, buffer, 0, bytes, fileSize - bytes);
+      const lines = buffer.subarray(0, read).toString("utf8").split("\n");
+      if (fileSize > bytes) lines.shift(); // erste Zeile ist angeschnitten
+      const rows: DiagnosticLogEntry[] = [];
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        try {
+          const record = JSON.parse(line) as Record<string, unknown>;
+          const event = String(record.event ?? "UNKNOWN");
+          if (onlyProblems && !/ERROR|FAIL|TIMEOUT|WARNING|WARN|UNAVAILABLE/i.test(event)) {
+            continue;
+          }
+          const { ts, source, event: _event, ...fields } = record;
+          rows.push({
+            ts: String(ts ?? ""),
+            source: String(source ?? ""),
+            event,
+            detail: JSON.stringify(fields).slice(0, 2500)
+          });
+        } catch {
+          // Unvollständige oder veraltete JSON-Zeilen ignorieren.
+        }
+      }
+      return rows.slice(-Math.max(1,Math.min(500,Math.trunc(limit || 250)))).reverse();
+    } catch {
+      return [];
+    } finally {
+      if (fd !== null) try { closeSync(fd); } catch { /* nur Diagnose */ }
+    }
   }
 
   clearDevLog(): { path: string; cleared: true } {
