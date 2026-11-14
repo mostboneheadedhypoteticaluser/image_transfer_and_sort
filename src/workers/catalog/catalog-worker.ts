@@ -4254,6 +4254,20 @@ function listAnalysisErrorPage(filter: Record<string, unknown> = {}) {
   };
 }
 
+function retryErrorSample(filter: Record<string, unknown> = {}) {
+  const page = listAnalysisErrorPage({ ...filter, limit: 50, offset: 0 });
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    let retried = 0;
+    for (const item of page.items) retried += resetAnalysisJob(item.id);
+    db.exec("COMMIT");
+    return { retried };
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+}
+
 function resetAnalysisJob(jobId: number): number {
   const job = db.prepare(`
     SELECT
@@ -14215,6 +14229,8 @@ async function dispatch(method: CatalogMethod, payload: Record<string, unknown> 
       );
     case "listAnalysisErrorPage":
       return listAnalysisErrorPage(payload);
+    case "retryErrorSample":
+      return retryErrorSample(payload);
     case "countAnalysisErrors":
       return countAnalysisErrors(
         payload.sourceId === undefined ? undefined : asNumber(payload.sourceId, "sourceId")
