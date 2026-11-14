@@ -4611,7 +4611,7 @@ function completeAnalysisJob(jobId: number, result: unknown) {
 
 function failAnalysisJob(jobId: number, errorMessage: string) {
   const job = db.prepare(`
-    SELECT j.media_id, j.module, m.absolute_path
+    SELECT j.media_id, j.module, j.attempts, m.absolute_path
     FROM analysis_jobs j
     JOIN media_items m ON m.id=j.media_id
     WHERE j.id=?
@@ -4652,6 +4652,24 @@ function failAnalysisJob(jobId: number, errorMessage: string) {
 
       db.exec("COMMIT");
       return { failed: false, unavailable: true };
+    }
+
+    // Nur vorübergehende Worker-/I/O-Probleme automatisch wiederholen.
+    // Nach maximal drei Versuchen als echten Fehler für die Diagnose speichern.
+    // Fehlende Dateien wurden bereits oberhalb gesondert behandelt.
+    const transient = /timeout|timed out|zeitüberschreit|temporarily unavailable|resource busy|broken pipe|eagain|econnreset|winerror 32|worker wurde beendet|worker is not active/i.test(errorMessage);
+    if (job && transient && Number(job.attempts ?? 0) < 3) {
+      db.prepare(`
+        UPDATE analysis_jobs
+        SET status='PENDING',
+            priority=priority+10,
+            error_message=?,
+            finished_at=NULL,
+            updated_at=CURRENT_TIMESTAMP
+        WHERE id=? AND status='RUNNING'
+      `).run(errorMessage.slice(0, 4000),jobId);
+      db.exec("COMMIT");
+      return { failed: false, retryScheduled: true };
     }
 
     db.prepare(`
