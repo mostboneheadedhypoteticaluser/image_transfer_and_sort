@@ -157,6 +157,45 @@ export type AnalysisErrorRecord = {
   finishedAt: string | null;
 };
 
+export type AnalysisErrorCause =
+  | "UNAVAILABLE" | "DEPENDENCY" | "HEIC" | "LARGE_IMAGE"
+  | "TIMEOUT" | "FORMAT" | "DECODE" | "OTHER";
+
+export type AnalysisErrorOverview = {
+  totalJobs: number;
+  mediaCount: number;
+  dependentJobs: number;
+  unavailableJobs: number;
+  groups: Array<{
+    module: string;
+    cause: AnalysisErrorCause;
+    count: number;
+    mediaCount: number;
+    example: string;
+  }>;
+};
+
+export type AnalysisErrorPageFilter = {
+  sourceId?: number;
+  module?: string;
+  cause?: AnalysisErrorCause | "";
+  search?: string;
+  limit?: number;
+  offset?: number;
+};
+
+export type AnalysisErrorPage = {
+  total: number;
+  items: Array<AnalysisErrorRecord & { cause: AnalysisErrorCause }>;
+};
+
+export type DiagnosticLogEntry = {
+  ts: string;
+  source: string;
+  event: string;
+  detail: string;
+};
+
 export type RetryAnalysisResult = {
   retried: number;
 };
@@ -1039,6 +1078,8 @@ export type CatalogMethod =
   | "getIdentityEmbeddingCounts"
   | "listAnalysisErrors"
   | "countAnalysisErrors"
+  | "getAnalysisErrorOverview"
+  | "listAnalysisErrorPage"
   | "retryAnalysisJob"
   | "retryFailedAnalysisJobs"
   | "claimAnalysisJob"
