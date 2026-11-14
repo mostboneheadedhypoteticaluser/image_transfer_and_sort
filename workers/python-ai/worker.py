@@ -92,8 +92,10 @@ try:
         from pillow_heif import register_heif_opener
         register_heif_opener()
         dev_log("HEIF_DECODER_READY")
-    except ImportError:
-        dev_log("HEIF_DECODER_MISSING", hint="npm run setup:ai (pillow-heif)")
+    except Exception as exc:
+        # Ein optionaler Codec darf den gesamten KI-Worker nicht blockieren.
+        dev_log("HEIF_DECODER_MISSING", error=str(exc),
+                hint="npm run setup:ai (pillow-heif)")
 except Exception as exc:
     Image = None
     ImageDraw = None
