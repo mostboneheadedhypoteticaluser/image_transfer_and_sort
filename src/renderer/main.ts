@@ -1,4 +1,5 @@
 import { initEmbeddedSourceExplorer } from "./source-explorer";
+import { initDiagnosticsPage } from "./diagnostics";
 import { activateMapView, invalidateMapData } from "./map-view";
 import { activateLifeAreasView, invalidateLifeAreas } from "./life-areas";
 import {
@@ -8475,10 +8476,7 @@ copyQwenBenchmarkButton.addEventListener("click", () => {
 });
 
 analysisErrorsButton.addEventListener("click", () => {
-  void runSafely(async () => {
-    if (!analysisErrorDialog.open) analysisErrorDialog.showModal();
-    await loadAnalysisErrors();
-  });
+  void runSafely(() => showAppPage("diagnostics"));
 });
 
 closeAnalysisErrorsButton.addEventListener("click", () => {
@@ -8827,6 +8825,11 @@ window.imageSorter.pets.onUpdated(() => {
   });
 });
 
+const diagnosticsPage = initDiagnosticsPage(
+  () => selectedSourceId(),
+  (message) => { progressText.textContent = message; }
+);
+
 const appNavItems = Array.from(
   document.querySelectorAll<HTMLButtonElement>("[data-app-page]")
 );
@@ -8842,6 +8845,9 @@ async function showAppPage(page: string): Promise<void> {
     const active = view.dataset.workspacePage === page;
     view.hidden = !active;
     view.classList.toggle("active", active);
+  }
+  if (page === "diagnostics") {
+    await diagnosticsPage.refresh();
   }
   if (page === "map") {
     await activateMapView();
