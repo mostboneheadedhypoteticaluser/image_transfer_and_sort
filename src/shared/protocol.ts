@@ -1080,6 +1080,7 @@ export type CatalogMethod =
   | "countAnalysisErrors"
   | "getAnalysisErrorOverview"
   | "listAnalysisErrorPage"
+  | "retryErrorSample"
   | "retryAnalysisJob"
   | "retryFailedAnalysisJobs"
   | "claimAnalysisJob"
