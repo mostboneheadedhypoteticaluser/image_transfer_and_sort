@@ -4128,6 +4128,132 @@ function listAnalysisErrors(sourceId?: number, requestedLimit = 200) {
   }));
 }
 
+
+const ANALYSIS_ERROR_CAUSE_SQL = `
+  CASE
+    WHEN j.status='UNAVAILABLE' THEN 'UNAVAILABLE'
+    WHEN lower(COALESCE(j.error_message,'')) LIKE 'abhängige %'
+      OR lower(COALESCE(j.error_message,'')) LIKE 'mindestens ein abhängiger %'
+      THEN 'DEPENDENCY'
+    WHEN lower(m.extension) IN ('.heic','.heif') THEN 'HEIC'
+    WHEN lower(COALESCE(j.error_message,'')) LIKE '%decompressionbomb%'
+      OR lower(COALESCE(j.error_message,'')) LIKE '%too many pixels%'
+      THEN 'LARGE_IMAGE'
+    WHEN lower(COALESCE(j.error_message,'')) LIKE '%timeout%'
+      OR lower(COALESCE(j.error_message,'')) LIKE '%timed out%'
+      OR lower(COALESCE(j.error_message,'')) LIKE '%zeitüberschreit%'
+      THEN 'TIMEOUT'
+    WHEN lower(COALESCE(j.error_message,'')) LIKE '%unsupported image%'
+      OR lower(COALESCE(j.error_message,'')) LIKE '%decoder%'
+      THEN 'FORMAT'
+    WHEN lower(COALESCE(j.error_message,'')) LIKE '%opencv%'
+      OR lower(COALESCE(j.error_message,'')) LIKE '%bild konnte nicht gelesen%'
+      OR lower(COALESCE(j.error_message,'')) LIKE '%cannot identify image%'
+      THEN 'DECODE'
+    ELSE 'OTHER'
+  END
+`;
+
+const ANALYSIS_ERROR_WHERE_SQL = `
+  (j.status='FAILED' OR (
+     j.status='UNAVAILABLE' AND j.id=(
+       SELECT MIN(j2.id) FROM analysis_jobs j2
+       WHERE j2.media_id=j.media_id AND j2.status='UNAVAILABLE'
+     )
+  ))
+`;
+
+function getAnalysisErrorOverview(sourceId?: number) {
+  const sourceClause = sourceId === undefined ? "" : "AND m.source_id=?";
+  const args = sourceId === undefined ? [] : [sourceId];
+  const base = `
+    SELECT j.media_id, j.module, j.status, j.error_message,
+      ${ANALYSIS_ERROR_CAUSE_SQL} AS cause
+    FROM analysis_jobs j JOIN media_items m ON m.id=j.media_id
+    WHERE ${ANALYSIS_ERROR_WHERE_SQL} ${sourceClause}
+  `;
+  const totals = db.prepare(`
+    SELECT COUNT(*) AS job_count, COUNT(DISTINCT media_id) AS media_count,
+      COALESCE(SUM(CASE WHEN cause='DEPENDENCY' THEN 1 ELSE 0 END),0) AS dependent_count,
+      COALESCE(SUM(CASE WHEN cause='UNAVAILABLE' THEN 1 ELSE 0 END),0) AS unavailable_count
+    FROM (${base})
+  `).get(...args);
+  const groups = db.prepare(`
+    SELECT module, cause, COUNT(*) AS count,
+      COUNT(DISTINCT media_id) AS media_count,
+      MIN(error_message) AS example
+    FROM (${base})
+    GROUP BY module, cause
+    ORDER BY count DESC, module ASC
+  `).all(...args);
+  return {
+    totalJobs: Number(totals?.job_count ?? 0),
+    mediaCount: Number(totals?.media_count ?? 0),
+    dependentJobs: Number(totals?.dependent_count ?? 0),
+    unavailableJobs: Number(totals?.unavailable_count ?? 0),
+    groups: groups.map((row) => ({
+      module: String(row.module),
+      cause: String(row.cause),
+      count: Number(row.count),
+      mediaCount: Number(row.media_count),
+      example: String(row.example ?? "")
+    }))
+  };
+}
+
+function listAnalysisErrorPage(filter: Record<string, unknown> = {}) {
+  const sourceId = filter.sourceId === undefined ? undefined :
+    asNumber(filter.sourceId, "sourceId");
+  const module = typeof filter.module === "string" ? filter.module.slice(0,100) : "";
+  const cause = typeof filter.cause === "string" ? filter.cause : "";
+  const search = typeof filter.search === "string" ? filter.search.trim().slice(0,160) : "";
+  const limitValue = Number(filter.limit ?? 75);
+  const offsetValue = Number(filter.offset ?? 0);
+  const limit = Number.isFinite(limitValue) ? Math.max(1, Math.min(150,Math.trunc(limitValue))) : 75;
+  const offset = Number.isFinite(offsetValue) ? Math.max(0,Math.min(2000000,Math.trunc(offsetValue))) : 0;
+  const allowedCauses = new Set(["UNAVAILABLE","DEPENDENCY","HEIC","LARGE_IMAGE","TIMEOUT","FORMAT","DECODE","OTHER"]);
+  const conditions = [ANALYSIS_ERROR_WHERE_SQL];
+  const args: Array<string | number> = [];
+  if (sourceId !== undefined) { conditions.push("m.source_id=?"); args.push(sourceId); }
+  if (module) { conditions.push("j.module=?"); args.push(module); }
+  if (allowedCauses.has(cause)) {
+    conditions.push(`(${ANALYSIS_ERROR_CAUSE_SQL})=?`);
+    args.push(cause);
+  }
+  if (search) {
+    conditions.push("(m.relative_path LIKE ? OR j.error_message LIKE ? OR j.module LIKE ?)");
+    args.push("%"+search+"%","%"+search+"%","%"+search+"%");
+  }
+  const from = `FROM analysis_jobs j JOIN media_items m ON m.id=j.media_id
+    WHERE ${conditions.join(" AND ")}`;
+  const countRow = db.prepare(`SELECT COUNT(*) AS count ${from}`).get(...args);
+  const rows = db.prepare(`
+    SELECT j.id,j.status,j.media_id,j.module,j.attempts,
+      j.error_message,j.started_at,j.finished_at,
+      m.relative_path,m.extension,
+      ${ANALYSIS_ERROR_CAUSE_SQL} AS cause
+    ${from}
+    ORDER BY COALESCE(j.finished_at,j.updated_at) DESC,j.id DESC
+    LIMIT ? OFFSET ?
+  `).all(...args,limit,offset);
+  return {
+    total: Number(countRow?.count ?? 0),
+    items: rows.map((row) => ({
+      id: Number(row.id),
+      status: row.status === "UNAVAILABLE" ? "UNAVAILABLE" : "FAILED",
+      mediaId: Number(row.media_id),
+      module: String(row.module),
+      relativePath: String(row.relative_path),
+      extension: String(row.extension),
+      attempts: Number(row.attempts ?? 0),
+      errorMessage: String(row.error_message ?? ""),
+      startedAt: row.started_at === null ? null : String(row.started_at),
+      finishedAt: row.finished_at === null ? null : String(row.finished_at),
+      cause: String(row.cause)
+    }))
+  };
+}
+
 function resetAnalysisJob(jobId: number): number {
   const job = db.prepare(`
     SELECT
@@ -4208,7 +4334,7 @@ function resetAnalysisJob(jobId: number): number {
       updated_at=CURRENT_TIMESTAMP
     WHERE media_id=?
       AND module=?
-      AND status<>'RUNNING'
+      AND status IN ('FAILED','UNAVAILABLE','PENDING')
   `);
 
   let changes = 0;
@@ -14083,6 +14209,12 @@ async function dispatch(method: CatalogMethod, payload: Record<string, unknown> 
         payload.sourceId === undefined ? undefined : asNumber(payload.sourceId, "sourceId"),
         payload.limit === undefined ? 200 : asNumber(payload.limit, "limit")
       );
+    case "getAnalysisErrorOverview":
+      return getAnalysisErrorOverview(
+        payload.sourceId === undefined ? undefined : asNumber(payload.sourceId,"sourceId")
+      );
+    case "listAnalysisErrorPage":
+      return listAnalysisErrorPage(payload);
     case "countAnalysisErrors":
       return countAnalysisErrors(
         payload.sourceId === undefined ? undefined : asNumber(payload.sourceId, "sourceId")
