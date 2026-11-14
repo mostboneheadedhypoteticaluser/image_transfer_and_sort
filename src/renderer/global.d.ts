@@ -92,6 +92,7 @@ declare global {
         getErrorOverview(sourceId?: number): Promise<AnalysisErrorOverview>;
         getErrorPage(filter: AnalysisErrorPageFilter): Promise<AnalysisErrorPage>;
         getRecentLog(limit?: number, onlyProblems?: boolean): Promise<DiagnosticLogEntry[]>;
+        retrySample(filter: AnalysisErrorPageFilter): Promise<RetryAnalysisResult>;
         countErrors(sourceId?: number): Promise<number>;
         retryJob(jobId: number): Promise<RetryAnalysisResult>;
         retryAll(sourceId?: number): Promise<RetryAnalysisResult>;
