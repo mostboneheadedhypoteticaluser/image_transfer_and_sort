@@ -6000,3 +6000,160 @@ body {
     grid-column: 1 / -1;
   }
 }
+
+
+/* Fehler & Protokoll: eigene Diagnose-Arbeitsfläche */
+.diagnostics-page {
+  display: grid;
+  align-content: start;
+  gap: 18px;
+}
+.diagnostics-page[hidden] { display: none !important; }
+.diagnostics-panel { min-width: 0; }
+.diagnostics-panel .panel-heading { margin-bottom: 14px; }
+.diagnostics-panel .panel-heading p { overflow-wrap: anywhere; }
+.diagnostics-groups {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr));
+  gap: 10px;
+}
+.diagnostics-cause-group {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 5px 8px;
+  text-align: left;
+  align-items: baseline;
+  padding: 12px;
+  border: 1px solid var(--border, #dce2e7);
+  border-radius: 10px;
+  background: var(--surface, #fff);
+  color: inherit;
+  cursor: pointer;
+}
+.diagnostics-cause-group strong { font-size: 13px; grid-column: 1 / -1; }
+.diagnostics-cause-group span {
+  font-size: 11px;
+  overflow-wrap: anywhere;
+  opacity: .75;
+}
+.diagnostics-cause-group b { font-size: 13px; font-variant-numeric: tabular-nums; }
+.diagnostics-cause-group small { opacity: .65; font-size: 11px; }
+.diagnostics-cause-group:hover,
+.diagnostics-cause-group:focus-visible { border-color: #d72622; }
+.diagnostics-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 12px;
+  margin: 10px 0 14px;
+}
+.diagnostics-filters label {
+  display: grid;
+  gap: 4px;
+  flex: 1 1 180px;
+  min-width: 155px;
+  font-size: 12px;
+}
+.diagnostics-filters select,
+.diagnostics-filters input {
+  max-width: 100%;
+  min-width: 0;
+  width: 100%;
+}
+.diagnostics-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 0;
+}
+.diagnostics-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  margin-right: auto;
+}
+.diagnostics-errors { display: grid; gap: 11px; }
+.diagnostics-error-card {
+  min-width: 0;
+  padding: 12px 14px;
+  border: 1px solid #e6d4d4;
+  border-radius: 11px;
+  background: var(--surface, #fff);
+}
+.diagnostics-error-head {
+  display: flex;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  align-items: start;
+  gap: 12px;
+}
+.diagnostics-error-head strong,
+.diagnostics-error-head small { display: block; }
+.diagnostics-error-head strong { font-size: 13px; overflow-wrap: anywhere; }
+.diagnostics-error-head small { margin-top: 4px; font-size: 11px; opacity: .7; }
+.diagnostics-error-actions { display: flex; flex-wrap: wrap; gap: 5px; }
+.diagnostics-error-actions button { font-size: 11px; padding: 6px 9px; }
+.diagnostics-error-file {
+  margin-top: 9px;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+  opacity: .83;
+}
+.diagnostics-error-message {
+  margin: 9px 0 0;
+  max-height: 175px;
+  overflow: auto;
+  padding: 10px;
+  border-radius: 7px;
+  background: rgba(127,137,152,.09);
+  font: 11px/1.5 ui-monospace, Consolas, monospace;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.diagnostics-pagination {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 16px;
+  padding: 15px 0 4px;
+  font-size: 12px;
+}
+.diagnostics-log {
+  max-height: 550px;
+  overflow: auto;
+  border: 1px solid var(--border, #dce2e7);
+  border-radius: 10px;
+}
+.diagnostics-log-record {
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border, #e5e7eb);
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 5px 12px;
+  align-items: baseline;
+  font-size: 11px;
+}
+.diagnostics-log-record:last-child { border-bottom: 0; }
+.diagnostics-log-record time,
+.diagnostics-log-record small { opacity: .65; }
+.diagnostics-log-record strong { overflow-wrap: anywhere; }
+.diagnostics-log-record pre {
+  grid-column: 1 / -1;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  margin: 0;
+  font: 11px/1.5 ui-monospace, Consolas, monospace;
+}
+.diagnostics-empty {
+  padding: 18px;
+  text-align: center;
+  opacity: .7;
+  font-size: 13px;
+}
+@media(max-width: 700px) {
+  .diagnostics-error-head { flex-direction: column; }
+  .diagnostics-log-record { grid-template-columns: 1fr; }
+  .diagnostics-log-record pre { grid-column: 1; }
+}
