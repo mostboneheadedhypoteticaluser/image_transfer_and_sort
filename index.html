@@ -17,6 +17,7 @@
           <nav class="sidebar-nav" aria-label="Hauptnavigation">
             <button class="sidebar-nav-item active" type="button" data-app-page="sources"><span>▣</span>Medienquellen</button>
             <button class="sidebar-nav-item" type="button" data-app-page="analysis"><span>◫</span>Analyse &amp; KI</button>
+            <button class="sidebar-nav-item" type="button" data-app-page="diagnostics"><span>⚑</span>Fehler &amp; Protokoll</button>
             <button class="sidebar-nav-item" type="button" data-app-page="media"><span>▤</span>Medien</button>
             <button class="sidebar-nav-item" type="button" data-app-page="identities"><span>●</span>Personen &amp; Tiere</button>
             <button class="sidebar-nav-item" type="button" data-app-page="life-areas"><span>◆</span>Lebensbereiche</button>
@@ -360,6 +361,85 @@
             </div>
           </div>
         </details>
+        </section>
+
+        <section id="diagnosticsPage" class="workspace-page diagnostics-page" data-workspace-page="diagnostics" hidden>
+          <div class="workspace-page-heading">
+            <div>
+              <span class="section-kicker">Fehlerdiagnose</span>
+              <h1>Fehler &amp; Protokoll</h1>
+            </div>
+            <p>Fehlerursachen, betroffene Medien und Worker-Protokoll. Bereits erfolgreiche Analysen bleiben bei Wiederholungen erhalten.</p>
+          </div>
+
+          <section class="panel diagnostics-panel">
+            <div class="panel-heading">
+              <div><h2>Fehlerübersicht</h2><p id="diagnosticsSummary">Wird geladen …</p></div>
+              <button id="diagnosticsRefresh" class="ghost" type="button">Aktualisieren</button>
+            </div>
+            <div id="diagnosticsGroups" class="diagnostics-groups"></div>
+          </section>
+
+          <section class="panel diagnostics-panel">
+            <div class="panel-heading">
+              <div>
+                <h2>Betroffene Analysen</h2>
+                <p>Ein Fehler kann mehrere abhängige Jobs betreffen. Pro Seite werden höchstens 75 Ergebnisse geladen.</p>
+              </div>
+            </div>
+            <div class="diagnostics-filters">
+              <label>Quellen
+                <select id="diagnosticsScope">
+                  <option value="all">Alle Quellen</option>
+                  <option value="source">Aktuelle Medienquelle</option>
+                </select>
+              </label>
+              <label>Analyseschritt
+                <select id="diagnosticsModule"><option value="">Alle Analyseschritte</option></select>
+              </label>
+              <label>Fehlerursache
+                <select id="diagnosticsCause">
+                  <option value="">Alle Ursachen</option>
+                  <option value="UNAVAILABLE">Datei nicht erreichbar</option>
+                  <option value="DEPENDENCY">Folgefehler</option>
+                  <option value="HEIC">HEIC / HEIF</option>
+                  <option value="LARGE_IMAGE">Sehr großes Bild</option>
+                  <option value="TIMEOUT">Zeitüberschreitung</option>
+                  <option value="FORMAT">Dateiformat / Decoder</option>
+                  <option value="DECODE">Bilddecoder</option>
+                  <option value="OTHER">Sonstige</option>
+                </select>
+              </label>
+              <label>Suche
+                <input id="diagnosticsSearch" type="search" placeholder="Datei, Pfad oder Fehlermeldung …" />
+              </label>
+              <button id="diagnosticsResetFilters" type="button" class="ghost">Filter zurücksetzen</button>
+            </div>
+            <div class="diagnostics-actions">
+              <button id="diagnosticsRetrySample" type="button" class="secondary">50 Fehler testweise erneut</button>
+              <button id="diagnosticsRetryAll" type="button" class="ghost">Alle Fehler der Quelle erneut</button>
+              <button id="diagnosticsCopyVisible" type="button" class="ghost">Sichtbare Fehler kopieren</button>
+            </div>
+            <div id="diagnosticsErrors" class="diagnostics-errors"></div>
+            <div class="diagnostics-pagination">
+              <button id="diagnosticsPrevious" type="button" class="ghost">Vorherige</button>
+              <span id="diagnosticsPageStatus">0–0 von 0</span>
+              <button id="diagnosticsNext" type="button" class="ghost">Nächste</button>
+            </div>
+          </section>
+
+          <section class="panel diagnostics-panel">
+            <div class="panel-heading">
+              <div><h2>Worker-Protokoll</h2><p>Nur die jüngsten Protokolleinträge werden aus der Datei gelesen – kein vollständiger Import großer Logs.</p></div>
+            </div>
+            <div class="diagnostics-actions">
+              <label class="diagnostics-checkbox"><input id="diagnosticsLogOnlyProblems" type="checkbox" checked /> Nur Fehler und Warnungen</label>
+              <button id="diagnosticsRefreshLog" type="button" class="ghost">Protokoll aktualisieren</button>
+              <button id="diagnosticsCopyLog" type="button" class="ghost">Sichtbares Protokoll kopieren</button>
+              <button id="diagnosticsOpenLog" type="button" class="ghost">Logdatei öffnen</button>
+            </div>
+            <div id="diagnosticsLog" class="diagnostics-log"></div>
+          </section>
         </section>
 
         <section class="workspace-page" data-workspace-page="media" hidden>
