@@ -1,5 +1,9 @@
 import type {
   AnalysisErrorRecord,
+  AnalysisErrorOverview,
+  AnalysisErrorPageFilter,
+  AnalysisErrorPage,
+  DiagnosticLogEntry,
   AnalysisWorkerStatus,
   BackgroundPauseState,
   AssignPersonSelectionResult,
@@ -85,6 +89,9 @@ declare global {
           listener: (stage: QwenBenchmarkStageResult) => void
         ): () => void;
         listErrors(sourceId?: number, limit?: number): Promise<AnalysisErrorRecord[]>;
+        getErrorOverview(sourceId?: number): Promise<AnalysisErrorOverview>;
+        getErrorPage(filter: AnalysisErrorPageFilter): Promise<AnalysisErrorPage>;
+        getRecentLog(limit?: number, onlyProblems?: boolean): Promise<DiagnosticLogEntry[]>;
         countErrors(sourceId?: number): Promise<number>;
         retryJob(jobId: number): Promise<RetryAnalysisResult>;
         retryAll(sourceId?: number): Promise<RetryAnalysisResult>;
