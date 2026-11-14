@@ -311,7 +311,11 @@ export class ThumbnailService {
 
     return result.catch((error) => {
       const message = error instanceof Error ? error.message : String(error);
-      if (!message.toLowerCase().includes("unsupported image format")) {
+      // JPEG/HEIF-Decoder können Warnungen oder Formatfehler liefern,
+      // die Electron/Chromium dennoch korrekt decodieren kann.
+      // Ein fehlender Pfad oder abgestürzter Worker darf hingegen nicht
+      // durch einen ungezielten zweiten Decoder kaschiert werden.
+      if (!/unsupported image format|jpeg|vips|heif|heic|corrupt|decode|invalid image|truncated|premature/i.test(message)) {
         throw error;
       }
 
