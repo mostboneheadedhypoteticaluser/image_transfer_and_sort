@@ -266,6 +266,8 @@ let personConfirmationMediaFilter: ConfirmationMediaFilter = "all";
 let petConfirmationMediaFilter: ConfirmationMediaFilter = "all";
 let videoPetReviewOffset = 0;
 let videoPetReviewRequest = 0;
+let videoPetReviewTimer: number | null = null;
+let videoPetReviewRenderedKey = "";
 let lastPersonOverview: PersonOverview | null = null;
 let lastPetOverview: PetOverview | null = null;
 const IDENTITY_CANDIDATE_PAGE_SIZE = 10;
@@ -4539,6 +4541,7 @@ function clearSearchControls(): void {
 }
 
 function setView(view: CatalogView): void {
+  if (view !== "pets") cancelVideoPetReviewRefresh();
   currentView = view;
 
   mediaTab.classList.toggle("active", view === "media");
@@ -6578,17 +6581,99 @@ function openPetVideoAtFrame(mediaId: number, relativePath: string, timestampMs:
 
 const VIDEO_PET_REVIEW_PAGE_SIZE = 24;
 
-async function loadVideoPetReview(): Promise<void> {
-  if (petConfirmationMediaFilter !== "video") return;
+function cancelVideoPetReviewRefresh(): void {
+  videoPetReviewRequest++;
+  if (videoPetReviewTimer !== null) {
+    window.clearTimeout(videoPetReviewTimer);
+    videoPetReviewTimer = null;
+  }
+  videoPetReviewRenderedKey = "";
+}
+
+function videoPetReviewIsVisible(): boolean {
+  return !rendererShuttingDown &&
+    petConfirmationMediaFilter === "video" &&
+    currentView === "pets" &&
+    !petView.hidden &&
+    !petView.closest<HTMLElement>(".workspace-page")?.hidden;
+}
+
+function updateVideoPetReviewProgress(page: VideoPetReviewPage): void {
+  const title = petCandidates.querySelector<HTMLElement>("[data-video-review-title]");
+  const subtitle = petCandidates.querySelector<HTMLElement>("[data-video-review-progress]");
+  const count = petCandidates.querySelector<HTMLElement>("[data-video-review-page-count]");
+  const next = petCandidates.querySelector<HTMLButtonElement>("[data-video-review-next]");
+
+  if (title) {
+    title.textContent =
+      (page.indexComplete ? "" : "Bisher ") +
+      page.total.toLocaleString("de-DE") +
+      " unbestätigte Videofundstellen" +
+      (page.indexComplete ? "" : " gefunden");
+  }
+  if (subtitle) {
+    const percent = page.totalVideos === 0
+      ? 100 : Math.min(100, Math.round(page.indexedVideos * 100 / page.totalVideos));
+    subtitle.textContent = page.totalVideos === 0
+      ? "Noch keine abgeschlossenen Videoanalysen vorhanden."
+      : page.indexedVideos.toLocaleString("de-DE") +
+        " von " + page.totalVideos.toLocaleString("de-DE") +
+        " analysierten Videos durchsucht (" + percent + "%)" +
+        (page.indexComplete
+          ? " · Prüfung abgeschlossen."
+          : " · Weitere Funde werden fortlaufend ergänzt.");
+  }
+  if (count) {
+    count.textContent =
+      (videoPetReviewOffset + (page.items.length ? 1 : 0)).toLocaleString("de-DE") +
+      "–" +
+      (videoPetReviewOffset + page.items.length).toLocaleString("de-DE") +
+      " von " + page.total.toLocaleString("de-DE") +
+      (page.indexComplete ? "" : " bisher");
+  }
+  if (next) next.disabled = videoPetReviewOffset + page.items.length >= page.total;
+}
+
+function scheduleNextVideoPetReviewBatch(page: VideoPetReviewPage): void {
+  if (page.indexComplete || !videoPetReviewIsVisible()) return;
+  if (videoPetReviewTimer !== null) window.clearTimeout(videoPetReviewTimer);
+  videoPetReviewTimer = window.setTimeout(() => {
+    videoPetReviewTimer = null;
+    if (videoPetReviewIsVisible()) void runSafely(() => loadVideoPetReview(true));
+  }, 400);
+}
+
+async function loadVideoPetReview(progressive = false): Promise<void> {
+  if (!videoPetReviewIsVisible()) return;
+  if (videoPetReviewTimer !== null) {
+    window.clearTimeout(videoPetReviewTimer);
+    videoPetReviewTimer = null;
+  }
   const requestId = ++videoPetReviewRequest;
-  showBlockLoading(petCandidates, "Unbestätigte Videofundstellen werden geladen …");
+  if (!progressive) {
+    videoPetReviewRenderedKey = "";
+    showBlockLoading(petCandidates, "Erste Videofundstellen werden geladen …");
+  }
 
-  const page: VideoPetReviewPage = await window.imageSorter.pets.listVideoReview(
-    videoPetReviewOffset,
-    VIDEO_PET_REVIEW_PAGE_SIZE
-  );
+  let page: VideoPetReviewPage;
+  try {
+    page = await window.imageSorter.pets.listVideoReview(
+      videoPetReviewOffset,
+      VIDEO_PET_REVIEW_PAGE_SIZE
+    );
+  } catch (error) {
+    if (requestId === videoPetReviewRequest && videoPetReviewIsVisible()) {
+      const message = document.createElement("p");
+      message.className = "person-empty";
+      message.textContent =
+        "Videofundstellen konnten nicht geladen werden: " +
+        (error instanceof Error ? error.message : String(error));
+      petCandidates.replaceChildren(message);
+    }
+    throw error;
+  }
 
-  if (petConfirmationMediaFilter !== "video" || requestId !== videoPetReviewRequest) return;
+  if (!videoPetReviewIsVisible() || requestId !== videoPetReviewRequest) return;
   if (videoPetReviewOffset >= page.total && videoPetReviewOffset > 0) {
     videoPetReviewOffset = Math.max(
       0,
@@ -6598,24 +6683,44 @@ async function loadVideoPetReview(): Promise<void> {
     return loadVideoPetReview();
   }
 
+  const pageKey = String(videoPetReviewOffset) + ":" +
+    page.items.map((item) =>
+      item.mediaId + "-" + item.timestampMs + "-" + item.detectionIndex
+    ).join("|");
+  const alreadyRendered = petCandidates.querySelector("[data-video-review-title]");
+  const active = document.activeElement;
+  const editing =
+    active instanceof HTMLInputElement && petCandidates.contains(active);
+  if (progressive && alreadyRendered && (pageKey === videoPetReviewRenderedKey || editing)) {
+    updateVideoPetReviewProgress(page);
+    scheduleNextVideoPetReviewBatch(page);
+    return;
+  }
+
+  const typedNames = new Map<string, string>();
+  for (const input of petCandidates.querySelectorAll<HTMLInputElement>("input[data-video-pet-key]")) {
+    typedNames.set(input.dataset.videoPetKey ?? "", input.value);
+  }
+  videoPetReviewRenderedKey = pageKey;
   petCandidates.replaceChildren();
   const heading = document.createElement("div");
   heading.className = "video-pet-review-heading";
   const title = document.createElement("strong");
-  title.textContent =
-    page.total.toLocaleString("de-DE") + " Videofundstellen noch nicht bestätigt";
+  title.dataset.videoReviewTitle = "1";
   const note = document.createElement("small");
-  note.textContent =
-    "Eine Fundstelle entspricht einer Erkennung in einem Szenenbild. " +
-    "Vermutete Namen sind Vorschläge, keine Bestätigung.";
+  note.dataset.videoReviewProgress = "1";
   heading.append(title, note);
   petCandidates.appendChild(heading);
+  updateVideoPetReviewProgress(page);
 
   if (page.items.length === 0) {
     const empty = document.createElement("div");
     empty.className = "person-empty";
-    empty.textContent = "Keine unbestätigten Tiere in den bereits analysierten Videoframes.";
+    empty.textContent = page.indexComplete
+      ? "Keine unbestätigten Tiere in den analysierten Videoframes."
+      : "In den bisher durchsuchten Videos noch keine unbestätigten Tiere gefunden.";
     petCandidates.appendChild(empty);
+    scheduleNextVideoPetReviewBatch(page);
     return;
   }
 
@@ -6671,7 +6776,9 @@ async function loadVideoPetReview(): Promise<void> {
     input.maxLength = 120;
     input.autocomplete = "off";
     input.placeholder = "Haustier auswählen oder Namen eingeben";
-    input.value = item.suggestedPetName ?? "";
+    const draftKey = item.mediaId + "-" + item.timestampMs + "-" + item.detectionIndex;
+    input.dataset.videoPetKey = draftKey;
+    input.value = typedNames.get(draftKey) ?? item.suggestedPetName ?? "";
     const datalist = document.createElement("datalist");
     datalist.id = "video-pet-names-" +
       item.mediaId + "-" + item.timestampMs + "-" + item.detectionIndex;
@@ -6736,14 +6843,11 @@ async function loadVideoPetReview(): Promise<void> {
     void runSafely(loadVideoPetReview);
   });
   const count = document.createElement("span");
-  count.textContent =
-    (videoPetReviewOffset + 1).toLocaleString("de-DE") +
-    "–" +
-    (videoPetReviewOffset + page.items.length).toLocaleString("de-DE") +
-    " von " + page.total.toLocaleString("de-DE");
+  count.dataset.videoReviewPageCount = "1";
   const next = document.createElement("button");
   next.type = "button";
   next.className = "ghost";
+  next.dataset.videoReviewNext = "1";
   next.textContent = "Nächste";
   next.disabled = videoPetReviewOffset + page.items.length >= page.total;
   next.addEventListener("click", () => {
@@ -6752,6 +6856,8 @@ async function loadVideoPetReview(): Promise<void> {
   });
   pager.append(back, count, next);
   petCandidates.appendChild(pager);
+  updateVideoPetReviewProgress(page);
+  scheduleNextVideoPetReviewBatch(page);
 }
 
 function formatVideoTime(timestampMs: number): string {
@@ -6761,6 +6867,7 @@ function formatVideoTime(timestampMs: number): string {
 }
 
 function renderPetOverview(overview: PetOverview): void {
+  cancelVideoPetReviewRefresh();
   petCandidates.replaceChildren();
   confirmedPets.replaceChildren();
 
@@ -7784,6 +7891,7 @@ function setPersonConfirmationMediaFilter(filter: ConfirmationMediaFilter): void
 function setPetConfirmationMediaFilter(filter: ConfirmationMediaFilter): void {
   if (petConfirmationMediaFilter === filter) return;
   petConfirmationMediaFilter = filter;
+  cancelVideoPetReviewRefresh();
   if (filter === "video") videoPetReviewOffset = 0;
   if (lastPetOverview) renderPetOverview(lastPetOverview);
 }
@@ -8942,6 +9050,7 @@ window.imageSorter.lifecycle.onBackgroundPauseState((state) => {
 window.imageSorter.lifecycle.onShutdownStatus((status) => {
   rendererShuttingDown = true;
 
+  cancelVideoPetReviewRefresh();
   for (const timer of [
     analysisRefreshTimer,
     sourcePipelineRefreshTimer,
