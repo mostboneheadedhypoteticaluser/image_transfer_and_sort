@@ -920,6 +920,31 @@ db.exec(`
 
   -- A per-frame "not an animal" decision must survive review paging and
   -- video-index rebuilds; deleting the analysis resets these decisions.
+  -- User-confirmed identities are video-wide membership, independent of frames.
+  CREATE TABLE IF NOT EXISTS video_identity_review_status (
+    media_id INTEGER NOT NULL REFERENCES media_items(id) ON DELETE CASCADE,
+    identity_kind TEXT NOT NULL CHECK(identity_kind IN ('person','pet')),
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY(media_id,identity_kind)
+  );
+
+  CREATE TABLE IF NOT EXISTS video_confirmed_identities (
+    media_id INTEGER NOT NULL REFERENCES media_items(id) ON DELETE CASCADE,
+    identity_kind TEXT NOT NULL CHECK(identity_kind IN ('person','pet')),
+    identity_id INTEGER NOT NULL,
+    pet_class TEXT,
+    PRIMARY KEY(media_id,identity_kind,identity_id)
+  );
+
+  CREATE TABLE IF NOT EXISTS video_presence_review_index (
+    media_id INTEGER PRIMARY KEY REFERENCES media_video_analysis(media_id) ON DELETE CASCADE,
+    input_sha256 TEXT NOT NULL,
+    person_count INTEGER NOT NULL,
+    pet_count INTEGER NOT NULL,
+    person_examples_json TEXT NOT NULL,
+    pet_examples_json TEXT NOT NULL
+  );
+
   CREATE TABLE IF NOT EXISTS video_frame_ignored_pets (
     media_id INTEGER NOT NULL REFERENCES media_video_analysis(media_id) ON DELETE CASCADE,
     timestamp_ms INTEGER NOT NULL,
@@ -8232,6 +8257,8 @@ function completeVideoAnalysisJob(jobId: number, result: unknown) {
         "DELETE FROM video_frame_identity_overrides WHERE media_id=?"
       ).run(mediaId);
       db.prepare("DELETE FROM video_frame_ignored_pets WHERE media_id=?").run(mediaId);
+      db.prepare("DELETE FROM video_confirmed_identities WHERE media_id=?").run(mediaId);
+      db.prepare("DELETE FROM video_identity_review_status WHERE media_id=?").run(mediaId);
     }
 
     db.prepare(
@@ -9215,6 +9242,83 @@ function writeVideoPetReviewIndex(
     });
   }
   markVideoPetReviewIndexed.run(mediaId, sha256);
+
+  // At most four representative detections are exposed to the reviewer;
+  // all original detections remain in frames_json for analysis/search.
+  const suggestions: Record<"person" | "pet", Array<Record<string, unknown>>> = {
+    person: [], pet: []
+  };
+  const totals = { person: 0, pet: 0 };
+  for (const rawFrame of rawFrames) {
+    if (!rawFrame || typeof rawFrame !== "object") continue;
+    const frame = rawFrame as Record<string, unknown>;
+    for (const kind of ["person", "pet"] as const) {
+      const detections = kind === "person" ? frame.persons : frame.pets;
+      if (!Array.isArray(detections)) continue;
+      for (const raw of detections) {
+        if (!raw || typeof raw !== "object") continue;
+        const detection = raw as Record<string, unknown>;
+        totals[kind]++;
+        const x = Number(detection.x), y = Number(detection.y);
+        const width = Number(detection.width), height = Number(detection.height);
+        const frameWidth = Number(frame.width), frameHeight = Number(frame.height);
+        if (![x,y,width,height,frameWidth,frameHeight].every(Number.isFinite) ||
+            width <= 0 || height <= 0 || frameWidth <= 0 || frameHeight <= 0) continue;
+        suggestions[kind].push({
+          timestampMs: Math.max(0, Math.trunc(Number(frame.timestampMs) || 0)),
+          frameIndex: frame.frameIndex ?? null,
+          frameHash: frame.frameHash ?? null,
+          score: Number(detection.score) || 0,
+          similarity: detection.similarity ?? null,
+          name: typeof detection.name === "string" ? detection.name : null,
+          identityId: detection.id ?? null,
+          petClass: kind === "pet" && detection.petClass === "cat" ? "cat" :
+            kind === "pet" ? "dog" : null,
+          bounds: { x, y, width, height, frameWidth, frameHeight }
+        });
+      }
+    }
+  }
+  const representatives = (kind: "person" | "pet") => {
+    const candidates = suggestions[kind].sort((a, b) => {
+      const quality = (entry: Record<string, unknown>) => {
+        const box = entry.bounds as { width: number; height: number; frameWidth: number; frameHeight: number };
+        return (Number(entry.score) || 0) +
+          Math.min(0.2, box.width * box.height / (box.frameWidth * box.frameHeight)) +
+          (entry.name ? 0.1 : 0);
+      };
+      return quality(b) - quality(a);
+    });
+    const chosen: Array<Record<string, unknown>> = [];
+    const usedNames = new Set<string>();
+    for (const entry of candidates) {
+      if (!entry.name) continue;
+      const key = String(entry.petClass) + ":" + String(entry.name).toLowerCase();
+      if (usedNames.has(key)) continue;
+      usedNames.add(key);
+      chosen.push(entry);
+      if (chosen.length >= 4) break;
+    }
+    for (const entry of candidates) {
+      if (chosen.length >= 4) break;
+      // Show different moments instead of four adjacent video frames.
+      if (chosen.some((other) =>
+        Math.abs(Number(other.timestampMs) - Number(entry.timestampMs)) < 8000
+      )) continue;
+      chosen.push(entry);
+    }
+    if (!chosen.length && candidates.length) chosen.push(candidates[0]);
+    return JSON.stringify(chosen.sort((a,b) => Number(a.timestampMs) - Number(b.timestampMs)));
+  };
+  db.prepare(
+    "INSERT INTO video_presence_review_index(" +
+    "media_id,input_sha256,person_count,pet_count,person_examples_json,pet_examples_json" +
+    ") VALUES(?,?,?,?,?,?) ON CONFLICT(media_id) DO UPDATE SET " +
+    "input_sha256=excluded.input_sha256,person_count=excluded.person_count," +
+    "pet_count=excluded.pet_count,person_examples_json=excluded.person_examples_json," +
+    "pet_examples_json=excluded.pet_examples_json"
+  ).run(mediaId, sha256, totals.person, totals.pet,
+    representatives("person"), representatives("pet"));
 }
 
 const selectUnindexedVideoPetReviews = db.prepare(`
@@ -9225,7 +9329,10 @@ const selectUnindexedVideoPetReviews = db.prepare(`
     AND m.sha256=va.input_sha256
   LEFT JOIN video_pet_review_index_state state
     ON state.media_id=va.media_id
+  LEFT JOIN video_presence_review_index presence
+    ON presence.media_id=va.media_id
   WHERE state.media_id IS NULL OR state.input_sha256<>va.input_sha256
+     OR presence.media_id IS NULL OR presence.input_sha256<>va.input_sha256
   ORDER BY va.media_id DESC
   LIMIT 12
 `);
@@ -9260,6 +9367,146 @@ function indexNextVideoPetReviewBatch(): number {
     throw error;
   }
   return processed;
+}
+
+function listVideoIdentityPresenceReview(
+  kind: "person" | "pet",
+  sourceId?: number, requestedLimit = 6, requestedOffset = 0
+) {
+  const limit = Math.max(1, Math.min(24, Math.trunc(requestedLimit || 6)));
+  const offset = Math.max(0, Math.trunc(requestedOffset || 0));
+  indexNextVideoPetReviewBatch();
+  const sourceCondition = sourceId === undefined ? "" : "AND m.source_id=?";
+  const args = sourceId === undefined ? [] : [sourceId];
+  const progress = db.prepare(
+    "SELECT COUNT(*) AS total," +
+    "SUM(CASE WHEN idx.input_sha256=va.input_sha256 THEN 1 ELSE 0 END) AS indexed " +
+    "FROM media_video_analysis va " +
+    "JOIN media_items m ON m.id=va.media_id AND m.availability='AVAILABLE' " +
+    "AND m.sha256=va.input_sha256 " +
+    "LEFT JOIN video_presence_review_index idx ON idx.media_id=va.media_id " +
+    "WHERE 1=1 " + sourceCondition
+  ).get(...args);
+  const from = (
+    "FROM video_presence_review_index idx " +
+    "JOIN media_video_analysis va ON va.media_id=idx.media_id " +
+    "AND va.input_sha256=idx.input_sha256 " +
+    "JOIN media_items m ON m.id=idx.media_id " +
+    "AND m.availability='AVAILABLE' AND m.sha256=va.input_sha256 " +
+    "LEFT JOIN video_identity_review_status reviewed ON " +
+    "reviewed.media_id=idx.media_id AND reviewed.identity_kind=? " +
+    "WHERE (idx." + (kind === "person" ? "person_count" : "pet_count") +
+    ">0 OR reviewed.media_id IS NOT NULL) " + sourceCondition
+  );
+  const queryArgs = [kind, ...args];
+  const total = Number(db.prepare("SELECT COUNT(*) AS count " + from)
+    .get(...queryArgs)?.count ?? 0);
+  const rows = db.prepare(
+    "SELECT idx.media_id,m.relative_path,va.duration_ms,idx.person_count," +
+    "idx.pet_count,idx.person_examples_json,idx.pet_examples_json," +
+    "reviewed.media_id AS reviewed_id " + from +
+    " ORDER BY (reviewed.media_id IS NULL) DESC,idx.media_id DESC LIMIT ? OFFSET ?"
+  ).all(...queryArgs,limit,offset);
+  const items = rows.map((row) => {
+    const mediaId = Number(row.media_id);
+    const confirmed = db.prepare(
+      "SELECT c.identity_id,c.pet_class," +
+      "CASE WHEN c.identity_kind='person' THEN p.name ELSE pe.name END AS name " +
+      "FROM video_confirmed_identities c " +
+      "LEFT JOIN persons p ON c.identity_kind='person' AND p.id=c.identity_id " +
+      "LEFT JOIN pets pe ON c.identity_kind='pet' AND pe.id=c.identity_id " +
+      "WHERE c.media_id=? AND c.identity_kind=? ORDER BY name COLLATE NOCASE"
+    ).all(mediaId, kind).filter((entry) => entry.name !== null)
+      .map((entry) => ({
+        name: String(entry.name),
+        petClass: entry.pet_class === "cat" ? "cat" :
+          entry.pet_class === "dog" ? "dog" : null
+      }));
+    let examples: unknown[] = [];
+    try {
+      const parsed = JSON.parse(String(kind === "person"
+        ? row.person_examples_json : row.pet_examples_json));
+      if (Array.isArray(parsed)) examples = parsed;
+    } catch { /* Malformed index row: no preview, confirmation still works. */ }
+    return {
+      mediaId, relativePath: String(row.relative_path),
+      durationMs: Number(row.duration_ms),
+      detectedCount: Number(kind === "person" ? row.person_count : row.pet_count),
+      reviewed: row.reviewed_id !== null, confirmed, examples
+    };
+  });
+  return {
+    total, totalVideos: Number(progress?.total ?? 0),
+    indexedVideos: Number(progress?.indexed ?? 0),
+    indexComplete: Number(progress?.indexed ?? 0) >= Number(progress?.total ?? 0),
+    items
+  };
+}
+
+function setVideoIdentityPresence(
+  mediaId: number, kind: "person" | "pet", rawNames: unknown
+) {
+  if (!Array.isArray(rawNames) || rawNames.length > 20)
+    throw new Error("Ungültige Anzahl von Identitäten (maximal 20).");
+  const media = db.prepare(
+    "SELECT m.id FROM media_items m JOIN media_video_analysis va " +
+    "ON va.media_id=m.id AND va.input_sha256=m.sha256 " +
+    "WHERE m.id=? AND m.availability='AVAILABLE'"
+  ).get(mediaId);
+  if (!media) throw new Error("Die Videoanalyse ist nicht mehr gültig.");
+
+  const names = new Map<string, { name: string; petClass: "dog" | "cat" | null }>();
+  for (const raw of rawNames) {
+    if (!raw || typeof raw !== "object") throw new Error("Ungültiger Name.");
+    const entry = raw as Record<string, unknown>;
+    const name = typeof entry.name === "string" ? entry.name.trim() : "";
+    if (!name || name.length > 120) throw new Error("Ungültiger oder zu langer Name.");
+    const petClass = kind === "pet"
+      ? entry.petClass === "cat" ? "cat" : "dog" : null;
+    names.set((petClass ?? "") + ":" + name.toLocaleLowerCase("de"), {name,petClass});
+  }
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    db.prepare("DELETE FROM video_confirmed_identities WHERE media_id=? AND identity_kind=?")
+      .run(mediaId,kind);
+    const insert = db.prepare(
+      "INSERT INTO video_confirmed_identities(media_id,identity_kind,identity_id,pet_class)" +
+      " VALUES(?,?,?,?)"
+    );
+    for (const entry of names.values()) {
+      let identityId: number;
+      if (kind === "person") {
+        const existing = db.prepare(
+          "SELECT id FROM persons WHERE name=? COLLATE NOCASE ORDER BY id LIMIT 1"
+        ).get(entry.name);
+        identityId = existing ? Number(existing.id)
+          : Number(db.prepare("INSERT INTO persons(name) VALUES(?)")
+            .run(entry.name).lastInsertRowid);
+        db.prepare("UPDATE persons SET updated_at=CURRENT_TIMESTAMP WHERE id=?")
+          .run(identityId);
+      } else {
+        const existing = db.prepare(
+          "SELECT id FROM pets WHERE name=? COLLATE NOCASE AND pet_class=? ORDER BY id LIMIT 1"
+        ).get(entry.name,entry.petClass);
+        identityId = existing ? Number(existing.id)
+          : Number(db.prepare("INSERT INTO pets(name,pet_class) VALUES(?,?)")
+            .run(entry.name,entry.petClass).lastInsertRowid);
+        db.prepare("UPDATE pets SET updated_at=CURRENT_TIMESTAMP WHERE id=?")
+          .run(identityId);
+      }
+      insert.run(mediaId,kind,identityId,entry.petClass);
+    }
+    db.prepare(
+      "INSERT INTO video_identity_review_status(media_id,identity_kind,updated_at)" +
+      " VALUES(?,?,CURRENT_TIMESTAMP) ON CONFLICT(media_id,identity_kind)" +
+      " DO UPDATE SET updated_at=CURRENT_TIMESTAMP"
+    ).run(mediaId,kind);
+    rebuildVideoIdentityTracks(mediaId);
+    db.exec("COMMIT");
+    return { mediaId,kind,confirmed: names.size,reviewed:true };
+  } catch (error) {
+    db.exec("ROLLBACK"); throw error;
+  }
 }
 
 function listVideoPetReview(
@@ -13793,6 +14040,14 @@ function rebuildVideoIdentityTracks(mediaId: number) {
       row
     );
   }
+  const reviewedKinds = new Set<string>(
+    db.prepare("SELECT identity_kind FROM video_identity_review_status WHERE media_id=?")
+      .all(mediaId).map((row) => String(row.identity_kind))
+  );
+  const videoConfirmed = db.prepare(
+    "SELECT identity_kind,identity_id,pet_class FROM video_confirmed_identities WHERE media_id=?"
+  ).all(mediaId);
+
   const ignoredPetKeys = new Set<string>(
     db.prepare(
       "SELECT timestamp_ms,detection_index FROM video_frame_ignored_pets WHERE media_id=?"
@@ -13854,6 +14109,7 @@ function rebuildVideoIdentityTracks(mediaId: number) {
       kind: "person" | "pet",
       rawDetections: unknown[]
     ) => {
+      if (reviewedKinds.has(kind)) return;
       rawDetections.forEach((rawDetection, fallbackIndex) => {
         if (!rawDetection || typeof rawDetection !== "object") return;
         const detection = rawDetection as Record<string, unknown>;
@@ -13896,6 +14152,19 @@ function rebuildVideoIdentityTracks(mediaId: number) {
   }
 
   finished.push(...active.values());
+  for (const row of videoConfirmed) {
+    if (!reviewedKinds.has(String(row.identity_kind))) continue;
+    finished.push({
+      kind: row.identity_kind === "pet" ? "pet" : "person",
+      identityId: Number(row.identity_id),
+      petClass: row.pet_class === null ? null : String(row.pet_class),
+      startMs: 0,
+      endMs: durationMs,
+      hitCount: 1,
+      maxSimilarity: 1,
+      lastSeenMs: durationMs
+    });
+  }
 
   db.prepare("DELETE FROM video_identity_tracks WHERE media_id=?").run(mediaId);
   const insertTrack = db.prepare(
@@ -14864,6 +15133,19 @@ async function dispatch(method: CatalogMethod, payload: Record<string, unknown> 
         asNumber(payload.candidateId, "candidateId"),
         payload.limit === undefined ? 5000 : asNumber(payload.limit, "limit"),
         payload.offset === undefined ? 0 : asNumber(payload.offset, "offset")
+      );
+    case "listVideoIdentityPresenceReview":
+      return listVideoIdentityPresenceReview(
+        payload.kind === "pet" ? "pet" : "person",
+        payload.sourceId === undefined ? undefined : asNumber(payload.sourceId, "sourceId"),
+        payload.limit === undefined ? 6 : asNumber(payload.limit, "limit"),
+        payload.offset === undefined ? 0 : asNumber(payload.offset, "offset")
+      );
+    case "setVideoIdentityPresence":
+      return setVideoIdentityPresence(
+        asNumber(payload.mediaId, "mediaId"),
+        payload.kind === "pet" ? "pet" : "person",
+        payload.names
       );
     case "listVideoPetReview":
       return listVideoPetReview(
