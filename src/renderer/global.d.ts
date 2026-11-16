@@ -39,6 +39,7 @@ import type {
   AssignPetSelectionResult,
   PersonOverview,
   PetOverview,
+  VideoPetReviewPage,
   RestoreResult,
   ResetCatalogResult,
   RetryAnalysisResult,
@@ -167,6 +168,7 @@ declare global {
           candidateOffset?: number,
           summaryOnly?: boolean
         ): Promise<PetOverview>;
+        listVideoReview(offset?: number, limit?: number): Promise<VideoPetReviewPage>;
         getCandidateItems(
           candidateId: number,
           limit?: number,
