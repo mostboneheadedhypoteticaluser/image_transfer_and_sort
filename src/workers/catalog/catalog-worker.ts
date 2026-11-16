@@ -8197,7 +8197,7 @@ function completeVideoAnalysisJob(jobId: number, result: unknown) {
     if (existing && timestampMs - existing.lastSeenMs <= allowedGap) {
       existing.endMs = Math.min(durationMs, timestampMs + sampleIntervalMs);
       existing.hitCount += 1;
-      existing.maxSimilarity = Math.max(existing.maxSimilarity, similarity);
+      existing.maxSimilarity = Math.max(existing.maxSimilarity ?? 0, similarity);
       existing.lastSeenMs = timestampMs;
       return;
     }
@@ -14099,7 +14099,7 @@ function rebuildVideoIdentityTracks(mediaId: number) {
     startMs: number;
     endMs: number;
     hitCount: number;
-    maxSimilarity: number;
+    maxSimilarity: number | null;
     lastSeenMs: number;
   };
 
@@ -14199,7 +14199,8 @@ function rebuildVideoIdentityTracks(mediaId: number) {
       startMs: 0,
       endMs: durationMs,
       hitCount: 1,
-      maxSimilarity: 1,
+      // A manual presence decision has no model-derived similarity.
+      maxSimilarity: null,
       lastSeenMs: durationMs
     });
   }
