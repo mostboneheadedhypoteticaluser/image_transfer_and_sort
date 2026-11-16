@@ -43,6 +43,7 @@ import type {
   PersonOverview,
   PetOverview,
   VideoPetReviewPage,
+  VideoIdentityPresencePage,
   RestoreResult,
   ResetCatalogResult,
   RetryAnalysisResult,
@@ -463,6 +464,15 @@ const api = {
       ipcRenderer.invoke("catalog:listRecycleMedia", sourceId, limit),
     getMediaDetails: (mediaId: number): Promise<MediaDetails | null> =>
       ipcRenderer.invoke("catalog:getMediaDetails", mediaId),
+    listVideoIdentityPresenceReview: (
+      kind: "person" | "pet", offset = 0, limit = 6
+    ): Promise<VideoIdentityPresencePage> =>
+      ipcRenderer.invoke("catalog:listVideoIdentityPresenceReview", kind, offset, limit),
+    setVideoIdentityPresence: (
+      mediaId: number, kind: "person" | "pet",
+      names: Array<{name: string; petClass: "dog" | "cat" | null}>
+    ): Promise<{mediaId: number; kind: "person" | "pet"; confirmed: number; reviewed: true}> =>
+      ipcRenderer.invoke("catalog:setVideoIdentityPresence", mediaId, kind, names),
     assignVideoFrameIdentityName: (
       mediaId: number,
       timestampMs: number,
