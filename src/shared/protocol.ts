@@ -1197,6 +1197,7 @@ export type CatalogMethod =
   | "getMediaDetails"
   | "assignVideoFrameIdentityName"
   | "assignVideoFrameIdentityNames"
+  | "setVideoPetDetectionIgnored"
   | "reanalyzeMedia"
   | "getMediaPath"
   | "scanSource"
