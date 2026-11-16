@@ -914,6 +914,33 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_video_frame_override_media
     ON video_frame_identity_overrides(media_id, timestamp_ms);
 
+  -- Die Video-Bestätigungsansicht liest aus einem dauerhaften, indizierten
+  -- Ausschnitt der Frame-Erkennungen, nicht aus json_each() über alle Videos.
+  -- media_video_analysis ist Besitzer beider Cache-Tabellen. Ein Re-Analyse-
+  -- Reset entfernt die Einträge damit automatisch mit dem Ursprungsdatensatz.
+  CREATE TABLE IF NOT EXISTS video_pet_review_index_state (
+    media_id INTEGER PRIMARY KEY REFERENCES media_video_analysis(media_id) ON DELETE CASCADE,
+    input_sha256 TEXT NOT NULL,
+    indexed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE TABLE IF NOT EXISTS video_pet_review_items (
+    media_id INTEGER NOT NULL REFERENCES media_video_analysis(media_id) ON DELETE CASCADE,
+    timestamp_ms INTEGER NOT NULL,
+    detection_index INTEGER NOT NULL,
+    frame_index INTEGER,
+    frame_hash TEXT,
+    pet_class TEXT NOT NULL,
+    score REAL NOT NULL,
+    suggested_id INTEGER,
+    suggested_name TEXT,
+    similarity REAL,
+    PRIMARY KEY (media_id, timestamp_ms, detection_index)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_video_pet_review_class
+    ON video_pet_review_items(pet_class, media_id DESC);
+
   CREATE TABLE IF NOT EXISTS video_tags (
     media_id INTEGER NOT NULL REFERENCES media_items(id) ON DELETE CASCADE,
     label TEXT NOT NULL,
