@@ -6559,6 +6559,23 @@ async function loadPersonOverview(
 }
 
 
+function openPetVideoAtFrame(mediaId: number, relativePath: string, timestampMs: number): void {
+  const filename = relativePath.split(/[\\/]/).pop() ?? relativePath;
+  const extension = filename.includes(".")
+    ? "." + filename.split(".").pop()!.toLowerCase()
+    : "";
+  openImagePreview(mediaId, relativePath, extension);
+  const seek = () => {
+    if (imagePreviewDialog.open && !imagePreviewVideo.hidden) {
+      const duration = Number.isFinite(imagePreviewVideo.duration)
+        ? imagePreviewVideo.duration : Infinity;
+      imagePreviewVideo.currentTime = Math.min(Math.max(0, timestampMs / 1000), duration);
+    }
+  };
+  if (imagePreviewVideo.readyState >= 1) seek();
+  else imagePreviewVideo.addEventListener("loadedmetadata", seek, { once: true });
+}
+
 const VIDEO_PET_REVIEW_PAGE_SIZE = 24;
 
 async function loadVideoPetReview(): Promise<void> {
@@ -6626,7 +6643,7 @@ async function loadVideoPetReview(): Promise<void> {
     frameTime.textContent = formatVideoTime(item.timestampMs);
     frameButton.append(image, frameTime);
     frameButton.addEventListener("click", () =>
-      openImagePreview(item.mediaId, item.relativePath)
+      openPetVideoAtFrame(item.mediaId, item.relativePath, item.timestampMs)
     );
 
     const main = document.createElement("div");
@@ -7571,7 +7588,7 @@ function renderPetOverview(overview: PetOverview): void {
           caption.textContent = hit.relativePath + " · " + formatVideoTime(hit.startMs);
           clip.append(preview, caption);
           clip.addEventListener("click", () =>
-            openImagePreview(hit.mediaId, hit.relativePath)
+            openPetVideoAtFrame(hit.mediaId, hit.relativePath, hit.startMs)
           );
           videoHits.appendChild(clip);
         }
