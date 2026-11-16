@@ -543,7 +543,12 @@ export type VideoPetReviewItem = {
 };
 
 export type VideoPetReviewPage = {
+  /** Anzahl der bislang indexierten, noch nicht bestätigten Fundstellen. */
   total: number;
+  /** Nur Videos mit abgeschlossener Analyse und gültigem Quelldatei-Hash. */
+  indexedVideos: number;
+  totalVideos: number;
+  indexComplete: boolean;
   items: VideoPetReviewItem[];
 };
 
