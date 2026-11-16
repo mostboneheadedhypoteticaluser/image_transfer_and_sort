@@ -9301,10 +9301,18 @@ function writeVideoPetReviewIndex(
     }
     for (const entry of candidates) {
       if (chosen.length >= 4) break;
-      // Show different moments instead of four adjacent video frames.
-      if (chosen.some((other) =>
-        Math.abs(Number(other.timestampMs) - Number(entry.timestampMs)) < 8000
-      )) continue;
+      // Avoid four adjacent views of the same animal. At the same time,
+      // keep spatially distinct animals from the very same video frame.
+      const box = entry.bounds as {x:number;y:number;width:number;height:number;frameWidth:number;frameHeight:number};
+      const cx = (box.x + box.width / 2) / box.frameWidth;
+      const cy = (box.y + box.height / 2) / box.frameHeight;
+      if (chosen.some((other) => {
+        const previous = other.bounds as typeof box;
+        const px = (previous.x + previous.width / 2) / previous.frameWidth;
+        const py = (previous.y + previous.height / 2) / previous.frameHeight;
+        return Math.abs(Number(other.timestampMs) - Number(entry.timestampMs)) < 8000 &&
+          Math.hypot(cx-px,cy-py) < 0.3;
+      })) continue;
       chosen.push(entry);
     }
     if (!chosen.length && candidates.length) chosen.push(candidates[0]);
