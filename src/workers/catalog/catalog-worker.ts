@@ -8167,6 +8167,7 @@ function completeVideoAnalysisJob(jobId: number, result: unknown) {
     }
   }
   finishedTracks.push(...activeTracks.values());
+  let finalTrackCount = finishedTracks.length;
 
   db.exec("BEGIN IMMEDIATE");
   try {
@@ -8205,7 +8206,7 @@ function completeVideoAnalysisJob(jobId: number, result: unknown) {
     // sichtbaren Trefferliste berücksichtigt werden. Ohne diesen Schritt
     // verschwinden Video-Treffer nach einer Neuanalyse trotz Bestätigung.
     rebuildVideoIdentityTracks(mediaId);
-    const finalTrackCount = Number(db.prepare(
+    finalTrackCount = Number(db.prepare(
       "SELECT COUNT(*) AS count FROM video_identity_tracks WHERE media_id=?"
     ).get(mediaId)?.count ?? 0);
 
