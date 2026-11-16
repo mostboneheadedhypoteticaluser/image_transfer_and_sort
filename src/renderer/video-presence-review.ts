@@ -37,8 +37,8 @@ export class VideoPresenceReviewer {
       this.timer = null;
       if (this.visible()) void this.load(true).catch((error) => {
         const message = error instanceof Error ? error.message : String(error);
-        this.container.querySelector<HTMLElement>(".video-presence-progress")!.textContent =
-          "Aktualisierung fehlgeschlagen: " + message;
+        const status = this.container.querySelector<HTMLElement>(".video-presence-progress");
+        if (status) status.textContent = "Aktualisierung fehlgeschlagen: " + message;
       });
     }, 550);
   }
@@ -172,7 +172,12 @@ export class VideoPresenceReviewer {
       image.src = this.cropUrl(item.mediaId,example);
       image.alt = this.kind === "person" ? "Erkanntes Gesicht" : "Erkanntes Haustier";
       image.title = (example.name ?? "Noch unbekannt") + " · " +
-        Math.round(example.timestampMs / 1000) + " s";
+        Math.round(example.timestampMs / 1000) + " s · Video öffnen";
+      image.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        this.openVideo(item.mediaId, item.relativePath, example.timestampMs);
+      });
       const name = document.createElement("small");
       name.textContent = example.name ?? (example.petClass === "cat" ? "Katze" :
         this.kind === "pet" ? "Hund" : "Person");
@@ -261,8 +266,13 @@ export class VideoPresenceReviewer {
     add.textContent = "Hinzufügen";
     const append = () => {
       if (!input.value.trim()) {input.focus();return;}
+      const matching = this.kind === "pet"
+        ? this.known().filter(pet =>
+            pet.name.toLocaleLowerCase("de") === input.value.trim().toLocaleLowerCase("de"))
+        : [];
+      const inferredClass = matching.length === 1 ? matching[0].petClass : null;
       addName(input.value,this.kind === "person" ? null :
-        klass.value === "cat" ? "cat" : "dog");
+        inferredClass ?? (klass.value === "cat" ? "cat" : "dog"));
       input.value = "";
       input.focus();
     };
@@ -307,7 +317,13 @@ export class VideoPresenceReviewer {
       }
       void persist(selected.map(x=>({...x})));
     });
-    none.addEventListener("click",() => void persist([]));
+    none.addEventListener("click",() => {
+      if (selected.length && !window.confirm(
+        "Die ausgewählten Namen für dieses Video entfernen und ausdrücklich „" +
+        (this.kind === "person" ? "Keine Person" : "Kein Tier") + "“ bestätigen?"
+      )) return;
+      void persist([]);
+    });
     footer.append(save,none,result);
     body.append(help,choices,suggested,entryRow,footer);
     card.appendChild(body);
