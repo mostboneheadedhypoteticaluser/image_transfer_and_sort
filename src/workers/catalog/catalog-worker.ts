@@ -9070,6 +9070,76 @@ function listPetCandidateItems(
   });
 }
 
+function listVideoPetReview(
+  sourceId?: number,
+  requestedLimit = 24,
+  requestedOffset = 0
+) {
+  // Nur Videoframes mit abgeschlossener Analyse. Bestätigungen bleiben in
+  // video_frame_identity_overrides erhalten; automatisch vermutete Namen
+  // sind lediglich Vorschläge und sollen ausdrücklich überprüfbar bleiben.
+  const limit = Math.max(1, Math.min(60, Math.trunc(requestedLimit || 24)));
+  const offset = Math.max(0, Math.trunc(requestedOffset || 0));
+  const sourceCondition = sourceId === undefined ? "" : "AND m.source_id=?";
+  const args: number[] = sourceId === undefined ? [] : [sourceId];
+
+  const from = `
+    FROM media_video_analysis va
+    JOIN media_items m
+      ON m.id=va.media_id
+     AND m.availability='AVAILABLE'
+     AND m.sha256=va.input_sha256
+    JOIN json_each(va.frames_json) frame
+    JOIN json_each(frame.value, '$.pets') detection
+    WHERE json_valid(va.frames_json)
+      ${sourceCondition}
+      AND NOT EXISTS (
+        SELECT 1 FROM video_frame_identity_overrides confirmed
+        WHERE confirmed.media_id=va.media_id
+          AND confirmed.identity_kind='pet'
+          AND confirmed.timestamp_ms=CAST(json_extract(frame.value,'$.timestampMs') AS INTEGER)
+          AND confirmed.detection_index=CAST(json_extract(detection.value,'$.detectionIndex') AS INTEGER)
+      )
+  `;
+
+  const total = db.prepare(`SELECT COUNT(*) AS total ${from}`)
+    .get(...args);
+  const rows = db.prepare(`
+    SELECT
+      va.media_id, m.relative_path,
+      json_extract(frame.value, '$.timestampMs') AS timestamp_ms,
+      json_extract(frame.value, '$.frameIndex') AS frame_index,
+      json_extract(frame.value, '$.frameHash') AS frame_hash,
+      json_extract(detection.value, '$.detectionIndex') AS detection_index,
+      json_extract(detection.value, '$.petClass') AS pet_class,
+      json_extract(detection.value, '$.score') AS score,
+      json_extract(detection.value, '$.id') AS suggested_id,
+      json_extract(detection.value, '$.name') AS suggested_name,
+      json_extract(detection.value, '$.similarity') AS similarity
+    ${from}
+    ORDER BY m.first_seen_at DESC, va.media_id DESC,
+      timestamp_ms ASC, detection_index ASC
+    LIMIT ? OFFSET ?
+  `).all(...args, limit, offset);
+
+  return {
+    total: Number(total?.total ?? 0),
+    items: rows.map((row) => ({
+      mediaId: Number(row.media_id),
+      relativePath: String(row.relative_path),
+      timestampMs: Number(row.timestamp_ms ?? 0),
+      frameIndex: row.frame_index === null ? null : Number(row.frame_index),
+      frameHash: row.frame_hash === null ? null : String(row.frame_hash),
+      detectionIndex: Number(row.detection_index ?? 0),
+      petClass: row.pet_class === 'cat' ? 'cat' : 'dog',
+      score: Number(row.score ?? 0),
+      suggestedPetId: row.suggested_id === null ? null : Number(row.suggested_id),
+      suggestedPetName: row.suggested_name === null ? null : String(row.suggested_name),
+      similarity: row.similarity === null ? null : Number(row.similarity)
+    }))
+  };
+}
+
 function listPets(sourceId: number, summaryOnly = false) {
   const pets = db.prepare(`
     SELECT
@@ -14411,6 +14481,12 @@ async function dispatch(method: CatalogMethod, payload: Record<string, unknown> 
       return listPetCandidateItems(
         asNumber(payload.candidateId, "candidateId"),
         payload.limit === undefined ? 5000 : asNumber(payload.limit, "limit"),
+        payload.offset === undefined ? 0 : asNumber(payload.offset, "offset")
+      );
+    case "listVideoPetReview":
+      return listVideoPetReview(
+        payload.sourceId === undefined ? undefined : asNumber(payload.sourceId, "sourceId"),
+        payload.limit === undefined ? 24 : asNumber(payload.limit, "limit"),
         payload.offset === undefined ? 0 : asNumber(payload.offset, "offset")
       );
     case "listPets":
