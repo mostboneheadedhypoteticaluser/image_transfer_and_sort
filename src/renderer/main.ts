@@ -6654,6 +6654,26 @@ function scheduleNextVideoPetReviewBatch(page: VideoPetReviewPage): void {
   }, page.indexComplete ? 12000 : 400);
 }
 
+function captureVideoPetReviewScrollAnchor(): (() => void) | null {
+  const viewport = appWorkspace.getBoundingClientRect();
+  if (viewport.width < 20 || viewport.height < 20) return null;
+  // Capture one currently visible card or section. Appending a frame above
+  // the confirmed pet list must not move what the user is looking at.
+  const x = Math.min(viewport.right - 8, viewport.left + 80);
+  const y = Math.min(viewport.bottom - 8, viewport.top + 55);
+  const anchor = document.elementFromPoint(x, y)?.closest<HTMLElement>(
+    ".video-pet-review-card, .video-pet-review-group, " +
+    ".confirmed-person-card, .person-section"
+  );
+  if (!anchor || !appWorkspace.contains(anchor)) return null;
+  const previousTop = anchor.getBoundingClientRect().top;
+  return () => {
+    if (!anchor.isConnected) return;
+    const drift = anchor.getBoundingClientRect().top - previousTop;
+    if (Math.abs(drift) > 1) appWorkspace.scrollTop += drift;
+  };
+}
+
 async function loadVideoPetReview(progressive = false): Promise<void> {
   if (!videoPetReviewIsVisible()) return;
   if (videoPetReviewTimer !== null) {
@@ -6712,6 +6732,7 @@ async function loadVideoPetReview(progressive = false): Promise<void> {
     ).join("|");
   const alreadyRendered = petCandidates.querySelector("[data-video-review-title]");
   const appendOnly = progressive && Boolean(alreadyRendered);
+  const restoreScrollAnchor = appendOnly ? captureVideoPetReviewScrollAnchor() : null;
   const previousKey = videoPetReviewRenderedKey;
   if (appendOnly && previousKey === pageKey) {
     updateVideoPetReviewProgress(page);
@@ -6933,6 +6954,7 @@ async function loadVideoPetReview(progressive = false): Promise<void> {
   if (appendOnly) {
     const refresh = petCandidates.querySelector<HTMLButtonElement>("[data-video-review-reload]");
     if (refresh && newGroupsPending) refresh.hidden = false;
+    restoreScrollAnchor?.();
     scheduleNextVideoPetReviewBatch(page);
     return;
   }
