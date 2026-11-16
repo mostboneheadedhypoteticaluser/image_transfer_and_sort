@@ -9088,60 +9088,179 @@ function listPetCandidateItems(
   });
 }
 
+// Rebuildable index of video frame detections. Confirmed names are stored only
+// in video_frame_identity_overrides, never in this cache.
+const deleteVideoPetReviewItems = db.prepare(
+  "DELETE FROM video_pet_review_items WHERE media_id=?"
+);
+const insertVideoPetReviewItem = db.prepare(`
+  INSERT INTO video_pet_review_items(
+    media_id, timestamp_ms, detection_index, frame_index, frame_hash,
+    pet_class, score, suggested_id, suggested_name, similarity
+  ) VALUES(?,?,?,?,?,?,?,?,?,?)
+  ON CONFLICT(media_id,timestamp_ms,detection_index) DO UPDATE SET
+    frame_index=excluded.frame_index,
+    frame_hash=excluded.frame_hash,
+    pet_class=excluded.pet_class,
+    score=excluded.score,
+    suggested_id=excluded.suggested_id,
+    suggested_name=excluded.suggested_name,
+    similarity=excluded.similarity
+`);
+const markVideoPetReviewIndexed = db.prepare(`
+  INSERT INTO video_pet_review_index_state(media_id,input_sha256,indexed_at)
+  VALUES(?,?,CURRENT_TIMESTAMP)
+  ON CONFLICT(media_id) DO UPDATE SET
+    input_sha256=excluded.input_sha256,
+    indexed_at=CURRENT_TIMESTAMP
+`);
+
+function writeVideoPetReviewIndex(
+  mediaId: number, sha256: string, rawFrames: unknown[]
+): void {
+  deleteVideoPetReviewItems.run(mediaId);
+  for (const rawFrame of rawFrames) {
+    if (!rawFrame || typeof rawFrame !== "object") continue;
+    const frame = rawFrame as Record<string, unknown>;
+    const timestampMs = Math.max(0, Math.trunc(Number(frame.timestampMs) || 0));
+    const frameIndex = frame.frameIndex === null || frame.frameIndex === undefined
+      ? null : Number(frame.frameIndex);
+    const frameHash = typeof frame.frameHash === "string" ? frame.frameHash : null;
+    const pets = Array.isArray(frame.pets) ? frame.pets : [];
+    pets.forEach((rawPet, fallbackIndex) => {
+      if (!rawPet || typeof rawPet !== "object") return;
+      const pet = rawPet as Record<string, unknown>;
+      const rawIndex = Number(pet.detectionIndex);
+      const detectionIndex = Number.isSafeInteger(rawIndex) && rawIndex >= 0
+        ? rawIndex : fallbackIndex;
+      const rawId = pet.id;
+      const proposedId = rawId === null || rawId === undefined ? null : Number(rawId);
+      const rawSimilarity = pet.similarity;
+      const similarity = rawSimilarity === null || rawSimilarity === undefined
+        ? null : Number(rawSimilarity);
+      const score = Number(pet.score);
+      insertVideoPetReviewItem.run(
+        mediaId, timestampMs, detectionIndex,
+        frameIndex !== null && Number.isSafeInteger(frameIndex) && frameIndex >= 0
+          ? frameIndex : null,
+        frameHash,
+        pet.petClass === "cat" ? "cat" : "dog",
+        Number.isFinite(score) ? score : 0,
+        proposedId !== null && Number.isSafeInteger(proposedId) && proposedId > 0
+          ? proposedId : null,
+        typeof pet.name === "string" ? pet.name : null,
+        similarity !== null && Number.isFinite(similarity) ? similarity : null
+      );
+    });
+  }
+  markVideoPetReviewIndexed.run(mediaId, sha256);
+}
+
+const selectUnindexedVideoPetReviews = db.prepare(`
+  SELECT va.media_id, va.input_sha256, va.frames_json
+  FROM media_video_analysis va
+  JOIN media_items m ON m.id=va.media_id
+    AND m.availability='AVAILABLE'
+    AND m.sha256=va.input_sha256
+  LEFT JOIN video_pet_review_index_state state
+    ON state.media_id=va.media_id
+  WHERE state.media_id IS NULL OR state.input_sha256<>va.input_sha256
+  ORDER BY va.media_id DESC
+  LIMIT 12
+`);
+
+function indexNextVideoPetReviewBatch(): number {
+  const videos = selectUnindexedVideoPetReviews.all();
+  if (videos.length === 0) return 0;
+
+  // Bounded transaction: foreground scans, imports and confirmations can run
+  // between requests instead of waiting for thousands of videos to finish.
+  const startedAt = Date.now();
+  let processed = 0;
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    for (const video of videos) {
+      let frames: unknown[] = [];
+      try {
+        const parsed = JSON.parse(String(video.frames_json ?? "[]"));
+        if (Array.isArray(parsed)) frames = parsed;
+      } catch {
+        // Keep original video analysis untouched if one cache source is invalid.
+      }
+      writeVideoPetReviewIndex(
+        Number(video.media_id), String(video.input_sha256), frames
+      );
+      processed += 1;
+      if (Date.now() - startedAt > 65) break;
+    }
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+  return processed;
+}
+
 function listVideoPetReview(
   sourceId?: number,
   requestedLimit = 24,
   requestedOffset = 0
 ) {
-  // Nur Videoframes mit abgeschlossener Analyse. Bestätigungen bleiben in
-  // video_frame_identity_overrides erhalten; automatisch vermutete Namen
-  // sind lediglich Vorschläge und sollen ausdrücklich überprüfbar bleiben.
   const limit = Math.max(1, Math.min(60, Math.trunc(requestedLimit || 24)));
   const offset = Math.max(0, Math.trunc(requestedOffset || 0));
+
+  // Each request indexes at most twelve older videos, displaying the
+  // intermediate results right away rather than JSON-scanning the catalog.
+  indexNextVideoPetReviewBatch();
+
   const sourceCondition = sourceId === undefined ? "" : "AND m.source_id=?";
   const args: number[] = sourceId === undefined ? [] : [sourceId];
+  const progress = db.prepare(`
+    SELECT
+      COUNT(*) AS total_videos,
+      SUM(CASE WHEN state.input_sha256=va.input_sha256 THEN 1 ELSE 0 END)
+        AS indexed_videos
+    FROM media_video_analysis va
+    JOIN media_items m ON m.id=va.media_id
+      AND m.availability='AVAILABLE' AND m.sha256=va.input_sha256
+    LEFT JOIN video_pet_review_index_state state
+      ON state.media_id=va.media_id
+    WHERE 1=1 ${sourceCondition}
+  `).get(...args);
+  const totalVideos = Number(progress?.total_videos ?? 0);
+  const indexedVideos = Number(progress?.indexed_videos ?? 0);
 
   const from = `
-    FROM media_video_analysis va
-    JOIN media_items m
-      ON m.id=va.media_id
-     AND m.availability='AVAILABLE'
-     AND m.sha256=va.input_sha256
-    JOIN json_each(va.frames_json) frame
-    JOIN json_each(frame.value, '$.pets') detection
-    WHERE json_valid(va.frames_json)
-      ${sourceCondition}
-      AND NOT EXISTS (
-        SELECT 1 FROM video_frame_identity_overrides confirmed
-        WHERE confirmed.media_id=va.media_id
-          AND confirmed.identity_kind='pet'
-          AND confirmed.timestamp_ms=CAST(json_extract(frame.value,'$.timestampMs') AS INTEGER)
-          AND confirmed.detection_index=CAST(json_extract(detection.value,'$.detectionIndex') AS INTEGER)
-      )
+    FROM video_pet_review_items r
+    JOIN media_video_analysis va ON va.media_id=r.media_id
+    JOIN video_pet_review_index_state state ON state.media_id=r.media_id
+      AND state.input_sha256=va.input_sha256
+    JOIN media_items m ON m.id=r.media_id
+      AND m.availability='AVAILABLE' AND m.sha256=va.input_sha256
+    LEFT JOIN video_frame_identity_overrides confirmed
+      ON confirmed.media_id=r.media_id
+     AND confirmed.timestamp_ms=r.timestamp_ms
+     AND confirmed.detection_index=r.detection_index
+     AND confirmed.identity_kind='pet'
+    WHERE confirmed.media_id IS NULL ${sourceCondition}
   `;
 
-  const total = db.prepare(`SELECT COUNT(*) AS total ${from}`)
-    .get(...args);
+  const count = db.prepare(`SELECT COUNT(*) AS total ${from}`).get(...args);
   const rows = db.prepare(`
     SELECT
-      va.media_id, m.relative_path,
-      json_extract(frame.value, '$.timestampMs') AS timestamp_ms,
-      json_extract(frame.value, '$.frameIndex') AS frame_index,
-      json_extract(frame.value, '$.frameHash') AS frame_hash,
-      json_extract(detection.value, '$.detectionIndex') AS detection_index,
-      json_extract(detection.value, '$.petClass') AS pet_class,
-      json_extract(detection.value, '$.score') AS score,
-      json_extract(detection.value, '$.id') AS suggested_id,
-      json_extract(detection.value, '$.name') AS suggested_name,
-      json_extract(detection.value, '$.similarity') AS similarity
+      r.media_id, m.relative_path, r.timestamp_ms,
+      r.frame_index, r.frame_hash, r.detection_index,
+      r.pet_class, r.score, r.suggested_id, r.suggested_name, r.similarity
     ${from}
-    ORDER BY m.first_seen_at DESC, va.media_id DESC,
-      timestamp_ms ASC, detection_index ASC
+    ORDER BY r.media_id DESC, r.timestamp_ms DESC, r.detection_index DESC
     LIMIT ? OFFSET ?
   `).all(...args, limit, offset);
 
   return {
-    total: Number(total?.total ?? 0),
+    total: Number(count?.total ?? 0),
+    indexedVideos,
+    totalVideos,
+    indexComplete: indexedVideos >= totalVideos,
     items: rows.map((row) => ({
       mediaId: Number(row.media_id),
       relativePath: String(row.relative_path),
@@ -9149,7 +9268,7 @@ function listVideoPetReview(
       frameIndex: row.frame_index === null ? null : Number(row.frame_index),
       frameHash: row.frame_hash === null ? null : String(row.frame_hash),
       detectionIndex: Number(row.detection_index ?? 0),
-      petClass: row.pet_class === 'cat' ? 'cat' : 'dog',
+      petClass: row.pet_class === "cat" ? "cat" : "dog",
       score: Number(row.score ?? 0),
       suggestedPetId: row.suggested_id === null ? null : Number(row.suggested_id),
       suggestedPetName: row.suggested_name === null ? null : String(row.suggested_name),
