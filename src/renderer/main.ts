@@ -6620,7 +6620,7 @@ function updateVideoPetReviewProgress(page: VideoPetReviewPage): void {
         " von " + page.totalVideos.toLocaleString("de-DE") +
         " analysierten Videos durchsucht (" + percent + "%)" +
         (page.indexComplete
-          ? " · Prüfung abgeschlossen."
+          ? " · Vorhandene Videos indexiert; neue Analysen werden ebenfalls aufgenommen."
           : " · Weitere Funde werden fortlaufend ergänzt.");
   }
   if (count) {
@@ -6635,12 +6635,12 @@ function updateVideoPetReviewProgress(page: VideoPetReviewPage): void {
 }
 
 function scheduleNextVideoPetReviewBatch(page: VideoPetReviewPage): void {
-  if (page.indexComplete || !videoPetReviewIsVisible()) return;
+  if (!videoPetReviewIsVisible()) return;
   if (videoPetReviewTimer !== null) window.clearTimeout(videoPetReviewTimer);
   videoPetReviewTimer = window.setTimeout(() => {
     videoPetReviewTimer = null;
     if (videoPetReviewIsVisible()) void runSafely(() => loadVideoPetReview(true));
-  }, 400);
+  }, page.indexComplete ? 12000 : 400);
 }
 
 async function loadVideoPetReview(progressive = false): Promise<void> {
