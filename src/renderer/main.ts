@@ -7548,6 +7548,36 @@ function renderPetOverview(overview: PetOverview): void {
 
       card.appendChild(cropStrip);
 
+      if (pet.videoHits.length > 0) {
+        const videoHits = document.createElement("div");
+        videoHits.className = "confirmed-video-hit-gallery";
+        const shownVideos = new Set<number>();
+        for (const hit of pet.videoHits) {
+          if (shownVideos.has(hit.mediaId) || shownVideos.size >= 10) continue;
+          shownVideos.add(hit.mediaId);
+          const clip = document.createElement("button");
+          clip.type = "button";
+          clip.className = "confirmed-video-hit";
+          clip.title = "Video öffnen: " + hit.relativePath;
+          const preview = document.createElement("img");
+          preview.alt = "Videotreffer von " + pet.name;
+          preview.loading = "lazy";
+          preview.src = videoSceneImageUrl(
+            hit.mediaId,
+            { timestampMs: hit.startMs, frameIndex: null, frameHash: null },
+            240
+          );
+          const caption = document.createElement("small");
+          caption.textContent = hit.relativePath + " · " + formatVideoTime(hit.startMs);
+          clip.append(preview, caption);
+          clip.addEventListener("click", () =>
+            openImagePreview(hit.mediaId, hit.relativePath)
+          );
+          videoHits.appendChild(clip);
+        }
+        card.appendChild(videoHits);
+      }
+
       const controls = document.createElement("div");
       controls.className = "confirmed-person-controls";
 
