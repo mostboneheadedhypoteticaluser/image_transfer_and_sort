@@ -42,6 +42,7 @@ import type {
   PersonOverview,
   PetOverview,
   VideoPetReviewPage,
+  VideoIdentityPresencePage,
   RestoreResult,
   ResetCatalogResult,
   RetryAnalysisResult,
@@ -285,6 +286,13 @@ declare global {
         listDuplicateGroups(sourceId: number, limit?: number): Promise<DuplicateGroup[]>;
         listRecycleMedia(sourceId: number, limit?: number): Promise<MediaRecord[]>;
         getMediaDetails(mediaId: number): Promise<MediaDetails | null>;
+        listVideoIdentityPresenceReview(
+          kind: "person" | "pet", offset?: number, limit?: number
+        ): Promise<VideoIdentityPresencePage>;
+        setVideoIdentityPresence(
+          mediaId: number, kind: "person" | "pet",
+          names: Array<{name: string; petClass: "dog" | "cat" | null}>
+        ): Promise<{mediaId: number; kind: "person" | "pet"; confirmed: number; reviewed: true}>;
         assignVideoFrameIdentityName(
           mediaId: number,
           timestampMs: number,
