@@ -6157,3 +6157,113 @@ body {
   .diagnostics-log-record { grid-template-columns: 1fr; }
   .diagnostics-log-record pre { grid-column: 1; }
 }
+
+/* Videofundstellen im Reiter Haustiere bestätigen */
+.video-pet-review-heading {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 0 8px;
+}
+.video-pet-review-heading strong { font-size: 15px; }
+.video-pet-review-heading small { opacity: .7; font-size: 12px; }
+.video-pet-review-list { display: grid; gap: 12px; }
+.video-pet-review-card {
+  display: grid;
+  grid-template-columns: minmax(140px, 240px) minmax(0, 1fr);
+  border: 1px solid var(--border, #dce2e7);
+  border-radius: 12px;
+  background: var(--surface, #fff);
+  min-width: 0;
+  overflow: hidden;
+}
+.video-pet-review-frame {
+  position: relative;
+  display: block;
+  min-height: 155px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: #161a1f;
+  overflow: hidden;
+  cursor: pointer;
+}
+.video-pet-review-frame img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  min-height: 155px;
+  object-fit: cover;
+}
+.video-pet-review-frame small {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  border-radius: 5px;
+  padding: 3px 6px;
+  background: rgba(0,0,0,.75);
+  color: #fff;
+  font-size: 11px;
+}
+.video-pet-review-content {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px;
+  min-width: 0;
+}
+.video-pet-review-header { display: grid; gap: 3px; }
+.video-pet-review-header strong { font-size: 14px; }
+.video-pet-review-header small { font-size: 11px; opacity: .7; }
+.video-pet-review-path {
+  font-size: 12px;
+  opacity: .75;
+  overflow-wrap: anywhere;
+}
+.video-pet-review-controls {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-top: auto;
+}
+.video-pet-review-controls input {
+  min-width: min(230px, 100%);
+  flex: 1 1 230px;
+  font-size: 13px;
+}
+.video-pet-review-controls button { flex: 0 0 auto; }
+.confirmed-video-hit-gallery {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 10px 14px;
+}
+.confirmed-video-hit {
+  width: 150px;
+  min-height: 105px;
+  padding: 0;
+  overflow: hidden;
+  border-radius: 8px;
+  background: #13181d;
+  color: white;
+  text-align: left;
+}
+.confirmed-video-hit img {
+  display: block;
+  width: 100%;
+  height: 85px;
+  object-fit: cover;
+}
+.confirmed-video-hit small {
+  display: block;
+  font-size: 10px;
+  padding: 4px 7px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+@media (max-width: 650px) {
+  .video-pet-review-card { grid-template-columns: 1fr; }
+  .video-pet-review-frame, .video-pet-review-frame img { max-height: 210px; }
+}
