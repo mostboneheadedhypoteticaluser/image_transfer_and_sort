@@ -8200,24 +8200,14 @@ function completeVideoAnalysisJob(jobId: number, result: unknown) {
       JSON.stringify(compactFrames)
     );
 
-    db.prepare("DELETE FROM video_identity_tracks WHERE media_id=?").run(mediaId);
-    const insertTrack = db.prepare(
-      "INSERT INTO video_identity_tracks(" +
-      "media_id,identity_kind,identity_id,pet_class,start_ms,end_ms,hit_count,max_similarity" +
-      ") VALUES(?,?,?,?,?,?,?,?)"
-    );
-    for (const track of finishedTracks) {
-      insertTrack.run(
-        mediaId,
-        track.kind,
-        track.identityId,
-        track.petClass,
-        track.startMs,
-        track.endMs,
-        track.hitCount,
-        track.maxSimilarity
-      );
-    }
+    // Die Videoframes wurden neu geschrieben. Bereits manuell bestätigte
+    // Fundstellen liegen als Overrides separat vor und müssen beim Aufbau der
+    // sichtbaren Trefferliste berücksichtigt werden. Ohne diesen Schritt
+    // verschwinden Video-Treffer nach einer Neuanalyse trotz Bestätigung.
+    rebuildVideoIdentityTracks(mediaId);
+    const finalTrackCount = Number(db.prepare(
+      "SELECT COUNT(*) AS count FROM video_identity_tracks WHERE media_id=?"
+    ).get(mediaId)?.count ?? 0);
 
     db.prepare("DELETE FROM video_tags WHERE media_id=?").run(mediaId);
     const insertTag = db.prepare(
@@ -8241,7 +8231,7 @@ function completeVideoAnalysisJob(jobId: number, result: unknown) {
         durationMs,
         sampledFrames: compactFrames.length,
         sceneCount: Math.max(0, Math.trunc(Number(value.sceneCount) || 0)),
-        identityTracks: finishedTracks.length,
+        identityTracks: finalTrackCount,
         frameIdentityDetections: compactFrames.reduce(
           (sum, frame) => sum + frame.persons.length + frame.pets.length,
           0
@@ -8262,7 +8252,7 @@ function completeVideoAnalysisJob(jobId: number, result: unknown) {
     mediaId,
     sourceId,
     sampledFrames: compactFrames.length,
-    tracks: finishedTracks.length
+    tracks: finalTrackCount
   };
 }
 
