@@ -20,6 +20,7 @@ import type {
   MediaDetails,
   MediaRecord,
   PersonOverview,
+  IgnoredPersonReviewPage,
   PetOverview,
   VideoPetReviewPage,
   PipelineStatus,
@@ -82,6 +83,11 @@ const petConfirmVideosOnly = document.querySelector<HTMLButtonElement>("#petConf
 const confirmedPersons = document.querySelector<HTMLDivElement>("#confirmedPersons")!;
 const personStatus = document.querySelector<HTMLParagraphElement>("#personStatus")!;
 const refreshPeopleButton = document.querySelector<HTMLButtonElement>("#refreshPeople")!;
+const reviewIgnoredPeopleButton = document.querySelector<HTMLButtonElement>("#reviewIgnoredPeople")!;
+const ignoredPeopleReview = document.querySelector<HTMLElement>("#ignoredPeopleReview")!;
+const ignoredPeopleCards = document.querySelector<HTMLDivElement>("#ignoredPeopleCards")!;
+const ignoredPeoplePager = document.querySelector<HTMLDivElement>("#ignoredPeoplePager")!;
+let ignoredPeopleOffset = 0;
 const personConfirmAllMedia = document.querySelector<HTMLButtonElement>("#personConfirmAllMedia")!;
 const personConfirmImagesOnly = document.querySelector<HTMLButtonElement>("#personConfirmImagesOnly")!;
 const personConfirmVideosOnly = document.querySelector<HTMLButtonElement>("#personConfirmVideosOnly")!;
@@ -8566,6 +8572,125 @@ document.querySelector<HTMLButtonElement>("#petViewSerial")?.addEventListener("c
     );
     renderPetSerialOverview(overview);
   });
+});
+
+
+/** A deliberately manual recovery: file names or dog detections do not reliably
+ * distinguish humans in a photo that also contains a dog. */
+async function loadIgnoredPeopleReview(): Promise<void> {
+  if (ignoredPeopleReview.hidden) return;
+  ignoredPeopleCards.textContent = "Ignorierte Gruppen werden geladen …";
+  const page: IgnoredPersonReviewPage = await window.imageSorter.people.listIgnored(
+    ignoredPeopleOffset, 15
+  );
+  if (ignoredPeopleReview.hidden) return;
+  if (ignoredPeopleOffset >= page.total && ignoredPeopleOffset > 0) {
+    ignoredPeopleOffset = Math.max(0, Math.floor((page.total - 1) / 15) * 15);
+    return loadIgnoredPeopleReview();
+  }
+  ignoredPeopleCards.replaceChildren();
+  ignoredPeoplePager.replaceChildren();
+
+  if (!page.items.length) {
+    const empty = document.createElement("p");
+    empty.className = "person-empty";
+    empty.textContent = "Keine ignorierten Personengruppen vorhanden.";
+    ignoredPeopleCards.appendChild(empty);
+  }
+
+  for (const item of page.items) {
+    const card = document.createElement("article");
+    card.className = "ignored-person-card";
+    const title = document.createElement("strong");
+    title.textContent = "Ignorierte Gruppe " + item.id;
+    const meta = document.createElement("small");
+    meta.textContent = item.originalMatchCount.toLocaleString("de-DE") +
+      " manuell ausgeschlossen · " + item.matchCount.toLocaleString("de-DE") +
+      " insgesamt ausgeblendet · " + item.referenceCount.toLocaleString("de-DE") +
+      " Referenzen";
+    const gallery = document.createElement("div");
+    gallery.className = "ignored-person-gallery";
+    for (const ex of item.examples) {
+      const image = document.createElement("img");
+      image.src = faceCropUrl(ex.faceDetectionId);
+      image.alt = "Ignorierte Fundstelle aus " + ex.relativePath;
+      image.title = ex.relativePath;
+      image.loading = "lazy";
+      gallery.appendChild(image);
+    }
+    if (!item.examples.length) {
+      const unavailable = document.createElement("small");
+      unavailable.textContent =
+        "Keine Vorschaubilder verfügbar – diese Gruppe kann hier nicht sicher wiederhergestellt werden.";
+      gallery.appendChild(unavailable);
+    }
+    const note = document.createElement("small");
+    note.textContent = "Nur wiederherstellen, wenn die angezeigten Fundstellen eindeutig Hunde zeigen." +
+      (item.referenceCount > item.examples.length
+        ? " Es werden maximal zwölf Referenzbilder gezeigt." : "");
+    const restore = document.createElement("button");
+    restore.className = "ghost";
+    restore.type = "button";
+    restore.textContent = "Hunde-Falscherkennung freigeben";
+    restore.disabled = item.examples.length === 0;
+    restore.addEventListener("click", () => {
+      if (!window.confirm(
+        "Hast du überprüft, dass diese ignorierte Gruppe Hunde enthält und " +
+        "keine echten Personen ausgeschlossen bleiben sollen? " +
+        "Nur Gruppe " + item.id + " wird wieder freigegeben; alle anderen Sperren bleiben bestehen."
+      )) return;
+      void runSafely(async () => {
+        restore.disabled = true;
+        try {
+          const result = await window.imageSorter.people.restoreIgnored(item.id);
+          progressText.textContent = "Ignore-Gruppe " + item.id +
+            " gezielt freigegeben (" + result.affectedMatches +
+            " Fundstellen). Die Personen-Neugruppierung läuft im Hintergrund.";
+          await loadIgnoredPeopleReview();
+        } catch (error) {
+          restore.disabled = false;
+          throw error;
+        }
+      });
+    });
+    card.append(title, meta, gallery, note, restore);
+    ignoredPeopleCards.appendChild(card);
+  }
+
+  const back = document.createElement("button");
+  back.type = "button";
+  back.className = "ghost";
+  back.textContent = "Zurück";
+  back.disabled = ignoredPeopleOffset === 0;
+  back.addEventListener("click", () => {
+    ignoredPeopleOffset = Math.max(0, ignoredPeopleOffset - 15);
+    void runSafely(loadIgnoredPeopleReview);
+  });
+  const count = document.createElement("span");
+  count.textContent = (page.total === 0 ? 0 : ignoredPeopleOffset + 1) +
+    "–" + (ignoredPeopleOffset + page.items.length) +
+    " von " + page.total;
+  const next = document.createElement("button");
+  next.type = "button";
+  next.className = "ghost";
+  next.textContent = "Weiter";
+  next.disabled = ignoredPeopleOffset + page.items.length >= page.total;
+  next.addEventListener("click", () => {
+    ignoredPeopleOffset += 15;
+    void runSafely(loadIgnoredPeopleReview);
+  });
+  ignoredPeoplePager.append(back, count, next);
+}
+
+reviewIgnoredPeopleButton.addEventListener("click", () => {
+  ignoredPeopleReview.hidden = !ignoredPeopleReview.hidden;
+  reviewIgnoredPeopleButton.setAttribute(
+    "aria-expanded", String(!ignoredPeopleReview.hidden)
+  );
+  if (!ignoredPeopleReview.hidden) {
+    ignoredPeopleOffset = 0;
+    void runSafely(loadIgnoredPeopleReview);
+  }
 });
 
 refreshPeopleButton.addEventListener("click", () => {

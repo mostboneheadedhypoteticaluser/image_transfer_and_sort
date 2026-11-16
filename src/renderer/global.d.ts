@@ -27,6 +27,8 @@ import type {
   ConfirmPersonResult,
   ConfirmPetResult,
   IgnorePersonResult,
+  IgnoredPersonReviewPage,
+  RestoreIgnoredPersonResult,
   IgnorePetResult,
   DuplicateGroup,
   MediaRecord,
@@ -103,6 +105,8 @@ declare global {
         onPipelineStatus(listener: (status: PipelineStatus) => void): () => void;
       };
       people: {
+        listIgnored(offset?: number, limit?: number): Promise<IgnoredPersonReviewPage>;
+        restoreIgnored(id: number): Promise<RestoreIgnoredPersonResult>;
         getOverview(
           sourceId: number,
           forceRefresh?: boolean,

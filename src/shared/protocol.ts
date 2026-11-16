@@ -739,6 +739,24 @@ export type IgnorePersonResult = {
   extendedExisting: boolean;
 };
 
+/** Ignored face identities can be visually reviewed before selective restoration. */
+export type IgnoredPersonReviewPage = {
+  total: number;
+  items: Array<{
+    id: number;
+    createdAt: string;
+    referenceCount: number;
+    matchCount: number;
+    originalMatchCount: number;
+    examples: Array<{ faceDetectionId: number; relativePath: string }>;
+  }>;
+};
+
+export type RestoreIgnoredPersonResult = {
+  restored: true;
+  affectedMatches: number;
+};
+
 export type PersonCorrectionResult = {
   changed: true;
   affectedFaces: number;

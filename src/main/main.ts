@@ -42,6 +42,8 @@ import type {
   ConfirmPersonResult,
   ConfirmPetResult,
   IgnorePersonResult,
+  IgnoredPersonReviewPage,
+  RestoreIgnoredPersonResult,
   IgnorePetResult,
   DuplicateGroup,
   DirectIdentityAssignmentResult,
@@ -2577,6 +2579,23 @@ function registerIpc(): void {
         true,
         summaryOnly
       );
+    }
+  );
+
+  ipcMain.handle(
+    "people:listIgnored",
+    (_event, offset = 0, limit = 15): Promise<IgnoredPersonReviewPage> =>
+      catalog!.request<IgnoredPersonReviewPage>("listIgnoredPersonIdentities", { offset, limit })
+  );
+
+  ipcMain.handle(
+    "people:restoreIgnored",
+    async (_event, id: number): Promise<RestoreIgnoredPersonResult> => {
+      const result = await catalog!.request<RestoreIgnoredPersonResult>(
+        "restoreIgnoredPersonIdentity", { id }
+      );
+      schedulePersonRefresh(true, 0);
+      return result;
     }
   );
 

@@ -657,8 +657,20 @@
                   </div>
                 </div>
               </div>
-              <button id="refreshPeople" class="ghost" type="button">Vorschläge neu berechnen</button>
+              <div class="ignored-person-toolbar">
+                <button id="reviewIgnoredPeople" class="ghost" type="button" aria-expanded="false" aria-controls="ignoredPeopleReview">Ignorierte Gruppen prüfen</button>
+                <button id="refreshPeople" class="ghost" type="button">Vorschläge neu berechnen</button>
+              </div>
             </div>
+
+            <section id="ignoredPeopleReview" class="ignored-person-review" hidden>
+              <div class="person-section-heading">
+                <h3>Ignorierte Personengruppen prüfen</h3>
+                <p>Wähle ausschließlich Gruppen aus, die irrtümlich als Hunde-Falscherkennung ignoriert wurden. Andere Ignorierungen werden nicht geändert. Gruppen können mehrere Fundstellen enthalten.</p>
+              </div>
+              <div id="ignoredPeopleCards" class="ignored-person-cards"></div>
+              <div id="ignoredPeoplePager" class="identity-candidate-pager"></div>
+            </section>
 
             <div id="personGroupedView">
               <section class="person-section">

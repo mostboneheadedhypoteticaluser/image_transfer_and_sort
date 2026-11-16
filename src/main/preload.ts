@@ -28,6 +28,8 @@ import type {
   ConfirmPersonResult,
   ConfirmPetResult,
   IgnorePersonResult,
+  IgnoredPersonReviewPage,
+  RestoreIgnoredPersonResult,
   IgnorePetResult,
   DuplicateGroup,
   MediaRecord,
@@ -155,6 +157,10 @@ const api = {
     }
   },
   people: {
+    listIgnored: (offset = 0, limit = 15): Promise<IgnoredPersonReviewPage> =>
+      ipcRenderer.invoke("people:listIgnored", offset, limit),
+    restoreIgnored: (id: number): Promise<RestoreIgnoredPersonResult> =>
+      ipcRenderer.invoke("people:restoreIgnored", id),
     getOverview: (
       sourceId: number,
       forceRefresh = false,

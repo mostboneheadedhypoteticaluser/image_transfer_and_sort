@@ -12225,6 +12225,92 @@ function mergePersons(targetPersonId: number, sourcePersonId: number) {
   };
 }
 
+
+/** Review only: no ignored identity is changed by this query. */
+function listIgnoredPersonIdentities(requestedOffset = 0, requestedLimit = 15) {
+  const offset = Math.max(0, Math.trunc(requestedOffset || 0));
+  const limit = Math.max(1, Math.min(30, Math.trunc(requestedLimit || 15)));
+  const count = db.prepare("SELECT COUNT(*) AS n FROM ignored_person_identities").get();
+  const rows = db.prepare(`
+    SELECT ipi.id, ipi.created_at,
+      (SELECT COUNT(*) FROM ignored_person_references ref
+       WHERE ref.identity_id=ipi.id) AS reference_count,
+      (SELECT COUNT(*) FROM ignored_person_matches match
+       WHERE match.identity_id=ipi.id) AS match_count,
+      (SELECT COUNT(*) FROM ignored_person_matches match
+       WHERE match.identity_id=ipi.id AND match.match_source='USER_REJECTED')
+       AS original_match_count
+    FROM ignored_person_identities ipi
+    ORDER BY ipi.created_at DESC, ipi.id DESC
+    LIMIT ? OFFSET ?
+  `).all(limit, offset);
+  const examples = db.prepare(`
+    SELECT ref.source_face_detection_id AS face_detection_id, m.relative_path
+    FROM ignored_person_references ref
+    JOIN face_detections fd ON fd.id=ref.source_face_detection_id
+    JOIN media_items m ON m.id=fd.media_id
+    WHERE ref.identity_id=?
+      AND m.availability='AVAILABLE'
+      AND fd.input_sha256=m.sha256
+    ORDER BY ref.id ASC
+    LIMIT 12
+  `);
+  return {
+    total: Number(count?.n ?? 0),
+    items: rows.map((row) => ({
+      id: Number(row.id),
+      createdAt: String(row.created_at),
+      referenceCount: Number(row.reference_count),
+      matchCount: Number(row.match_count),
+      originalMatchCount: Number(row.original_match_count),
+      examples: examples.all(Number(row.id)).map((face) => ({
+        faceDetectionId: Number(face.face_detection_id),
+        relativePath: String(face.relative_path)
+      }))
+    }))
+  };
+}
+
+/** Only the explicitly selected ignored identity is restored, never the entire ignore list. */
+function restoreIgnoredPersonIdentity(rawId: number) {
+  const id = Math.trunc(rawId);
+  if (!Number.isSafeInteger(id) || id <= 0) {
+    throw new Error("Ungültige ID der ignorierten Personengruppe.");
+  }
+  const exists = db.prepare("SELECT id FROM ignored_person_identities WHERE id=?").get(id);
+  if (!exists) throw new Error("Diese ignorierte Gruppe existiert nicht mehr.");
+
+  const sources = db.prepare(`
+    SELECT DISTINCT m.source_id AS source_id
+    FROM ignored_person_matches ipm
+    JOIN face_detections fd ON fd.id=ipm.face_detection_id
+    JOIN media_items m ON m.id=fd.media_id
+    WHERE ipm.identity_id=?
+    UNION
+    SELECT DISTINCT m.source_id AS source_id
+    FROM ignored_person_references ref
+    JOIN face_detections fd ON fd.id=ref.source_face_detection_id
+    JOIN media_items m ON m.id=fd.media_id
+    WHERE ref.identity_id=?
+  `).all(id, id).map((row) => Number(row.source_id));
+  const affected = db.prepare(
+    "SELECT COUNT(*) AS n FROM ignored_person_matches WHERE identity_id=?"
+  ).get(id);
+
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    // ON DELETE CASCADE only removes this identity's references and matched faces.
+    db.prepare("DELETE FROM ignored_person_identities WHERE id=?").run(id);
+    const invalidate = db.prepare("DELETE FROM person_cluster_runs WHERE source_id=?");
+    for (const sourceId of sources) invalidate.run(sourceId);
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+  return { restored: true as const, affectedMatches: Number(affected?.n ?? 0) };
+}
+
 function ignorePersonCandidate(
   candidateId: number,
   fallbackFaceDetectionId?: number,
@@ -14808,6 +14894,13 @@ async function dispatch(method: CatalogMethod, payload: Record<string, unknown> 
           ? payload.expectedMemberSignature
           : undefined
       );
+    case "listIgnoredPersonIdentities":
+      return listIgnoredPersonIdentities(
+        payload.offset === undefined ? 0 : asNumber(payload.offset, "offset"),
+        payload.limit === undefined ? 15 : asNumber(payload.limit, "limit")
+      );
+    case "restoreIgnoredPersonIdentity":
+      return restoreIgnoredPersonIdentity(asNumber(payload.id, "id"));
     case "ignorePersonCandidate":
       return ignorePersonCandidate(
         asNumber(payload.candidateId, "candidateId"),
