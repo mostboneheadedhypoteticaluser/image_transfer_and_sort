@@ -10892,6 +10892,21 @@ function mergePets(targetPetId: number, sourcePetId: number) {
       WHERE pet_id=?
     `).run(targetPetId, sourcePetId);
 
+    // Keep frame overrides, video tracks and video-wide confirmations when merging.
+    db.prepare(
+      "INSERT OR IGNORE INTO video_confirmed_identities(" +
+      "media_id,identity_kind,identity_id,pet_class) " +
+      "SELECT media_id,identity_kind,?,pet_class FROM video_confirmed_identities " +
+      "WHERE identity_kind='pet' AND identity_id=?"
+    ).run(targetPetId,sourcePetId);
+    db.prepare("DELETE FROM video_confirmed_identities WHERE identity_kind='pet' AND identity_id=?")
+      .run(sourcePetId);
+    db.prepare("UPDATE video_frame_identity_overrides SET identity_id=? " +
+      "WHERE identity_kind='pet' AND identity_id=?")
+      .run(targetPetId,sourcePetId);
+    db.prepare("UPDATE video_identity_tracks SET identity_id=? " +
+      "WHERE identity_kind='pet' AND identity_id=?")
+      .run(targetPetId,sourcePetId);
     db.prepare("DELETE FROM pets WHERE id=?").run(sourcePetId);
     db.prepare(`
       UPDATE pets
@@ -12519,6 +12534,21 @@ function mergePersons(targetPersonId: number, sourcePersonId: number) {
       WHERE person_id=?
     `).run(targetPersonId, sourcePersonId);
 
+    // Keep frame overrides, video tracks and video-wide confirmations when merging.
+    db.prepare(
+      "INSERT OR IGNORE INTO video_confirmed_identities(" +
+      "media_id,identity_kind,identity_id,pet_class) " +
+      "SELECT media_id,identity_kind,?,pet_class FROM video_confirmed_identities " +
+      "WHERE identity_kind='person' AND identity_id=?"
+    ).run(targetPersonId,sourcePersonId);
+    db.prepare("DELETE FROM video_confirmed_identities WHERE identity_kind='person' AND identity_id=?")
+      .run(sourcePersonId);
+    db.prepare("UPDATE video_frame_identity_overrides SET identity_id=? " +
+      "WHERE identity_kind='person' AND identity_id=?")
+      .run(targetPersonId,sourcePersonId);
+    db.prepare("UPDATE video_identity_tracks SET identity_id=? " +
+      "WHERE identity_kind='person' AND identity_id=?")
+      .run(targetPersonId,sourcePersonId);
     db.prepare("DELETE FROM persons WHERE id=?").run(sourcePersonId);
     db.prepare(`
       UPDATE persons
