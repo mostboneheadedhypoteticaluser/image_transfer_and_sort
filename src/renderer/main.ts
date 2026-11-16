@@ -1,4 +1,5 @@
 import { initEmbeddedSourceExplorer } from "./source-explorer";
+import { VideoPresenceReviewer } from "./video-presence-review";
 import { initDiagnosticsPage } from "./diagnostics";
 import { activateMapView, invalidateMapData } from "./map-view";
 import { activateLifeAreasView, invalidateLifeAreas } from "./life-areas";
@@ -5835,7 +5836,9 @@ function appendIdentityCandidatePager(
 }
 
 function renderPersonOverview(overview: PersonOverview): void {
-  personCandidates.replaceChildren();
+  const preserveVideoPresence = personConfirmationMediaFilter === "video" &&
+    Boolean(personCandidates.querySelector(".video-presence-heading"));
+  if (!preserveVideoPresence) personCandidates.replaceChildren();
   confirmedPersons.replaceChildren();
 
   personConfirmAllMedia.classList.toggle("active", personConfirmationMediaFilter === "all");
@@ -5874,11 +5877,11 @@ function renderPersonOverview(overview: PersonOverview): void {
     personStatus.textContent =
       visiblePersons.length.toLocaleString("de-DE") +
       (visiblePersons.length === 1
-        ? " bestätigte Person mit Videotreffern · "
-        : " bestätigte Personen mit Videotreffern · ") +
+        ? " bekannte Person mit Videotreffern · "
+        : " bekannte Personen mit Videotreffern · ") +
       videoCount.toLocaleString("de-DE") +
-      (videoCount === 1 ? " Video." : " Videos.") +
-      " Neue, noch unbekannte Personen werden aus Videos derzeit nicht als Bestätigungsgruppe erzeugt.";
+      (videoCount === 1 ? " Videotreffer." : " Videotreffer.") +
+      " Unten wird pro Video bestätigt, wer darin vorkommt.";
   } else if (overview.clusteringPending) {
     personStatus.textContent =
       candidateWindowText +
@@ -5911,11 +5914,11 @@ function renderPersonOverview(overview: PersonOverview): void {
     empty.className = "person-empty";
     empty.textContent =
       personConfirmationMediaFilter === "video"
-        ? "Keine unbestätigten Videogruppen. Die Videoanalyse ordnet derzeit nur bereits bestätigte Personen wieder zu."
+        ? "Videoliste wird geladen …"
         : overview.clusteringPending
           ? "Warte auf die laufende Gesichtsmerkmals-Analyse …"
           : "Keine Personengruppen zu bestätigen.";
-    personCandidates.appendChild(empty);
+    if (!preserveVideoPresence) personCandidates.appendChild(empty);
   } else {
     const fragment = document.createDocumentFragment();
 
@@ -6519,6 +6522,9 @@ function renderPersonOverview(overview: PersonOverview): void {
   }
 
   renderPersonSerialOverview(overview);
+  if (personConfirmationMediaFilter === "video" && !preserveVideoPresence) {
+    void runSafely(() => videoPresencePeople.load());
+  }
 }
 
 async function loadPersonOverview(
@@ -6604,6 +6610,25 @@ function openPetVideoAtFrame(mediaId: number, relativePath: string, timestampMs:
   if (imagePreviewVideo.readyState >= 1) seek();
   else imagePreviewVideo.addEventListener("loadedmetadata", seek, { once: true });
 }
+
+const videoPresencePeople = new VideoPresenceReviewer(
+  "person",
+  personCandidates,
+  () => currentView === "people" && personConfirmationMediaFilter === "video",
+  () => lastPersonOverview?.persons.map(person => ({
+    name: person.name, petClass: null
+  })) ?? [],
+  openPetVideoAtFrame
+);
+const videoPresencePets = new VideoPresenceReviewer(
+  "pet",
+  petCandidates,
+  () => currentView === "pets" && petConfirmationMediaFilter === "video",
+  () => lastPetOverview?.pets.map(pet => ({
+    name: pet.name, petClass: pet.petClass
+  })) ?? [],
+  openPetVideoAtFrame
+);
 
 const VIDEO_PET_REVIEW_PAGE_SIZE = 6;
 
@@ -7220,7 +7245,7 @@ function formatVideoTime(timestampMs: number): string {
 function renderPetOverview(overview: PetOverview): void {
   // Refreshing confirmed pets must not collapse the active video review list.
   const preserveVideoReview = petConfirmationMediaFilter === "video" &&
-    Boolean(petCandidates.querySelector("[data-video-review-title]"));
+    Boolean(petCandidates.querySelector(".video-presence-heading"));
   if (!preserveVideoReview) {
     cancelVideoPetReviewRefresh();
     petCandidates.replaceChildren();
@@ -7267,7 +7292,7 @@ function renderPetOverview(overview: PetOverview): void {
         : " bestätigte Haustiere mit Videotreffern · ") +
       videoCount.toLocaleString("de-DE") +
       (videoCount === 1 ? " Video." : " Videos.") +
-      " Nicht bestätigte Videofundstellen können unten direkt zugeordnet werden.";
+      " Unten wird pro Video bestätigt, welche Haustiere darin vorkommen.";
   } else if (overview.clusteringPending) {
     petStatus.textContent =
       petWindowText +
@@ -7302,7 +7327,7 @@ function renderPetOverview(overview: PetOverview): void {
       empty.className = "person-empty";
       empty.textContent =
       petConfirmationMediaFilter === "video"
-        ? "Unbestätigte Videofundstellen werden geladen …"
+        ? "Videoübersicht wird geladen …"
         : overview.clusteringPending
           ? "Warte auf die laufende Dog-ReID-Analyse …"
           : "Keine Hundegruppen zu bestätigen.";
@@ -8159,10 +8184,9 @@ function renderPetOverview(overview: PetOverview): void {
 
   renderPetSerialOverview(overview);
   if (petConfirmationMediaFilter === "video") {
-    if (!preserveVideoReview) void runSafely(loadVideoPetReview);
-    // Background polling continues unchanged when the review is preserved.
+    if (!preserveVideoReview) void runSafely(() => videoPresencePets.load());
   } else {
-    videoPetReviewRequest++;
+    videoPresencePets.stop();
   }
 }
 
@@ -8243,12 +8267,14 @@ async function reloadPetOverviewPreservingPosition(
 
 function setPersonConfirmationMediaFilter(filter: ConfirmationMediaFilter): void {
   if (personConfirmationMediaFilter === filter) return;
+  videoPresencePeople.reset();
   personConfirmationMediaFilter = filter;
   if (lastPersonOverview) renderPersonOverview(lastPersonOverview);
 }
 
 function setPetConfirmationMediaFilter(filter: ConfirmationMediaFilter): void {
   if (petConfirmationMediaFilter === filter) return;
+  videoPresencePets.reset();
   petConfirmationMediaFilter = filter;
   cancelVideoPetReviewRefresh();
   if (filter === "video") videoPetReviewOffset = 0;
