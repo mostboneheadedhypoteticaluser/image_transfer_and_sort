@@ -8228,6 +8228,10 @@ function completeVideoAnalysisJob(jobId: number, result: unknown) {
       JSON.stringify(compactFrames)
     );
 
+    // Neue Analysen gleich beim Abschluss in den kompakten Index schreiben.
+    // Alte Videos werden bei Aufruf der Ansicht in kleinen Batches nachgezogen.
+    writeVideoPetReviewIndex(mediaId, inputSha256, compactFrames);
+
     // Die Videoframes wurden neu geschrieben. Bereits manuell bestätigte
     // Fundstellen liegen als Overrides separat vor und müssen beim Aufbau der
     // sichtbaren Trefferliste berücksichtigt werden. Ohne diesen Schritt
