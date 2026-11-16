@@ -528,6 +528,25 @@ export type PetRecord = {
   }>;
 };
 
+export type VideoPetReviewItem = {
+  mediaId: number;
+  relativePath: string;
+  timestampMs: number;
+  frameIndex: number | null;
+  frameHash: string | null;
+  detectionIndex: number;
+  petClass: "dog" | "cat";
+  score: number;
+  suggestedPetId: number | null;
+  suggestedPetName: string | null;
+  similarity: number | null;
+};
+
+export type VideoPetReviewPage = {
+  total: number;
+  items: VideoPetReviewItem[];
+};
+
 export type PetOverview = {
   summaryOnly?: boolean;
   candidates: PetCandidate[];
@@ -1109,6 +1128,7 @@ export type CatalogMethod =
   | "listPetCandidates"
   | "listPetCandidateItems"
   | "listPets"
+  | "listVideoPetReview"
   | "confirmPetCandidate"
   | "ignorePetCandidate"
   | "removePetFromCandidate"
