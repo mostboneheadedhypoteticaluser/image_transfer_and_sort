@@ -14121,7 +14121,7 @@ function rebuildVideoIdentityTracks(mediaId: number) {
     if (existing && timestampMs - existing.lastSeenMs <= allowedGap) {
       existing.endMs = Math.min(durationMs, timestampMs + sampleIntervalMs);
       existing.hitCount += 1;
-      existing.maxSimilarity = Math.max(existing.maxSimilarity, similarity);
+      existing.maxSimilarity = Math.max(existing.maxSimilarity ?? 0, similarity);
       existing.lastSeenMs = timestampMs;
       return;
     }
