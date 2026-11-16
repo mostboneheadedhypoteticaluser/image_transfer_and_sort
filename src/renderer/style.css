@@ -6368,3 +6368,26 @@ body {
 @media (max-width: 950px) {
   .video-pet-review-card { grid-template-columns: 1fr; }
 }
+
+
+/* Compact video-wide identity confirmation: one decision per video and identity type. */
+.video-presence-heading { display: flex; flex-direction: column; gap: 5px; margin: 10px 0; }
+.video-presence-heading strong { font-size: 15px; }
+.video-presence-heading small { opacity: .78; }
+.video-presence-list { display: grid; gap: 12px; }
+.video-presence-card { border: 1px solid var(--border, #dce2e7); border-radius: 12px; padding: 12px; background: var(--surface, #fff); min-width: 0; }
+.video-presence-summary { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; cursor: pointer; }
+.video-presence-title { display: grid; gap: 4px; flex: 1 1 220px; min-width: 0; }
+.video-presence-title strong { overflow-wrap: anywhere; }
+.video-presence-title small { opacity: .75; }
+.video-presence-examples { display: flex; flex-wrap: wrap; gap: 6px; }
+.video-presence-example { width: 76px; display: grid; gap: 3px; text-align: center; }
+.video-presence-example img { width: 76px; height: 68px; object-fit: contain; border-radius: 6px; background: var(--surface-muted, #eceff2); }
+.video-presence-example small { font-size: 10px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.video-presence-body { display: grid; gap: 10px; padding-top: 14px; }
+.video-presence-body p { margin: 0; font-size: 12px; opacity: .8; }
+.video-presence-choices, .video-presence-suggested, .video-presence-entry, .video-presence-footer { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.video-presence-chip { max-width: 100%; overflow-wrap: anywhere; }
+.video-presence-entry input { min-width: min(100%, 260px); flex: 1 1 220px; }
+.video-presence-entry select { max-width: 110px; }
+.video-presence-footer small { font-size: 12px; }
