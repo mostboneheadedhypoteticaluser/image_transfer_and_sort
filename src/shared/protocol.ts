@@ -543,8 +543,10 @@ export type VideoPetReviewItem = {
 };
 
 export type VideoPetReviewPage = {
-  /** Anzahl der bislang indexierten, noch nicht bestätigten Fundstellen. */
+  /** Anzahl Videos mit unbestätigten Haustierfundstellen; eine Gruppe je Video. */
   total: number;
+  /** Anzahl sämtlicher unbestätigter Fundstellen in diesen Videos. */
+  totalFindings: number;
   /** Nur Videos mit abgeschlossener Analyse und gültigem Quelldatei-Hash. */
   indexedVideos: number;
   totalVideos: number;

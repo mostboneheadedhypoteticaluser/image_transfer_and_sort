@@ -9249,19 +9249,31 @@ function listVideoPetReview(
     WHERE confirmed.media_id IS NULL ${sourceCondition}
   `;
 
-  const count = db.prepare(`SELECT COUNT(*) AS total ${from}`).get(...args);
-  const rows = db.prepare(`
+  // Page by video (not by frame). A video never spills into the next review
+  // group/page, and a group never mixes detections from different videos.
+  const count = db.prepare(`
+    SELECT COUNT(DISTINCT r.media_id) AS total, COUNT(*) AS total_findings ${from}
+  `).get(...args);
+  const videos = db.prepare(`
+    SELECT r.media_id ${from}
+    GROUP BY r.media_id
+    ORDER BY r.media_id DESC
+    LIMIT ? OFFSET ?
+  `).all(...args, limit, offset);
+  const videoIds = videos.map((video) => Number(video.media_id));
+  const rows = videoIds.length === 0 ? [] : db.prepare(`
     SELECT
       r.media_id, m.relative_path, r.timestamp_ms,
       r.frame_index, r.frame_hash, r.detection_index,
       r.pet_class, r.score, r.suggested_id, r.suggested_name, r.similarity
     ${from}
+    AND r.media_id IN (${videoIds.map(() => "?").join(",")})
     ORDER BY r.media_id DESC, r.timestamp_ms DESC, r.detection_index DESC
-    LIMIT ? OFFSET ?
-  `).all(...args, limit, offset);
+  `).all(...args, ...videoIds);
 
   return {
     total: Number(count?.total ?? 0),
+    totalFindings: Number(count?.total_findings ?? 0),
     indexedVideos,
     totalVideos,
     indexComplete: indexedVideos >= totalVideos,

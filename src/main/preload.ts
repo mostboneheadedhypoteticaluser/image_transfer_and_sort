@@ -170,8 +170,6 @@ const api = {
         candidateOffset,
         summaryOnly
       ),
-    listVideoReview: (offset = 0, limit = 24): Promise<VideoPetReviewPage> =>
-      ipcRenderer.invoke("pets:listVideoReview", offset, limit),
     getCandidateItems: (
       candidateId: number,
       limit = 5000,
@@ -275,6 +273,8 @@ const api = {
         candidateOffset,
         summaryOnly
       ),
+    listVideoReview: (offset = 0, limit = 24): Promise<VideoPetReviewPage> =>
+      ipcRenderer.invoke("pets:listVideoReview", offset, limit),
     getCandidateItems: (
       candidateId: number,
       limit = 5000,

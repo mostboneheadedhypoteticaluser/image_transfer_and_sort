@@ -6579,7 +6579,7 @@ function openPetVideoAtFrame(mediaId: number, relativePath: string, timestampMs:
   else imagePreviewVideo.addEventListener("loadedmetadata", seek, { once: true });
 }
 
-const VIDEO_PET_REVIEW_PAGE_SIZE = 24;
+const VIDEO_PET_REVIEW_PAGE_SIZE = 6;
 
 function cancelVideoPetReviewRefresh(): void {
   videoPetReviewRequest++;
@@ -6608,7 +6608,8 @@ function updateVideoPetReviewProgress(page: VideoPetReviewPage): void {
     title.textContent =
       (page.indexComplete ? "" : "Bisher ") +
       page.total.toLocaleString("de-DE") +
-      " unbestätigte Videofundstellen" +
+      " Videos mit unbestätigten Haustieren (" +
+      page.totalFindings.toLocaleString("de-DE") + " Fundstellen)" +
       (page.indexComplete ? "" : " gefunden");
   }
   if (subtitle) {
@@ -6625,13 +6626,13 @@ function updateVideoPetReviewProgress(page: VideoPetReviewPage): void {
   }
   if (count) {
     count.textContent =
-      (videoPetReviewOffset + (page.items.length ? 1 : 0)).toLocaleString("de-DE") +
+      (videoPetReviewOffset + (new Set(page.items.map((item) => item.mediaId)).size ? 1 : 0)).toLocaleString("de-DE") +
       "–" +
-      (videoPetReviewOffset + page.items.length).toLocaleString("de-DE") +
+      (videoPetReviewOffset + new Set(page.items.map((item) => item.mediaId)).size).toLocaleString("de-DE") +
       " von " + page.total.toLocaleString("de-DE") +
       (page.indexComplete ? "" : " bisher");
   }
-  if (next) next.disabled = videoPetReviewOffset + page.items.length >= page.total;
+  if (next) next.disabled = videoPetReviewOffset + new Set(page.items.map((item) => item.mediaId)).size >= page.total;
 }
 
 function scheduleNextVideoPetReviewBatch(page: VideoPetReviewPage): void {
@@ -6657,10 +6658,11 @@ async function loadVideoPetReview(progressive = false): Promise<void> {
 
   let page: VideoPetReviewPage;
   try {
-    page = await window.imageSorter.pets.listVideoReview(
-      videoPetReviewOffset,
-      VIDEO_PET_REVIEW_PAGE_SIZE
-    );
+    const loadReview = window.imageSorter.pets.listVideoReview;
+    if (typeof loadReview !== "function") {
+      throw new Error("Die Video-Funktion fehlt im geladenen Preload. Bitte die Electron-App vollständig neu starten.");
+    }
+    page = await loadReview(videoPetReviewOffset, VIDEO_PET_REVIEW_PAGE_SIZE);
   } catch (error) {
     if (requestId === videoPetReviewRequest && videoPetReviewIsVisible()) {
       const message = document.createElement("p");
@@ -6728,7 +6730,36 @@ async function loadVideoPetReview(progressive = false): Promise<void> {
   list.className = "video-pet-review-list";
   const knownPets = lastPetOverview?.pets ?? [];
 
+  // Group per source video, never by suggested identity across different videos.
+  // Each frame keeps its own confirmation controls: one video may show different dogs.
+  let currentVideoId: number | null = null;
+  let videoGroupItems: HTMLDivElement | null = null;
+  let videoGroupCount: HTMLElement | null = null;
+  let currentVideoCount = 0;
   for (const item of page.items) {
+    if (currentVideoId !== item.mediaId) {
+      currentVideoId = item.mediaId;
+      currentVideoCount = 0;
+      const group = document.createElement("section");
+      group.className = "video-pet-review-group";
+      const groupHeading = document.createElement("div");
+      groupHeading.className = "video-pet-review-group-heading";
+      const groupName = document.createElement("strong");
+      groupName.textContent = item.relativePath.split(/[\\/]/).pop() ?? item.relativePath;
+      groupName.title = item.relativePath;
+      videoGroupCount = document.createElement("small");
+      groupHeading.append(groupName, videoGroupCount);
+      videoGroupItems = document.createElement("div");
+      videoGroupItems.className = "video-pet-review-group-items";
+      group.append(groupHeading, videoGroupItems);
+      list.appendChild(group);
+    }
+    currentVideoCount++;
+    if (videoGroupCount) {
+      videoGroupCount.textContent = currentVideoCount.toLocaleString("de-DE") +
+        (currentVideoCount === 1 ? " Fundstelle" : " Fundstellen") +
+        " · Bestätigung einzeln pro Erkennung";
+    }
     const card = document.createElement("article");
     card.className = "video-pet-review-card";
 
@@ -6827,7 +6858,7 @@ async function loadVideoPetReview(progressive = false): Promise<void> {
     controls.append(input, datalist, assign);
     main.append(header, path, controls);
     card.append(frameButton, main);
-    list.appendChild(card);
+    videoGroupItems?.appendChild(card);
   }
   petCandidates.appendChild(list);
 
@@ -6849,7 +6880,7 @@ async function loadVideoPetReview(progressive = false): Promise<void> {
   next.className = "ghost";
   next.dataset.videoReviewNext = "1";
   next.textContent = "Nächste";
-  next.disabled = videoPetReviewOffset + page.items.length >= page.total;
+  next.disabled = videoPetReviewOffset + new Set(page.items.map((item) => item.mediaId)).size >= page.total;
   next.addEventListener("click", () => {
     videoPetReviewOffset += VIDEO_PET_REVIEW_PAGE_SIZE;
     void runSafely(loadVideoPetReview);

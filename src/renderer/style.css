@@ -6167,7 +6167,25 @@ body {
 }
 .video-pet-review-heading strong { font-size: 15px; }
 .video-pet-review-heading small { opacity: .7; font-size: 12px; }
-.video-pet-review-list { display: grid; gap: 12px; }
+.video-pet-review-list { display: grid; gap: 16px; }
+.video-pet-review-group {
+  border: 1px solid var(--border, #dce2e7);
+  border-radius: 12px;
+  padding: 12px;
+  min-width: 0;
+  background: var(--surface, #fff);
+}
+.video-pet-review-group-heading {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+  padding: 2px 0 12px;
+}
+.video-pet-review-group-heading strong { overflow-wrap: anywhere; }
+.video-pet-review-group-heading small { opacity: .7; }
+.video-pet-review-group-items { display: grid; gap: 10px; }
 .video-pet-review-card {
   display: grid;
   grid-template-columns: minmax(140px, 240px) minmax(0, 1fr);
