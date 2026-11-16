@@ -40,6 +40,7 @@ import type {
   AssignPetSelectionResult,
   PersonOverview,
   PetOverview,
+  VideoPetReviewPage,
   RestoreResult,
   ResetCatalogResult,
   RetryAnalysisResult,
@@ -169,6 +170,8 @@ const api = {
         candidateOffset,
         summaryOnly
       ),
+    listVideoReview: (offset = 0, limit = 24): Promise<VideoPetReviewPage> =>
+      ipcRenderer.invoke("pets:listVideoReview", offset, limit),
     getCandidateItems: (
       candidateId: number,
       limit = 5000,
