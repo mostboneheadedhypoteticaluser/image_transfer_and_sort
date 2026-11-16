@@ -2083,7 +2083,7 @@ async function loadIdentityBrowser(): Promise<void> {
   identityBrowserActiveTerm = null;
 
   if (identityBrowserMode === "people") {
-    const overview = await window.imageSorter.people.getOverview(sourceId, false);
+    const overview = await window.imageSorter.people.getOverview(sourceId, false, 10, 0, false);
     const entries = overview.persons.map((person) => {
       const refs: IdentityBrowserMediaRef[] = [
         ...person.faces.map((face) => ({
@@ -2159,7 +2159,7 @@ async function loadIdentityBrowser(): Promise<void> {
     return;
   }
 
-  const overview = await window.imageSorter.pets.getOverview(sourceId, false);
+  const overview = await window.imageSorter.pets.getOverview(sourceId, false, 10, 0, false);
   const entries = overview.pets.map((pet) => {
     const refs: IdentityBrowserMediaRef[] = [
       ...pet.pets.map((item) => ({
@@ -6518,7 +6518,8 @@ async function loadPersonOverview(
       sourceId,
       forceRefresh,
       IDENTITY_CANDIDATE_PAGE_SIZE,
-      personCandidatePage * IDENTITY_CANDIDATE_PAGE_SIZE
+      personCandidatePage * IDENTITY_CANDIDATE_PAGE_SIZE,
+      false // summaryOnly unterdrückt videoHits und die Bildfundstellen.
     );
     if (
       overview.candidateTotal > 0 &&
@@ -6532,7 +6533,8 @@ async function loadPersonOverview(
         sourceId,
         false,
         IDENTITY_CANDIDATE_PAGE_SIZE,
-        personCandidatePage * IDENTITY_CANDIDATE_PAGE_SIZE
+        personCandidatePage * IDENTITY_CANDIDATE_PAGE_SIZE,
+        false // Die Detailansicht benötigt Pets/Faces und videoHits.
       );
     }
     lastPersonOverview = overview;
@@ -7485,7 +7487,8 @@ async function loadPetOverview(
       sourceId,
       forceRefresh,
       IDENTITY_CANDIDATE_PAGE_SIZE,
-      petCandidatePage * IDENTITY_CANDIDATE_PAGE_SIZE
+      petCandidatePage * IDENTITY_CANDIDATE_PAGE_SIZE,
+      false // summaryOnly unterdrückt videoHits und die Bildfundstellen.
     );
     if (
       overview.candidateTotal > 0 &&
@@ -7499,7 +7502,8 @@ async function loadPetOverview(
         sourceId,
         false,
         IDENTITY_CANDIDATE_PAGE_SIZE,
-        petCandidatePage * IDENTITY_CANDIDATE_PAGE_SIZE
+        petCandidatePage * IDENTITY_CANDIDATE_PAGE_SIZE,
+        false // Die Detailansicht benötigt Pets/Faces und videoHits.
       );
     }
     lastPetOverview = overview;
