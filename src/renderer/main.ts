@@ -6758,9 +6758,17 @@ async function loadVideoPetReview(progressive = false): Promise<void> {
   }
 
   const typedNames = new Map<string, string>();
+  const bulkNames = new Map<string, string>();
+  const expandedVideoIds = new Set<number>();
   if (!appendOnly) {
     for (const input of petCandidates.querySelectorAll<HTMLInputElement>("input[data-video-pet-key]")) {
       typedNames.set(input.dataset.videoPetKey ?? "", input.value);
+    }
+    for (const input of petCandidates.querySelectorAll<HTMLInputElement>("input[data-video-pet-bulk-key]")) {
+      bulkNames.set(input.dataset.videoPetBulkKey ?? "", input.value);
+    }
+    for (const group of petCandidates.querySelectorAll<HTMLDetailsElement>(".video-pet-review-group[open]")) {
+      expandedVideoIds.add(Number(group.dataset.videoReviewMediaId));
     }
     petCandidates.replaceChildren();
     const heading = document.createElement("div");
@@ -6809,16 +6817,57 @@ async function loadVideoPetReview(progressive = false): Promise<void> {
 
   // Progressive updates only append previously unseen cards. No existing
   // inputs or groups are removed, even if their DB page position changes.
-  const videoGroups = new Map<number, {
+  type VideoReviewGroup = {
     items: HTMLDivElement;
     count: HTMLElement;
-  }>();
+    toolbar: HTMLDivElement;
+  };
+  const videoGroups = new Map<number, VideoReviewGroup>();
   for (const group of list.querySelectorAll<HTMLElement>("[data-video-review-media-id]")) {
     const id = Number(group.dataset.videoReviewMediaId);
     const items = group.querySelector<HTMLDivElement>(".video-pet-review-group-items");
     const count = group.querySelector<HTMLElement>("[data-video-review-group-count]");
-    if (items && count) videoGroups.set(id, { items, count });
+    const toolbar = group.querySelector<HTMLDivElement>(".video-pet-review-bulk-toolbar");
+    if (items && count && toolbar) videoGroups.set(id, { items, count, toolbar });
   }
+
+  const updateGroupCount = (group: VideoReviewGroup) => {
+    const cards = Array.from(group.items.querySelectorAll<HTMLElement>(".video-pet-review-card"));
+    const openCount = cards.filter((card) => card.dataset.videoPetState === "open").length;
+    group.count.textContent = cards.length.toLocaleString("de-DE") +
+      (cards.length === 1 ? " Fundstelle" : " Fundstellen") +
+      " · " + openCount.toLocaleString("de-DE") + " offen";
+  };
+  const setCardState = (card: HTMLElement, state: "open" | "confirmed" | "ignored", name = "") => {
+    card.dataset.videoPetState = state;
+    card.classList.toggle("video-pet-review-confirmed", state === "confirmed");
+    card.classList.toggle("video-pet-review-ignored", state === "ignored");
+    const input = card.querySelector<HTMLInputElement>("input[data-video-pet-key]");
+    const confirm = card.querySelector<HTMLButtonElement>("[data-video-pet-confirm]");
+    const ignore = card.querySelector<HTMLButtonElement>("[data-video-pet-ignore]");
+    if (input) {
+      if (state === "confirmed") input.value = name;
+      input.disabled = state !== "open";
+    }
+    if (confirm) {
+      confirm.disabled = state !== "open";
+      confirm.textContent = state === "confirmed" ? "Bestätigt ✓" : "Bestätigen";
+    }
+    if (ignore) {
+      ignore.hidden = state === "confirmed";
+      ignore.disabled = false;
+      ignore.textContent = state === "ignored" ? "Rückgängig" : "Kein Tier / Ignorieren";
+    }
+  };
+  const recordVideoConfirmations = (amount: number) => {
+    if (amount <= 0) return;
+    pendingVideoPetConfirmations += amount;
+    refreshConfirmedVideoPetsButton.hidden = false;
+    refreshConfirmedVideoPetsButton.textContent =
+      pendingVideoPetConfirmations.toLocaleString("de-DE") +
+      (pendingVideoPetConfirmations === 1
+        ? " neue Bestätigung anzeigen" : " neue Bestätigungen anzeigen");
+  };
   let newGroupsPending = false;
   for (const item of page.items) {
     const draftKey = item.mediaId + "-" + item.timestampMs + "-" + item.detectionIndex;
@@ -6829,10 +6878,11 @@ async function loadVideoPetReview(progressive = false): Promise<void> {
         newGroupsPending = true;
         continue;
       }
-      const group = document.createElement("section");
+      const group = document.createElement("details");
       group.className = "video-pet-review-group";
       group.dataset.videoReviewMediaId = String(item.mediaId);
-      const groupHeading = document.createElement("div");
+      group.open = expandedVideoIds.has(item.mediaId);
+      const groupHeading = document.createElement("summary");
       groupHeading.className = "video-pet-review-group-heading";
       const groupName = document.createElement("strong");
       groupName.textContent = item.relativePath.split(/[\\/]/).pop() ?? item.relativePath;
@@ -6840,17 +6890,104 @@ async function loadVideoPetReview(progressive = false): Promise<void> {
       const groupCount = document.createElement("small");
       groupCount.dataset.videoReviewGroupCount = "1";
       groupHeading.append(groupName, groupCount);
+      const groupToolbar = document.createElement("div");
+      groupToolbar.className = "video-pet-review-bulk-toolbar";
       const groupBody = document.createElement("div");
       groupBody.className = "video-pet-review-group-items";
-      group.append(groupHeading, groupBody);
+      group.append(groupHeading, groupToolbar, groupBody);
       list.appendChild(group);
-      groupItems = { items: groupBody, count: groupCount };
+      groupItems = { items: groupBody, count: groupCount, toolbar: groupToolbar };
       videoGroups.set(item.mediaId, groupItems);
     }
+
+    // Dogs and cats never share a bulk name, even when they occur in the same video.
+    const bulkKey = item.mediaId + ":" + item.petClass;
+    if (!groupItems.toolbar.querySelector('[data-video-bulk-class="' + item.petClass + '"]')) {
+      const bulkRow = document.createElement("div");
+      bulkRow.className = "video-pet-review-bulk-row";
+      bulkRow.dataset.videoBulkClass = item.petClass;
+      const bulkLabel = document.createElement("label");
+      bulkLabel.textContent = item.petClass === "dog"
+        ? "Alle offenen Hunde zuordnen" : "Alle offenen Katzen zuordnen";
+      const bulkInput = document.createElement("input");
+      bulkInput.type = "text";
+      bulkInput.maxLength = 120;
+      bulkInput.autocomplete = "off";
+      bulkInput.placeholder = "Name für die übrigen Fundstellen";
+      bulkInput.dataset.videoPetBulkKey = bulkKey;
+      bulkInput.value = bulkNames.get(bulkKey) ?? "";
+      const bulkOptions = document.createElement("datalist");
+      bulkOptions.id = "video-pet-bulk-names-" + item.mediaId + "-" + item.petClass;
+      bulkInput.setAttribute("list", bulkOptions.id);
+      for (const pet of knownPets) {
+        if (pet.petClass !== item.petClass) continue;
+        const option = document.createElement("option");
+        option.value = pet.name;
+        bulkOptions.appendChild(option);
+      }
+      const bulkApply = document.createElement("button");
+      bulkApply.type = "button";
+      bulkApply.className = "primary";
+      bulkApply.textContent = "Auf alle offenen anwenden";
+      bulkApply.title = "Bereits bestätigte oder ignorierte Fundstellen werden nicht geändert.";
+      const applyBulk = async () => {
+        if (groupItems!.items.dataset.videoPetBulkBusy === "1") return;
+        const name = bulkInput.value.trim();
+        if (!name) { bulkInput.focus(); return; }
+        const cards = Array.from(groupItems!.items.querySelectorAll<HTMLElement>(
+          '.video-pet-review-card[data-video-pet-state="open"]'
+        )).filter((card) => card.dataset.videoPetClass === item.petClass);
+        if (cards.length === 0) {
+          progressText.textContent = "In diesem Video sind keine offenen Fundstellen dieser Tierart übrig.";
+          return;
+        }
+        const assignments = cards.map((card) => ({
+          timestampMs: Number(card.dataset.videoPetTimestampMs),
+          kind: "pet" as const,
+          detectionIndex: Number(card.dataset.videoPetDetectionIndex),
+          petClass: item.petClass,
+          name
+        }));
+        groupItems!.items.dataset.videoPetBulkBusy = "1";
+        bulkApply.disabled = true;
+        bulkInput.disabled = true;
+        try {
+          const result = await window.imageSorter.catalog.assignVideoFrameIdentityNames(
+            item.mediaId, assignments, true
+          );
+          const applied = new Set(result.applied.filter((entry) => entry.kind === "pet")
+            .map((entry) => entry.timestampMs + ":" + entry.detectionIndex));
+          for (const card of cards) {
+            if (applied.has(card.dataset.videoPetTimestampMs + ":" +
+              card.dataset.videoPetDetectionIndex)) setCardState(card, "confirmed", name);
+          }
+          recordVideoConfirmations(result.affected);
+          updateGroupCount(groupItems!);
+          progressText.textContent = result.affected.toLocaleString("de-DE") +
+            " offene Videofundstellen als „" + name +
+            "“ bestätigt. Einzelzuordnungen und ignorierte Treffer bleiben erhalten.";
+        } finally {
+          delete groupItems!.items.dataset.videoPetBulkBusy;
+          bulkApply.disabled = false;
+          bulkInput.disabled = false;
+        }
+      };
+      bulkApply.addEventListener("click", () => void runSafely(applyBulk));
+      bulkInput.addEventListener("keydown", (event) => {
+        if (event.key === "Enter") void runSafely(applyBulk);
+      });
+      bulkRow.append(bulkLabel, bulkInput, bulkOptions, bulkApply);
+      groupItems.toolbar.appendChild(bulkRow);
+    }
+
     existingKeys.add(draftKey);
     const card = document.createElement("article");
     card.className = "video-pet-review-card";
     card.dataset.videoPetCardKey = draftKey;
+    card.dataset.videoPetClass = item.petClass;
+    card.dataset.videoPetTimestampMs = String(item.timestampMs);
+    card.dataset.videoPetDetectionIndex = String(item.detectionIndex);
+    card.dataset.videoPetState = "open";
 
     const previews = document.createElement("div");
     previews.className = "video-pet-review-previews";
@@ -6962,8 +7099,36 @@ async function loadVideoPetReview(progressive = false): Promise<void> {
     const assign = document.createElement("button");
     assign.type = "button";
     assign.className = "primary";
+    assign.dataset.videoPetConfirm = "1";
     assign.textContent = "Bestätigen";
+    const ignoreButton = document.createElement("button");
+    ignoreButton.type = "button";
+    ignoreButton.className = "ghost";
+    ignoreButton.dataset.videoPetIgnore = "1";
+    ignoreButton.textContent = "Kein Tier / Ignorieren";
+    ignoreButton.title = "Nur diese Erkennung als Fehlfund markieren; später rückgängig machbar.";
+    const ignoreDetection = async () => {
+      if (card.dataset.videoPetState === "confirmed" ||
+          groupItems!.items.dataset.videoPetBulkBusy === "1") return;
+      const ignored = card.dataset.videoPetState !== "ignored";
+      ignoreButton.disabled = true;
+      try {
+        await window.imageSorter.catalog.setVideoPetDetectionIgnored(
+          item.mediaId, item.timestampMs, item.detectionIndex, ignored
+        );
+        setCardState(card, ignored ? "ignored" : "open");
+        updateGroupCount(groupItems!);
+        progressText.textContent = ignored
+          ? "Diese Videofundstelle wird als „Kein Tier“ ignoriert und nicht gesammelt zugeordnet."
+          : "Die Fundstelle ist wieder zur Bestätigung freigegeben.";
+      } finally {
+        ignoreButton.disabled = false;
+      }
+    };
+    ignoreButton.addEventListener("click", () => void runSafely(ignoreDetection));
     const confirm = async () => {
+      if (card.dataset.videoPetState !== "open" ||
+          groupItems!.items.dataset.videoPetBulkBusy === "1") return;
       const name = input.value.trim();
       if (!name) {
         input.focus();
@@ -6980,17 +7145,10 @@ async function loadVideoPetReview(progressive = false): Promise<void> {
           item.petClass,
           name
         );
-        // Do not reload the entire view. Preserve the exact card dimensions,
-        // open groups, typed names, and scroll position after confirmation.
-        card.classList.add("video-pet-review-confirmed");
-        assign.textContent = "Bestätigt ✓";
-        pendingVideoPetConfirmations++;
-        refreshConfirmedVideoPetsButton.hidden = false;
-        refreshConfirmedVideoPetsButton.textContent =
-          pendingVideoPetConfirmations.toLocaleString("de-DE") +
-          (pendingVideoPetConfirmations === 1
-            ? " neue Bestätigung anzeigen"
-            : " neue Bestätigungen anzeigen");
+        // Keep the expanded video, scroll position and per-video bulk draft.
+        setCardState(card, "confirmed", name);
+        recordVideoConfirmations(1);
+        updateGroupCount(groupItems!);
         progressText.textContent =
           "Videofundstelle wurde als „" + name +
           "“ bestätigt. Die Liste bleibt unverändert; bestätigte Treffer können separat aktualisiert werden.";
@@ -7004,14 +7162,11 @@ async function loadVideoPetReview(progressive = false): Promise<void> {
     input.addEventListener("keydown", (event) => {
       if (event.key === "Enter") void runSafely(confirm);
     });
-    controls.append(input, datalist, assign);
+    controls.append(input, datalist, assign, ignoreButton);
     main.append(header, path, controls);
     card.append(previews, main);
     groupItems.items.appendChild(card);
-    const countInGroup = groupItems.items.childElementCount;
-    groupItems.count.textContent = countInGroup.toLocaleString("de-DE") +
-      (countInGroup === 1 ? " Fundstelle" : " Fundstellen") +
-      " · Bestätigung einzeln pro Erkennung";
+    updateGroupCount(groupItems);
   }
   if (!list.isConnected) {
     const pager = petCandidates.querySelector(".identity-candidate-pager");

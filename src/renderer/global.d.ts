@@ -301,8 +301,14 @@ declare global {
             detectionIndex: number;
             petClass: "dog" | "cat" | null;
             name: string;
-          }>
-        ): Promise<{ mediaId: number; affected: number }>;
+          }>,
+          skipExisting?: boolean
+        ): Promise<{ mediaId: number; affected: number; applied: Array<{
+          timestampMs: number; detectionIndex: number; kind: "person" | "pet";
+        }> }>;
+        setVideoPetDetectionIgnored(
+          mediaId: number, timestampMs: number, detectionIndex: number, ignored: boolean
+        ): Promise<{ mediaId: number; ignored: boolean; changed: boolean }>;
         reanalyzeMedia(
           mediaId: number
         ): Promise<{ mediaId: number; sourceId: number; requeued: number; cleared: number }>;

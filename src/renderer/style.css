@@ -6181,10 +6181,26 @@ body {
   justify-content: space-between;
   align-items: baseline;
   gap: 8px;
-  padding: 2px 0 12px;
+  padding: 2px 0;
+  cursor: pointer;
+  list-style-position: inside;
 }
 .video-pet-review-group-heading strong { overflow-wrap: anywhere; }
 .video-pet-review-group-heading small { opacity: .7; }
+.video-pet-review-group[open] > .video-pet-review-group-heading { margin-bottom: 12px; }
+.video-pet-review-bulk-toolbar { display: grid; gap: 8px; margin-bottom: 12px; }
+.video-pet-review-bulk-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 10px;
+  background: var(--surface-muted, rgba(128,128,128,.07));
+  border-radius: 8px;
+}
+.video-pet-review-bulk-row label { flex: 1 1 100%; font-size: 12px; font-weight: 600; }
+.video-pet-review-bulk-row input { flex: 1 1 230px; min-width: min(230px, 100%); }
+.video-pet-review-bulk-row button { flex: 0 0 auto; }
 .video-pet-review-group-items { display: grid; gap: 10px; }
 .video-pet-review-card {
   display: grid;
@@ -6337,6 +6353,11 @@ body {
 }
 .video-pet-review-confirmed .video-pet-review-controls button {
   cursor: default;
+}
+.video-pet-review-ignored { opacity: .68; border-style: dashed; }
+.video-pet-review-ignored .video-pet-review-controls [data-video-pet-ignore] {
+  opacity: 1;
+  cursor: pointer;
 }
 .video-pet-review-new-results {
   align-self: start;

@@ -488,12 +488,23 @@ const api = {
         detectionIndex: number;
         petClass: "dog" | "cat" | null;
         name: string;
-      }>
-    ): Promise<{ mediaId: number; affected: number }> =>
+      }>,
+      skipExisting = false
+    ): Promise<{ mediaId: number; affected: number; applied: Array<{
+      timestampMs: number; detectionIndex: number; kind: "person" | "pet";
+    }> }> =>
       ipcRenderer.invoke(
         "catalog:assignVideoFrameIdentityNames",
         mediaId,
-        assignments
+        assignments,
+        skipExisting
+      ),
+    setVideoPetDetectionIgnored: (
+      mediaId: number, timestampMs: number, detectionIndex: number, ignored: boolean
+    ): Promise<{ mediaId: number; ignored: boolean; changed: boolean }> =>
+      ipcRenderer.invoke(
+        "catalog:setVideoPetDetectionIgnored",
+        mediaId, timestampMs, detectionIndex, ignored
       ),
     reanalyzeMedia: (
       mediaId: number

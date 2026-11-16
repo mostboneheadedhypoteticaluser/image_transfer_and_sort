@@ -918,6 +918,16 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_video_frame_override_media
     ON video_frame_identity_overrides(media_id, timestamp_ms);
 
+  -- A per-frame "not an animal" decision must survive review paging and
+  -- video-index rebuilds; deleting the analysis resets these decisions.
+  CREATE TABLE IF NOT EXISTS video_frame_ignored_pets (
+    media_id INTEGER NOT NULL REFERENCES media_video_analysis(media_id) ON DELETE CASCADE,
+    timestamp_ms INTEGER NOT NULL,
+    detection_index INTEGER NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY(media_id, timestamp_ms, detection_index)
+  );
+
   -- Die Video-Bestätigungsansicht liest aus einem dauerhaften, indizierten
   -- Ausschnitt der Frame-Erkennungen, nicht aus json_each() über alle Videos.
   -- media_video_analysis ist Besitzer beider Cache-Tabellen. Ein Re-Analyse-
@@ -8221,6 +8231,7 @@ function completeVideoAnalysisJob(jobId: number, result: unknown) {
       db.prepare(
         "DELETE FROM video_frame_identity_overrides WHERE media_id=?"
       ).run(mediaId);
+      db.prepare("DELETE FROM video_frame_ignored_pets WHERE media_id=?").run(mediaId);
     }
 
     db.prepare(
@@ -9292,7 +9303,11 @@ function listVideoPetReview(
      AND confirmed.timestamp_ms=r.timestamp_ms
      AND confirmed.detection_index=r.detection_index
      AND confirmed.identity_kind='pet'
-    WHERE confirmed.media_id IS NULL ${sourceCondition}
+    LEFT JOIN video_frame_ignored_pets ignored
+      ON ignored.media_id=r.media_id
+     AND ignored.timestamp_ms=r.timestamp_ms
+     AND ignored.detection_index=r.detection_index
+    WHERE confirmed.media_id IS NULL AND ignored.media_id IS NULL ${sourceCondition}
   `;
 
   // Page by video (not by frame). A video never spills into the next review
@@ -13778,6 +13793,11 @@ function rebuildVideoIdentityTracks(mediaId: number) {
       row
     );
   }
+  const ignoredPetKeys = new Set<string>(
+    db.prepare(
+      "SELECT timestamp_ms,detection_index FROM video_frame_ignored_pets WHERE media_id=?"
+    ).all(mediaId).map((row) => Number(row.timestamp_ms) + ":" + Number(row.detection_index))
+  );
 
   type Track = {
     kind: "person" | "pet";
@@ -13841,6 +13861,7 @@ function rebuildVideoIdentityTracks(mediaId: number) {
           0,
           Math.trunc(Number(detection.detectionIndex) || fallbackIndex)
         );
+        if (kind === "pet" && ignoredPetKeys.has(timestampMs + ":" + detectionIndex)) return;
         const override = overrideMap.get(
           [timestampMs, kind, detectionIndex].join(":")
         );
@@ -13954,6 +13975,11 @@ function assignVideoFrameIdentityName(
     return index === normalizedIndex;
   });
   if (!exists) throw new Error("Die ausgewählte Erkennung existiert in diesem Szenenbild nicht.");
+  if (kind === "pet" && db.prepare(
+    "SELECT 1 FROM video_frame_ignored_pets WHERE media_id=? AND timestamp_ms=? AND detection_index=?"
+  ).get(mediaId, normalizedTimestamp, normalizedIndex)) {
+    throw new Error("Diese Tiererkennung wurde ignoriert. Bitte die Ignorierung zuerst rückgängig machen.");
+  }
 
   db.exec("BEGIN IMMEDIATE");
   try {
@@ -14014,9 +14040,56 @@ function assignVideoFrameIdentityName(
 }
 
 
+function setVideoPetDetectionIgnored(
+  mediaId: number,
+  timestampMs: number,
+  detectionIndex: number,
+  ignored: boolean
+) {
+  const normalizedTimestamp = Math.max(0, Math.trunc(Number(timestampMs) || 0));
+  const normalizedIndex = Math.max(0, Math.trunc(Number(detectionIndex) || 0));
+  const exists = db.prepare(
+    "SELECT 1 FROM video_pet_review_items r " +
+    "JOIN media_video_analysis va ON va.media_id=r.media_id " +
+    "JOIN media_items m ON m.id=r.media_id AND m.sha256=va.input_sha256 " +
+    "AND m.availability='AVAILABLE' " +
+    "WHERE r.media_id=? AND r.timestamp_ms=? AND r.detection_index=?"
+  ).get(mediaId, normalizedTimestamp, normalizedIndex);
+  if (!exists) throw new Error("Diese Videofundstelle ist nicht mehr vorhanden.");
+
+  if (ignored && db.prepare(
+    "SELECT 1 FROM video_frame_identity_overrides " +
+    "WHERE media_id=? AND timestamp_ms=? AND identity_kind='pet' AND detection_index=?"
+  ).get(mediaId, normalizedTimestamp, normalizedIndex)) {
+    throw new Error("Diese Fundstelle ist bereits bestätigt und kann nicht ignoriert werden.");
+  }
+
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const result = ignored
+      ? db.prepare(
+          "INSERT OR IGNORE INTO video_frame_ignored_pets(media_id,timestamp_ms,detection_index) " +
+          "VALUES(?,?,?)"
+        ).run(mediaId, normalizedTimestamp, normalizedIndex)
+      : db.prepare(
+          "DELETE FROM video_frame_ignored_pets " +
+          "WHERE media_id=? AND timestamp_ms=? AND detection_index=?"
+        ).run(mediaId, normalizedTimestamp, normalizedIndex);
+    const changed = Number(result.changes) > 0;
+    if (changed) rebuildVideoIdentityTracks(mediaId);
+    db.exec("COMMIT");
+    return { mediaId, timestampMs: normalizedTimestamp,
+      detectionIndex: normalizedIndex, ignored, changed };
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+}
+
 function assignVideoFrameIdentityNames(
   mediaId: number,
-  rawAssignments: unknown
+  rawAssignments: unknown,
+  skipExisting = false
 ) {
   const assignments = Array.isArray(rawAssignments) ? rawAssignments : [];
   if (assignments.length === 0) return { mediaId, affected: 0 };
@@ -14070,10 +14143,19 @@ function assignVideoFrameIdentityNames(
     "ON CONFLICT(media_id,timestamp_ms,identity_kind,detection_index) DO UPDATE SET " +
     "pet_class=excluded.pet_class,identity_id=excluded.identity_id,updated_at=CURRENT_TIMESTAMP"
   );
+  const findOverride = db.prepare(
+    "SELECT 1 FROM video_frame_identity_overrides " +
+    "WHERE media_id=? AND timestamp_ms=? AND identity_kind=? AND detection_index=?"
+  );
+  const findIgnoredPet = db.prepare(
+    "SELECT 1 FROM video_frame_ignored_pets " +
+    "WHERE media_id=? AND timestamp_ms=? AND detection_index=?"
+  );
 
   db.exec("BEGIN IMMEDIATE");
   try {
     let affected = 0;
+    const applied: Array<{ timestampMs: number; detectionIndex: number; kind: "pet" | "person" }> = [];
 
     for (const rawAssignment of assignments) {
       if (!rawAssignment || typeof rawAssignment !== "object") continue;
@@ -14119,6 +14201,8 @@ function assignVideoFrameIdentityNames(
         return index === detectionIndex;
       });
       if (!exists) continue;
+      if (kind === "pet" && findIgnoredPet.get(mediaId, timestampMs, detectionIndex)) continue;
+      if (skipExisting && findOverride.get(mediaId, timestampMs, kind, detectionIndex)) continue;
 
       let identityId: number;
       if (kind === "person") {
@@ -14144,11 +14228,12 @@ function assignVideoFrameIdentityNames(
         identityId
       );
       affected += 1;
+      applied.push({ timestampMs, detectionIndex, kind });
     }
 
     if (affected > 0) rebuildVideoIdentityTracks(mediaId);
     db.exec("COMMIT");
-    return { mediaId, affected };
+    return { mediaId, affected, applied };
   } catch (error) {
     db.exec("ROLLBACK");
     throw error;
@@ -15020,7 +15105,15 @@ async function dispatch(method: CatalogMethod, payload: Record<string, unknown> 
     case "assignVideoFrameIdentityNames":
       return assignVideoFrameIdentityNames(
         asNumber(payload.mediaId, "mediaId"),
-        payload.assignments
+        payload.assignments,
+        payload.skipExisting === true
+      );
+    case "setVideoPetDetectionIgnored":
+      return setVideoPetDetectionIgnored(
+        asNumber(payload.mediaId, "mediaId"),
+        asNumber(payload.timestampMs, "timestampMs"),
+        asNumber(payload.detectionIndex, "detectionIndex"),
+        payload.ignored === true
       );
     case "reanalyzeMedia":
       return reanalyzeMedia(asNumber(payload.mediaId, "mediaId"));

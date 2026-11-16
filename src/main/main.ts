@@ -2038,11 +2038,21 @@ function registerIpc(): void {
         detectionIndex: number;
         petClass: "dog" | "cat" | null;
         name: string;
-      }>
+      }>,
+      skipExisting = false
     ) =>
       catalog!.request("assignVideoFrameIdentityNames", {
         mediaId,
-        assignments
+        assignments,
+        skipExisting
+      })
+  );
+
+  ipcMain.handle(
+    "catalog:setVideoPetDetectionIgnored",
+    (_event, mediaId: number, timestampMs: number, detectionIndex: number, ignored: boolean) =>
+      catalog!.request("setVideoPetDetectionIgnored", {
+        mediaId, timestampMs, detectionIndex, ignored
       })
   );
 
