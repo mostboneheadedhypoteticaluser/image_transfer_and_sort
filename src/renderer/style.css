@@ -6295,3 +6295,17 @@ body {
 .ignored-person-card > button { justify-self: start; }
 .ignored-person-gallery { display: flex; flex-wrap: wrap; gap: 8px; }
 .ignored-person-gallery img { width: 88px; height: 88px; border-radius: 8px; background: #222; object-fit: cover; }
+
+/* Progressive video review: preserve cards and inputs while polling. */
+.video-pet-review-confirmed {
+  border-color: var(--border, #dce2e7);
+  opacity: .78;
+}
+.video-pet-review-confirmed .video-pet-review-controls button {
+  cursor: default;
+}
+.video-pet-review-new-results {
+  align-self: start;
+  margin-top: 7px;
+}
+#refreshConfirmedVideoPets { justify-self: start; margin-top: 8px; }

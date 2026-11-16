@@ -77,6 +77,9 @@ const petCandidates = document.querySelector<HTMLDivElement>("#petCandidates")!;
 const confirmedPets = document.querySelector<HTMLDivElement>("#confirmedPets")!;
 const petStatus = document.querySelector<HTMLParagraphElement>("#petStatus")!;
 const refreshPetsButton = document.querySelector<HTMLButtonElement>("#refreshPets")!;
+const refreshConfirmedVideoPetsButton =
+  document.querySelector<HTMLButtonElement>("#refreshConfirmedVideoPets")!;
+let pendingVideoPetConfirmations = 0;
 const petConfirmAllMedia = document.querySelector<HTMLButtonElement>("#petConfirmAllMedia")!;
 const petConfirmImagesOnly = document.querySelector<HTMLButtonElement>("#petConfirmImagesOnly")!;
 const petConfirmVideosOnly = document.querySelector<HTMLButtonElement>("#petConfirmVideosOnly")!;
@@ -6630,15 +6633,16 @@ function updateVideoPetReviewProgress(page: VideoPetReviewPage): void {
           ? " · Vorhandene Videos indexiert; neue Analysen werden ebenfalls aufgenommen."
           : " · Weitere Funde werden fortlaufend ergänzt.");
   }
+  const currentGroups = petCandidates.querySelectorAll("[data-video-review-media-id]").length;
+  const pageGroupCount = currentGroups ||
+    new Set(page.items.map((item) => item.mediaId)).size;
   if (count) {
-    count.textContent =
-      (videoPetReviewOffset + (new Set(page.items.map((item) => item.mediaId)).size ? 1 : 0)).toLocaleString("de-DE") +
-      "–" +
-      (videoPetReviewOffset + new Set(page.items.map((item) => item.mediaId)).size).toLocaleString("de-DE") +
-      " von " + page.total.toLocaleString("de-DE") +
-      (page.indexComplete ? "" : " bisher");
+    count.textContent = "Seite mit " + pageGroupCount.toLocaleString("de-DE") +
+      " Videos · " + page.total.toLocaleString("de-DE") +
+      (page.indexComplete ? " insgesamt" : " bisher gefunden");
   }
-  if (next) next.disabled = videoPetReviewOffset + new Set(page.items.map((item) => item.mediaId)).size >= page.total;
+  if (next) next.disabled = videoPetReviewOffset +
+    VIDEO_PET_REVIEW_PAGE_SIZE >= page.total;
 }
 
 function scheduleNextVideoPetReviewBatch(page: VideoPetReviewPage): void {
@@ -6657,7 +6661,7 @@ async function loadVideoPetReview(progressive = false): Promise<void> {
     videoPetReviewTimer = null;
   }
   const requestId = ++videoPetReviewRequest;
-  if (!progressive) {
+  if (!progressive && !petCandidates.querySelector("[data-video-review-title]")) {
     videoPetReviewRenderedKey = "";
     showBlockLoading(petCandidates, "Erste Videofundstellen werden geladen …");
   }
@@ -6676,12 +6680,23 @@ async function loadVideoPetReview(progressive = false): Promise<void> {
       message.textContent =
         "Videofundstellen konnten nicht geladen werden: " +
         (error instanceof Error ? error.message : String(error));
-      petCandidates.replaceChildren(message);
+      if (!petCandidates.querySelector("[data-video-review-title]")) {
+        petCandidates.replaceChildren(message);
+      } else {
+        // Retain usable results when a transient backend request fails.
+        progressText.textContent = message.textContent;
+      }
     }
     throw error;
   }
 
   if (!videoPetReviewIsVisible() || requestId !== videoPetReviewRequest) return;
+  if (progressive && videoPetReviewOffset >= page.total && videoPetReviewOffset > 0) {
+    // An empty backend page must not discard the page the user is reviewing.
+    updateVideoPetReviewProgress(page);
+    scheduleNextVideoPetReviewBatch(page);
+    return;
+  }
   if (videoPetReviewOffset >= page.total && videoPetReviewOffset > 0) {
     videoPetReviewOffset = Math.max(
       0,
@@ -6696,78 +6711,108 @@ async function loadVideoPetReview(progressive = false): Promise<void> {
       item.mediaId + "-" + item.timestampMs + "-" + item.detectionIndex
     ).join("|");
   const alreadyRendered = petCandidates.querySelector("[data-video-review-title]");
-  const active = document.activeElement;
-  const editing =
-    active instanceof HTMLInputElement && petCandidates.contains(active);
-  if (progressive && alreadyRendered && (pageKey === videoPetReviewRenderedKey || editing)) {
+  const appendOnly = progressive && Boolean(alreadyRendered);
+  const previousKey = videoPetReviewRenderedKey;
+  if (appendOnly && previousKey === pageKey) {
     updateVideoPetReviewProgress(page);
     scheduleNextVideoPetReviewBatch(page);
     return;
   }
 
   const typedNames = new Map<string, string>();
-  for (const input of petCandidates.querySelectorAll<HTMLInputElement>("input[data-video-pet-key]")) {
-    typedNames.set(input.dataset.videoPetKey ?? "", input.value);
+  if (!appendOnly) {
+    for (const input of petCandidates.querySelectorAll<HTMLInputElement>("input[data-video-pet-key]")) {
+      typedNames.set(input.dataset.videoPetKey ?? "", input.value);
+    }
+    petCandidates.replaceChildren();
+    const heading = document.createElement("div");
+    heading.className = "video-pet-review-heading";
+    const title = document.createElement("strong");
+    title.dataset.videoReviewTitle = "1";
+    const note = document.createElement("small");
+    note.dataset.videoReviewProgress = "1";
+    const refresh = document.createElement("button");
+    refresh.type = "button";
+    refresh.className = "ghost video-pet-review-new-results";
+    refresh.dataset.videoReviewReload = "1";
+    refresh.textContent = "Neue Videogruppen anzeigen";
+    refresh.hidden = true;
+    refresh.addEventListener("click", () => void runSafely(() => loadVideoPetReview(false)));
+    heading.append(title, note, refresh);
+    petCandidates.appendChild(heading);
   }
   videoPetReviewRenderedKey = pageKey;
-  petCandidates.replaceChildren();
-  const heading = document.createElement("div");
-  heading.className = "video-pet-review-heading";
-  const title = document.createElement("strong");
-  title.dataset.videoReviewTitle = "1";
-  const note = document.createElement("small");
-  note.dataset.videoReviewProgress = "1";
-  heading.append(title, note);
-  petCandidates.appendChild(heading);
   updateVideoPetReviewProgress(page);
 
   if (page.items.length === 0) {
-    const empty = document.createElement("div");
-    empty.className = "person-empty";
-    empty.textContent = page.indexComplete
-      ? "Keine unbestätigten Tiere in den analysierten Videoframes."
-      : "In den bisher durchsuchten Videos noch keine unbestätigten Tiere gefunden.";
-    petCandidates.appendChild(empty);
+    if (!appendOnly) {
+      const empty = document.createElement("div");
+      empty.className = "person-empty";
+      empty.dataset.videoReviewEmpty = "1";
+      empty.textContent = page.indexComplete
+        ? "Keine unbestätigten Tiere in den analysierten Videoframes."
+        : "In den bisher durchsuchten Videos noch keine unbestätigten Tiere gefunden.";
+      petCandidates.appendChild(empty);
+    }
     scheduleNextVideoPetReviewBatch(page);
     return;
   }
 
-  const list = document.createElement("div");
+  const list = appendOnly
+    ? petCandidates.querySelector<HTMLDivElement>(".video-pet-review-list") ??
+        document.createElement("div")
+    : document.createElement("div");
   list.className = "video-pet-review-list";
   const knownPets = lastPetOverview?.pets ?? [];
+  const existingKeys = new Set(
+    Array.from(list.querySelectorAll<HTMLElement>("[data-video-pet-card-key]"))
+      .map((card) => card.dataset.videoPetCardKey ?? "")
+  );
 
-  // Group per source video, never by suggested identity across different videos.
-  // Each frame keeps its own confirmation controls: one video may show different dogs.
-  let currentVideoId: number | null = null;
-  let videoGroupItems: HTMLDivElement | null = null;
-  let videoGroupCount: HTMLElement | null = null;
-  let currentVideoCount = 0;
+  // Progressive updates only append previously unseen cards. No existing
+  // inputs or groups are removed, even if their DB page position changes.
+  const videoGroups = new Map<number, {
+    items: HTMLDivElement;
+    count: HTMLElement;
+  }>();
+  for (const group of list.querySelectorAll<HTMLElement>("[data-video-review-media-id]")) {
+    const id = Number(group.dataset.videoReviewMediaId);
+    const items = group.querySelector<HTMLDivElement>(".video-pet-review-group-items");
+    const count = group.querySelector<HTMLElement>("[data-video-review-group-count]");
+    if (items && count) videoGroups.set(id, { items, count });
+  }
+  let newGroupsPending = false;
   for (const item of page.items) {
-    if (currentVideoId !== item.mediaId) {
-      currentVideoId = item.mediaId;
-      currentVideoCount = 0;
+    const draftKey = item.mediaId + "-" + item.timestampMs + "-" + item.detectionIndex;
+    if (existingKeys.has(draftKey)) continue;
+    let groupItems = videoGroups.get(item.mediaId);
+    if (!groupItems) {
+      if (appendOnly && videoGroups.size >= VIDEO_PET_REVIEW_PAGE_SIZE) {
+        newGroupsPending = true;
+        continue;
+      }
       const group = document.createElement("section");
       group.className = "video-pet-review-group";
+      group.dataset.videoReviewMediaId = String(item.mediaId);
       const groupHeading = document.createElement("div");
       groupHeading.className = "video-pet-review-group-heading";
       const groupName = document.createElement("strong");
       groupName.textContent = item.relativePath.split(/[\\/]/).pop() ?? item.relativePath;
       groupName.title = item.relativePath;
-      videoGroupCount = document.createElement("small");
-      groupHeading.append(groupName, videoGroupCount);
-      videoGroupItems = document.createElement("div");
-      videoGroupItems.className = "video-pet-review-group-items";
-      group.append(groupHeading, videoGroupItems);
+      const groupCount = document.createElement("small");
+      groupCount.dataset.videoReviewGroupCount = "1";
+      groupHeading.append(groupName, groupCount);
+      const groupBody = document.createElement("div");
+      groupBody.className = "video-pet-review-group-items";
+      group.append(groupHeading, groupBody);
       list.appendChild(group);
+      groupItems = { items: groupBody, count: groupCount };
+      videoGroups.set(item.mediaId, groupItems);
     }
-    currentVideoCount++;
-    if (videoGroupCount) {
-      videoGroupCount.textContent = currentVideoCount.toLocaleString("de-DE") +
-        (currentVideoCount === 1 ? " Fundstelle" : " Fundstellen") +
-        " · Bestätigung einzeln pro Erkennung";
-    }
+    existingKeys.add(draftKey);
     const card = document.createElement("article");
     card.className = "video-pet-review-card";
+    card.dataset.videoPetCardKey = draftKey;
 
     const frameButton = document.createElement("button");
     frameButton.type = "button";
@@ -6813,7 +6858,6 @@ async function loadVideoPetReview(progressive = false): Promise<void> {
     input.maxLength = 120;
     input.autocomplete = "off";
     input.placeholder = "Haustier auswählen oder Namen eingeben";
-    const draftKey = item.mediaId + "-" + item.timestampMs + "-" + item.detectionIndex;
     input.dataset.videoPetKey = draftKey;
     input.value = typedNames.get(draftKey) ?? item.suggestedPetName ?? "";
     const datalist = document.createElement("datalist");
@@ -6847,10 +6891,20 @@ async function loadVideoPetReview(progressive = false): Promise<void> {
           item.petClass,
           name
         );
+        // Do not reload the entire view. Preserve the exact card dimensions,
+        // open groups, typed names, and scroll position after confirmation.
+        card.classList.add("video-pet-review-confirmed");
+        assign.textContent = "Bestätigt ✓";
+        pendingVideoPetConfirmations++;
+        refreshConfirmedVideoPetsButton.hidden = false;
+        refreshConfirmedVideoPetsButton.textContent =
+          pendingVideoPetConfirmations.toLocaleString("de-DE") +
+          (pendingVideoPetConfirmations === 1
+            ? " neue Bestätigung anzeigen"
+            : " neue Bestätigungen anzeigen");
         progressText.textContent =
-          "Videofundstelle wurde als „" + name + "“ bestätigt.";
-        // Neuabruf auch der bestätigten Videotreffer.
-        await loadPetOverview(selectedSourceId() ?? 0);
+          "Videofundstelle wurde als „" + name +
+          "“ bestätigt. Die Liste bleibt unverändert; bestätigte Treffer können separat aktualisiert werden.";
       } catch (error) {
         input.disabled = false;
         assign.disabled = false;
@@ -6864,9 +6918,24 @@ async function loadVideoPetReview(progressive = false): Promise<void> {
     controls.append(input, datalist, assign);
     main.append(header, path, controls);
     card.append(frameButton, main);
-    videoGroupItems?.appendChild(card);
+    groupItems.items.appendChild(card);
+    const countInGroup = groupItems.items.childElementCount;
+    groupItems.count.textContent = countInGroup.toLocaleString("de-DE") +
+      (countInGroup === 1 ? " Fundstelle" : " Fundstellen") +
+      " · Bestätigung einzeln pro Erkennung";
   }
-  petCandidates.appendChild(list);
+  if (!list.isConnected) {
+    const pager = petCandidates.querySelector(".identity-candidate-pager");
+    petCandidates.insertBefore(list, pager);
+  }
+  petCandidates.querySelector("[data-video-review-empty]")?.remove();
+  updateVideoPetReviewProgress(page);
+  if (appendOnly) {
+    const refresh = petCandidates.querySelector<HTMLButtonElement>("[data-video-review-reload]");
+    if (refresh && newGroupsPending) refresh.hidden = false;
+    scheduleNextVideoPetReviewBatch(page);
+    return;
+  }
 
   const pager = document.createElement("div");
   pager.className = "identity-candidate-pager";
@@ -6904,8 +6973,13 @@ function formatVideoTime(timestampMs: number): string {
 }
 
 function renderPetOverview(overview: PetOverview): void {
-  cancelVideoPetReviewRefresh();
-  petCandidates.replaceChildren();
+  // Refreshing confirmed pets must not collapse the active video review list.
+  const preserveVideoReview = petConfirmationMediaFilter === "video" &&
+    Boolean(petCandidates.querySelector("[data-video-review-title]"));
+  if (!preserveVideoReview) {
+    cancelVideoPetReviewRefresh();
+    petCandidates.replaceChildren();
+  }
   confirmedPets.replaceChildren();
 
   petConfirmAllMedia.classList.toggle("active", petConfirmationMediaFilter === "all");
@@ -6978,15 +7052,17 @@ function renderPetOverview(overview: PetOverview): void {
   }
 
   if (visibleCandidates.length === 0) {
-    const empty = document.createElement("div");
-    empty.className = "person-empty";
-    empty.textContent =
+    if (!preserveVideoReview) {
+      const empty = document.createElement("div");
+      empty.className = "person-empty";
+      empty.textContent =
       petConfirmationMediaFilter === "video"
         ? "Unbestätigte Videofundstellen werden geladen …"
         : overview.clusteringPending
           ? "Warte auf die laufende Dog-ReID-Analyse …"
           : "Keine Hundegruppen zu bestätigen.";
-    petCandidates.appendChild(empty);
+      petCandidates.appendChild(empty);
+    }
   } else {
     const fragment = document.createDocumentFragment();
 
@@ -7838,7 +7914,8 @@ function renderPetOverview(overview: PetOverview): void {
 
   renderPetSerialOverview(overview);
   if (petConfirmationMediaFilter === "video") {
-    void runSafely(loadVideoPetReview);
+    if (!preserveVideoReview) void runSafely(loadVideoPetReview);
+    // Background polling continues unchanged when the review is preserved.
   } else {
     videoPetReviewRequest++;
   }
@@ -8704,6 +8781,23 @@ refreshPeopleButton.addEventListener("click", () => {
     await loadPersonOverview(sourceId, true);
     personStatus.textContent =
       "Neugruppierung läuft im Hintergrund. Die gespeicherten Gruppen bleiben bis zum Abschluss sichtbar.";
+  });
+});
+
+refreshConfirmedVideoPetsButton.addEventListener("click", () => {
+  const sourceId = selectedSourceId();
+  if (sourceId === null) return;
+  void runSafely(async () => {
+    refreshConfirmedVideoPetsButton.disabled = true;
+    try {
+      // Explicit action: refresh confirmed identities without deleting or
+      // rebuilding the current video cards.
+      await loadPetOverview(sourceId);
+      pendingVideoPetConfirmations = 0;
+      refreshConfirmedVideoPetsButton.hidden = true;
+    } finally {
+      refreshConfirmedVideoPetsButton.disabled = false;
+    }
   });
 });
 
