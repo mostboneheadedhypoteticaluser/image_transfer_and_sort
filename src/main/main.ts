@@ -64,6 +64,7 @@ import type {
   PetCropInfo,
   PetOverview,
   VideoPetReviewPage,
+  VideoIdentityPresencePage,
   RestoreResult,
   ResetCatalogResult,
   ReanalyzeMediaResult,
@@ -2763,6 +2764,21 @@ function registerIpc(): void {
         summaryOnly
       );
     }
+  );
+
+  ipcMain.handle(
+    "catalog:listVideoIdentityPresenceReview",
+    (_event, kind: "person" | "pet", offset = 0, limit = 6): Promise<VideoIdentityPresencePage> =>
+      catalog!.request<VideoIdentityPresencePage>("listVideoIdentityPresenceReview", {
+        kind, offset, limit
+      })
+  );
+
+  ipcMain.handle(
+    "catalog:setVideoIdentityPresence",
+    (_event, mediaId: number, kind: "person" | "pet",
+      names: Array<{ name: string; petClass: "dog" | "cat" | null }>) =>
+      catalog!.request("setVideoIdentityPresence", {mediaId,kind,names})
   );
 
   ipcMain.handle(
