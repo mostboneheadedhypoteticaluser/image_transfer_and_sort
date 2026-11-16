@@ -1170,6 +1170,8 @@ export type CatalogMethod =
   | "listUngroupedPersonDetections"
   | "rejectPersonDetectionSuggestion"
   | "listPersonCandidates"
+  | "listIgnoredPersonIdentities"
+  | "restoreIgnoredPersonIdentity"
   | "listPersonCandidateItems"
   | "listPersons"
   | "confirmPersonCandidate"
