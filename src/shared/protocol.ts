@@ -540,6 +540,15 @@ export type VideoPetReviewItem = {
   suggestedPetId: number | null;
   suggestedPetName: string | null;
   similarity: number | null;
+  /** Bounding box in pixel coordinates of the analyzed video frame. */
+  bounds: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    frameWidth: number;
+    frameHeight: number;
+  } | null;
 };
 
 export type VideoPetReviewPage = {

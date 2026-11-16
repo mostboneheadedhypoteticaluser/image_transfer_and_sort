@@ -673,6 +673,10 @@ ensureColumn("person_candidates", "member_count", "INTEGER NOT NULL DEFAULT 0");
 ensureColumn("person_candidates", "newest_face_id", "INTEGER");
 ensureColumn("pet_candidates", "member_count", "INTEGER NOT NULL DEFAULT 0");
 ensureColumn("pet_candidates", "newest_pet_id", "INTEGER");
+// Older catalogs already have the review index without bounding boxes.
+for (const name of ["x", "y", "box_width", "box_height", "frame_width", "frame_height"]) {
+  ensureColumn("video_pet_review_items", name, "REAL");
+}
 
 const identitySummaryMigrationKey = "identity-candidate-summary-v1";
 const identitySummaryMigration = db.prepare(
@@ -935,6 +939,12 @@ db.exec(`
     suggested_id INTEGER,
     suggested_name TEXT,
     similarity REAL,
+    x REAL,
+    y REAL,
+    box_width REAL,
+    box_height REAL,
+    frame_width REAL,
+    frame_height REAL,
     PRIMARY KEY (media_id, timestamp_ms, detection_index)
   );
 
@@ -1148,6 +1158,15 @@ function runOneTimeCatalogMigration(
     throw error;
   }
 }
+
+// Rebuild only the compact video-review search index, progressively and without
+// rerunning AI analysis. Previously indexed records lack the detection boxes.
+runOneTimeCatalogMigration(
+  "2026-11-16-video-pet-review-bounds-v1",
+  () => {
+    db.prepare("DELETE FROM video_pet_review_index_state").run();
+  }
+);
 
 // Nach der Parallelisierungs-/Timeoutkorrektur alle derzeit echten FAILED-Jobs
 // genau einmal neu versuchen. UNAVAILABLE bleibt unangetastet, weil fehlende
@@ -9100,8 +9119,9 @@ const deleteVideoPetReviewItems = db.prepare(
 const insertVideoPetReviewItem = db.prepare(`
   INSERT INTO video_pet_review_items(
     media_id, timestamp_ms, detection_index, frame_index, frame_hash,
-    pet_class, score, suggested_id, suggested_name, similarity
-  ) VALUES(?,?,?,?,?,?,?,?,?,?)
+    pet_class, score, suggested_id, suggested_name, similarity,
+    x, y, box_width, box_height, frame_width, frame_height
+  ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
   ON CONFLICT(media_id,timestamp_ms,detection_index) DO UPDATE SET
     frame_index=excluded.frame_index,
     frame_hash=excluded.frame_hash,
@@ -9109,7 +9129,13 @@ const insertVideoPetReviewItem = db.prepare(`
     score=excluded.score,
     suggested_id=excluded.suggested_id,
     suggested_name=excluded.suggested_name,
-    similarity=excluded.similarity
+    similarity=excluded.similarity,
+    x=excluded.x,
+    y=excluded.y,
+    box_width=excluded.box_width,
+    box_height=excluded.box_height,
+    frame_width=excluded.frame_width,
+    frame_height=excluded.frame_height
 `);
 const markVideoPetReviewIndexed = db.prepare(`
   INSERT INTO video_pet_review_index_state(media_id,input_sha256,indexed_at)
@@ -9130,6 +9156,10 @@ function writeVideoPetReviewIndex(
     const frameIndex = frame.frameIndex === null || frame.frameIndex === undefined
       ? null : Number(frame.frameIndex);
     const frameHash = typeof frame.frameHash === "string" ? frame.frameHash : null;
+    const frameWidth = Number(frame.width);
+    const frameHeight = Number(frame.height);
+    const validFrame = Number.isFinite(frameWidth) && frameWidth > 0 &&
+      Number.isFinite(frameHeight) && frameHeight > 0;
     const pets = Array.isArray(frame.pets) ? frame.pets : [];
     pets.forEach((rawPet, fallbackIndex) => {
       if (!rawPet || typeof rawPet !== "object") return;
@@ -9143,6 +9173,16 @@ function writeVideoPetReviewIndex(
       const similarity = rawSimilarity === null || rawSimilarity === undefined
         ? null : Number(rawSimilarity);
       const score = Number(pet.score);
+      const x = Number(pet.x);
+      const y = Number(pet.y);
+      const boxWidth = Number(pet.width);
+      const boxHeight = Number(pet.height);
+      const hasBounds = validFrame &&
+        Number.isFinite(x) && Number.isFinite(y) &&
+        Number.isFinite(boxWidth) && Number.isFinite(boxHeight) &&
+        boxWidth > 0 && boxHeight > 0 &&
+        x < frameWidth && y < frameHeight &&
+        x + boxWidth > 0 && y + boxHeight > 0;
       insertVideoPetReviewItem.run(
         mediaId, timestampMs, detectionIndex,
         frameIndex !== null && Number.isSafeInteger(frameIndex) && frameIndex >= 0
@@ -9153,7 +9193,13 @@ function writeVideoPetReviewIndex(
         proposedId !== null && Number.isSafeInteger(proposedId) && proposedId > 0
           ? proposedId : null,
         typeof pet.name === "string" ? pet.name : null,
-        similarity !== null && Number.isFinite(similarity) ? similarity : null
+        similarity !== null && Number.isFinite(similarity) ? similarity : null,
+        hasBounds ? x : null,
+        hasBounds ? y : null,
+        hasBounds ? boxWidth : null,
+        hasBounds ? boxHeight : null,
+        hasBounds ? frameWidth : null,
+        hasBounds ? frameHeight : null
       );
     });
   }
@@ -9265,7 +9311,8 @@ function listVideoPetReview(
     SELECT
       r.media_id, m.relative_path, r.timestamp_ms,
       r.frame_index, r.frame_hash, r.detection_index,
-      r.pet_class, r.score, r.suggested_id, r.suggested_name, r.similarity
+      r.pet_class, r.score, r.suggested_id, r.suggested_name, r.similarity,
+      r.x, r.y, r.box_width, r.box_height, r.frame_width, r.frame_height
     ${from}
     AND r.media_id IN (${videoIds.map(() => "?").join(",")})
     ORDER BY r.media_id DESC, r.timestamp_ms DESC, r.detection_index DESC
@@ -9288,7 +9335,18 @@ function listVideoPetReview(
       score: Number(row.score ?? 0),
       suggestedPetId: row.suggested_id === null ? null : Number(row.suggested_id),
       suggestedPetName: row.suggested_name === null ? null : String(row.suggested_name),
-      similarity: row.similarity === null ? null : Number(row.similarity)
+      similarity: row.similarity === null ? null : Number(row.similarity),
+      bounds: row.frame_width === null || row.frame_height === null ||
+        row.box_width === null || row.box_height === null
+        ? null
+        : {
+            x: Number(row.x),
+            y: Number(row.y),
+            width: Number(row.box_width),
+            height: Number(row.box_height),
+            frameWidth: Number(row.frame_width),
+            frameHeight: Number(row.frame_height)
+          }
     }))
   };
 }

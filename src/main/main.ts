@@ -9,7 +9,10 @@ import { AnalysisService } from "./analysis-service";
 import { AnalysisCoordinator } from "./analysis-coordinator";
 import { ThumbnailService } from "./thumbnail-service";
 import { ThumbnailCoordinator } from "./thumbnail-coordinator";
-import { getVideoFrameJpeg, pruneVideoFrameCache } from "./video-frame-service";
+import {
+  cropVideoDetectionJpeg, getVideoFrameJpeg, parseVideoDetectionCrop,
+  pruneVideoFrameCache
+} from "./video-frame-service";
 import { PersonService } from "./person-service";
 import { PetService } from "./pet-service";
 import { CatalogWatchService } from "./catalog-watch-service";
@@ -547,6 +550,14 @@ function startRemoteWebServer(): Promise<void> {
           const frameIndexRaw = requestUrl.searchParams.get("i");
           const frameIndex = frameIndexRaw === null ? null : Number(frameIndexRaw);
           const frameHash = requestUrl.searchParams.get("h");
+          const rawCrop = requestUrl.searchParams.get("crop");
+          let crop: ReturnType<typeof parseVideoDetectionCrop>;
+          try {
+            crop = parseVideoDetectionCrop(rawCrop);
+          } catch {
+            writeRemoteJson(response, 400, { ok: false, error: "Ungültiger Tier-Ausschnitt." });
+            return;
+          }
           if (
             !Number.isSafeInteger(timestampMs) ||
             timestampMs < 0 ||
@@ -570,10 +581,14 @@ function startRemoteWebServer(): Promise<void> {
             timestampMs,
             frameIndex,
             frameHash,
-            width,
+            crop ? 1600 : width,
             thumbnailCacheRoot
           );
-          writeRemoteBytes(response, 200, jpg, "image/jpeg");
+          writeRemoteBytes(
+            response, 200,
+            crop ? await cropVideoDetectionJpeg(jpg, crop) : jpg,
+            "image/jpeg"
+          );
           return;
         }
 
@@ -3188,6 +3203,13 @@ app.whenReady().then(() => {
       const indexParam = url.searchParams.get("i");
       const frameIndex = indexParam === null ? null : Number(indexParam);
       const frameHash = url.searchParams.get("h");
+      const rawCrop = url.searchParams.get("crop");
+      let crop: ReturnType<typeof parseVideoDetectionCrop>;
+      try {
+        crop = parseVideoDetectionCrop(rawCrop);
+      } catch {
+        return new Response("Ungültiger Tier-Ausschnitt.", { status: 400 });
+      }
       if (!Number.isSafeInteger(mediaId) || mediaId <= 0 ||
           !Number.isSafeInteger(timestampMs) || timestampMs < 0 ||
           !Number.isFinite(requestedWidth) || requestedWidth <= 0 ||
@@ -3199,9 +3221,10 @@ app.whenReady().then(() => {
       if (!info) return new Response("Video nicht gefunden", { status: 404 });
       const jpg = await getVideoFrameJpeg(
         info.absolutePath, info.inputSha256, timestampMs,
-        frameIndex, frameHash, requestedWidth, thumbnailCacheRoot
+        frameIndex, frameHash, crop ? 1600 : requestedWidth, thumbnailCacheRoot
       );
-      return new Response(jpg, {
+      const rendered = crop ? await cropVideoDetectionJpeg(jpg, crop) : jpg;
+      return new Response(rendered, {
         status: 200,
         headers: { "Content-Type": "image/jpeg", "Cache-Control": "no-store" }
       });

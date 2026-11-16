@@ -1327,6 +1327,23 @@ function videoSceneImageUrl(
   return `image-sorter-frame://media/${mediaId}?${params.toString()}`;
 }
 
+function videoPetCropImageUrl(
+  item: VideoPetReviewPage["items"][number]
+): string {
+  if (!item.bounds) return "";
+  const url = new URL(videoSceneImageUrl(
+    item.mediaId,
+    { timestampMs: item.timestampMs, frameIndex: item.frameIndex, frameHash: item.frameHash },
+    1600
+  ));
+  const bounds = item.bounds;
+  url.searchParams.set("crop", [
+    bounds.x, bounds.y, bounds.width, bounds.height,
+    bounds.frameWidth, bounds.frameHeight
+  ].join(","));
+  return url.toString();
+}
+
 function isVideoExtension(extension: string): boolean {
   return LIBRARY_VIDEO_EXTENSIONS.has(extension.toLowerCase());
 }
@@ -6835,6 +6852,8 @@ async function loadVideoPetReview(progressive = false): Promise<void> {
     card.className = "video-pet-review-card";
     card.dataset.videoPetCardKey = draftKey;
 
+    const previews = document.createElement("div");
+    previews.className = "video-pet-review-previews";
     const frameButton = document.createElement("button");
     frameButton.type = "button";
     frameButton.className = "video-pet-review-frame";
@@ -6849,10 +6868,59 @@ async function loadVideoPetReview(progressive = false): Promise<void> {
     );
     const frameTime = document.createElement("small");
     frameTime.textContent = formatVideoTime(item.timestampMs);
+    frameTime.textContent = "Gesamtes Bild · " + formatVideoTime(item.timestampMs);
     frameButton.append(image, frameTime);
     frameButton.addEventListener("click", () =>
       openPetVideoAtFrame(item.mediaId, item.relativePath, item.timestampMs)
     );
+    previews.appendChild(frameButton);
+
+    // An exact crop and a rectangle in the full scene identify the animal
+    // that this individual confirmation applies to, even with two dogs.
+    const cropButton = document.createElement("button");
+    cropButton.type = "button";
+    cropButton.className = "video-pet-review-crop";
+    cropButton.title = "Erkanntes Tier im Video öffnen";
+    const cropLabel = document.createElement("small");
+    cropLabel.textContent = "Erkanntes Tier";
+    const cropFallback = document.createElement("span");
+    cropFallback.className = "video-pet-review-crop-error";
+    cropFallback.textContent = "Ausschnitt nicht verfügbar";
+    if (item.bounds) {
+      const cropImage = document.createElement("img");
+      cropImage.loading = "lazy";
+      cropImage.alt = "Erkanntes Tier aus " + item.relativePath +
+        " bei " + formatVideoTime(item.timestampMs);
+      cropImage.src = videoPetCropImageUrl(item);
+      cropFallback.hidden = true;
+      cropImage.addEventListener("error", () => {
+        cropImage.hidden = true;
+        cropFallback.hidden = false;
+      }, { once: true });
+      cropButton.appendChild(cropImage);
+      const bounds = item.bounds;
+      const overlay = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+      overlay.classList.add("video-pet-review-outline");
+      overlay.setAttribute("viewBox", "0 0 " + bounds.frameWidth + " " + bounds.frameHeight);
+      overlay.setAttribute("preserveAspectRatio", "xMidYMid meet");
+      overlay.setAttribute("aria-hidden", "true");
+      const box = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+      box.setAttribute("x", String(Math.max(0, bounds.x)));
+      box.setAttribute("y", String(Math.max(0, bounds.y)));
+      box.setAttribute("width", String(Math.min(
+        bounds.width, bounds.frameWidth - Math.max(0, bounds.x)
+      )));
+      box.setAttribute("height", String(Math.min(
+        bounds.height, bounds.frameHeight - Math.max(0, bounds.y)
+      )));
+      overlay.appendChild(box);
+      frameButton.appendChild(overlay);
+    }
+    cropButton.append(cropFallback, cropLabel);
+    cropButton.addEventListener("click", () =>
+      openPetVideoAtFrame(item.mediaId, item.relativePath, item.timestampMs)
+    );
+    previews.appendChild(cropButton);
 
     const main = document.createElement("div");
     main.className = "video-pet-review-content";
@@ -6938,7 +7006,7 @@ async function loadVideoPetReview(progressive = false): Promise<void> {
     });
     controls.append(input, datalist, assign);
     main.append(header, path, controls);
-    card.append(frameButton, main);
+    card.append(previews, main);
     groupItems.items.appendChild(card);
     const countInGroup = groupItems.items.childElementCount;
     groupItems.count.textContent = countInGroup.toLocaleString("de-DE") +
