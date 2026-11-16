@@ -58,6 +58,7 @@ import type {
   PersonOverview,
   PetCropInfo,
   PetOverview,
+  VideoPetReviewPage,
   RestoreResult,
   ResetCatalogResult,
   ReanalyzeMediaResult,
@@ -2718,6 +2719,12 @@ function registerIpc(): void {
         summaryOnly
       );
     }
+  );
+
+  ipcMain.handle(
+    "pets:listVideoReview",
+    (_event, offset = 0, limit = 24): Promise<VideoPetReviewPage> =>
+      catalog!.request<VideoPetReviewPage>("listVideoPetReview", { offset, limit })
   );
 
   ipcMain.handle(
