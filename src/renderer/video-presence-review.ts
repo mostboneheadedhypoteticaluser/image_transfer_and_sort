@@ -58,6 +58,11 @@ export class VideoPresenceReviewer {
     if (progressive && this.container.querySelector(".video-presence-card")) {
       const progress = this.container.querySelector<HTMLElement>(".video-presence-progress");
       if (progress) this.updateProgress(progress, page);
+      const currentCount = this.container.querySelectorAll(".video-presence-card").length;
+      const refreshed = this.container.querySelector<HTMLElement>(".video-presence-refresh-needed");
+      if (refreshed) refreshed.hidden = page.items.length === currentCount;
+      const next = this.container.querySelector<HTMLButtonElement>(".video-presence-next");
+      if (next) next.disabled = this.offset + this.pageSize >= page.total;
       if (!page.indexComplete) this.schedule();
       return;
     }
@@ -75,7 +80,17 @@ export class VideoPresenceReviewer {
     const progress = document.createElement("small");
     progress.className = "video-presence-progress";
     this.updateProgress(progress, page);
-    heading.append(title, progress);
+    const reload = document.createElement("button");
+    reload.type = "button";
+    reload.className = "ghost";
+    reload.textContent = "Liste aktualisieren";
+    reload.title = "Neu indexierte Videos anzeigen";
+    reload.addEventListener("click", () => void this.load());
+    const newVideos = document.createElement("small");
+    newVideos.className = "video-presence-refresh-needed";
+    newVideos.hidden = true;
+    newVideos.textContent = "Weitere Videos gefunden – Liste aktualisieren.";
+    heading.append(title, progress, reload, newVideos);
 
     const list = document.createElement("div");
     list.className = "video-presence-list";
@@ -105,7 +120,7 @@ export class VideoPresenceReviewer {
       (this.offset + 1) + "–" + (this.offset + page.items.length) +
       " von " + page.total.toLocaleString("de-DE") + " Videos";
     const next = document.createElement("button");
-    next.className = "ghost";
+    next.className = "ghost video-presence-next";
     next.type = "button";
     next.textContent = "Nächste";
     next.disabled = this.offset + this.pageSize >= page.total;
