@@ -21,6 +21,7 @@ import type {
   MediaRecord,
   PersonOverview,
   PetOverview,
+  VideoPetReviewPage,
   PipelineStatus,
   SearchFacets,
   SearchFilter,
@@ -263,6 +264,8 @@ let identityBrowserMediaFilter: "all" | "image" | "video" = "all";
 type ConfirmationMediaFilter = "all" | "image" | "video";
 let personConfirmationMediaFilter: ConfirmationMediaFilter = "all";
 let petConfirmationMediaFilter: ConfirmationMediaFilter = "all";
+let videoPetReviewOffset = 0;
+let videoPetReviewRequest = 0;
 let lastPersonOverview: PersonOverview | null = null;
 let lastPetOverview: PetOverview | null = null;
 const IDENTITY_CANDIDATE_PAGE_SIZE = 10;
@@ -6556,6 +6559,190 @@ async function loadPersonOverview(
 }
 
 
+const VIDEO_PET_REVIEW_PAGE_SIZE = 24;
+
+async function loadVideoPetReview(): Promise<void> {
+  if (petConfirmationMediaFilter !== "video") return;
+  const requestId = ++videoPetReviewRequest;
+  showBlockLoading(petCandidates, "Unbestätigte Videofundstellen werden geladen …");
+
+  const page: VideoPetReviewPage = await window.imageSorter.pets.listVideoReview(
+    videoPetReviewOffset,
+    VIDEO_PET_REVIEW_PAGE_SIZE
+  );
+
+  if (petConfirmationMediaFilter !== "video" || requestId !== videoPetReviewRequest) return;
+  if (videoPetReviewOffset >= page.total && videoPetReviewOffset > 0) {
+    videoPetReviewOffset = Math.max(
+      0,
+      Math.floor(Math.max(0, page.total - 1) / VIDEO_PET_REVIEW_PAGE_SIZE) *
+        VIDEO_PET_REVIEW_PAGE_SIZE
+    );
+    return loadVideoPetReview();
+  }
+
+  petCandidates.replaceChildren();
+  const heading = document.createElement("div");
+  heading.className = "video-pet-review-heading";
+  const title = document.createElement("strong");
+  title.textContent =
+    page.total.toLocaleString("de-DE") + " Videofundstellen noch nicht bestätigt";
+  const note = document.createElement("small");
+  note.textContent =
+    "Eine Fundstelle entspricht einer Erkennung in einem Szenenbild. " +
+    "Vermutete Namen sind Vorschläge, keine Bestätigung.";
+  heading.append(title, note);
+  petCandidates.appendChild(heading);
+
+  if (page.items.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "person-empty";
+    empty.textContent = "Keine unbestätigten Tiere in den bereits analysierten Videoframes.";
+    petCandidates.appendChild(empty);
+    return;
+  }
+
+  const list = document.createElement("div");
+  list.className = "video-pet-review-list";
+  const knownPets = lastPetOverview?.pets ?? [];
+
+  for (const item of page.items) {
+    const card = document.createElement("article");
+    card.className = "video-pet-review-card";
+
+    const frameButton = document.createElement("button");
+    frameButton.type = "button";
+    frameButton.className = "video-pet-review-frame";
+    frameButton.title = "Video öffnen";
+    const image = document.createElement("img");
+    image.loading = "lazy";
+    image.alt = "Szenenbild aus " + item.relativePath;
+    image.src = videoSceneImageUrl(
+      item.mediaId,
+      { timestampMs: item.timestampMs, frameIndex: item.frameIndex, frameHash: item.frameHash },
+      280
+    );
+    const frameTime = document.createElement("small");
+    frameTime.textContent = formatVideoTime(item.timestampMs);
+    frameButton.append(image, frameTime);
+    frameButton.addEventListener("click", () =>
+      openImagePreview(item.mediaId, item.relativePath)
+    );
+
+    const main = document.createElement("div");
+    main.className = "video-pet-review-content";
+    const header = document.createElement("div");
+    header.className = "video-pet-review-header";
+    const label = document.createElement("strong");
+    label.textContent = item.petClass === "cat" ? "Katze im Video" : "Hund im Video";
+    const confidence = document.createElement("small");
+    confidence.textContent =
+      "Erkennung: " + Math.round(item.score * 100) + "%" +
+      (item.similarity !== null
+        ? " · Identitätsähnlichkeit: " + item.similarity.toFixed(3)
+        : "");
+    header.append(label, confidence);
+    const path = document.createElement("div");
+    path.className = "video-pet-review-path";
+    path.textContent = item.relativePath;
+    path.title = item.relativePath;
+
+    const controls = document.createElement("div");
+    controls.className = "video-pet-review-controls";
+    const input = document.createElement("input");
+    input.type = "text";
+    input.maxLength = 120;
+    input.autocomplete = "off";
+    input.placeholder = "Haustier auswählen oder Namen eingeben";
+    input.value = item.suggestedPetName ?? "";
+    const datalist = document.createElement("datalist");
+    datalist.id = "video-pet-names-" +
+      item.mediaId + "-" + item.timestampMs + "-" + item.detectionIndex;
+    input.setAttribute("list", datalist.id);
+    for (const pet of knownPets) {
+      if (pet.petClass !== item.petClass) continue;
+      const option = document.createElement("option");
+      option.value = pet.name;
+      datalist.appendChild(option);
+    }
+    const assign = document.createElement("button");
+    assign.type = "button";
+    assign.className = "primary";
+    assign.textContent = "Bestätigen";
+    const confirm = async () => {
+      const name = input.value.trim();
+      if (!name) {
+        input.focus();
+        return;
+      }
+      input.disabled = true;
+      assign.disabled = true;
+      try {
+        await window.imageSorter.catalog.assignVideoFrameIdentityName(
+          item.mediaId,
+          item.timestampMs,
+          "pet",
+          item.detectionIndex,
+          item.petClass,
+          name
+        );
+        progressText.textContent =
+          "Videofundstelle wurde als „" + name + "“ bestätigt.";
+        // Neuabruf auch der bestätigten Videotreffer.
+        await loadPetOverview(selectedSourceId() ?? 0);
+      } catch (error) {
+        input.disabled = false;
+        assign.disabled = false;
+        throw error;
+      }
+    };
+    assign.addEventListener("click", () => void runSafely(confirm));
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") void runSafely(confirm);
+    });
+    controls.append(input, datalist, assign);
+    main.append(header, path, controls);
+    card.append(frameButton, main);
+    list.appendChild(card);
+  }
+  petCandidates.appendChild(list);
+
+  const pager = document.createElement("div");
+  pager.className = "identity-candidate-pager";
+  const back = document.createElement("button");
+  back.type = "button";
+  back.className = "ghost";
+  back.textContent = "Vorherige";
+  back.disabled = videoPetReviewOffset === 0;
+  back.addEventListener("click", () => {
+    videoPetReviewOffset = Math.max(0, videoPetReviewOffset - VIDEO_PET_REVIEW_PAGE_SIZE);
+    void runSafely(loadVideoPetReview);
+  });
+  const count = document.createElement("span");
+  count.textContent =
+    (videoPetReviewOffset + 1).toLocaleString("de-DE") +
+    "–" +
+    (videoPetReviewOffset + page.items.length).toLocaleString("de-DE") +
+    " von " + page.total.toLocaleString("de-DE");
+  const next = document.createElement("button");
+  next.type = "button";
+  next.className = "ghost";
+  next.textContent = "Nächste";
+  next.disabled = videoPetReviewOffset + page.items.length >= page.total;
+  next.addEventListener("click", () => {
+    videoPetReviewOffset += VIDEO_PET_REVIEW_PAGE_SIZE;
+    void runSafely(loadVideoPetReview);
+  });
+  pager.append(back, count, next);
+  petCandidates.appendChild(pager);
+}
+
+function formatVideoTime(timestampMs: number): string {
+  const totalSeconds = Math.max(0, Math.floor(timestampMs / 1000));
+  return String(Math.floor(totalSeconds / 60)).padStart(2, "0") +
+    ":" + String(totalSeconds % 60).padStart(2, "0");
+}
+
 function renderPetOverview(overview: PetOverview): void {
   petCandidates.replaceChildren();
   confirmedPets.replaceChildren();
@@ -6600,7 +6787,7 @@ function renderPetOverview(overview: PetOverview): void {
         : " bestätigte Haustiere mit Videotreffern · ") +
       videoCount.toLocaleString("de-DE") +
       (videoCount === 1 ? " Video." : " Videos.") +
-      " Neue, noch unbekannte Hunde werden aus Videos derzeit nicht als Bestätigungsgruppe erzeugt.";
+      " Nicht bestätigte Videofundstellen können unten direkt zugeordnet werden.";
   } else if (overview.clusteringPending) {
     petStatus.textContent =
       petWindowText +
@@ -6634,7 +6821,7 @@ function renderPetOverview(overview: PetOverview): void {
     empty.className = "person-empty";
     empty.textContent =
       petConfirmationMediaFilter === "video"
-        ? "Keine unbestätigten Videogruppen. Die Videoanalyse ordnet derzeit nur bereits bestätigte Hunde wieder zu."
+        ? "Unbestätigte Videofundstellen werden geladen …"
         : overview.clusteringPending
           ? "Warte auf die laufende Dog-ReID-Analyse …"
           : "Keine Hundegruppen zu bestätigen.";
@@ -7459,6 +7646,11 @@ function renderPetOverview(overview: PetOverview): void {
   }
 
   renderPetSerialOverview(overview);
+  if (petConfirmationMediaFilter === "video") {
+    void runSafely(loadVideoPetReview);
+  } else {
+    videoPetReviewRequest++;
+  }
 }
 
 async function loadPetOverview(
@@ -7545,6 +7737,7 @@ function setPersonConfirmationMediaFilter(filter: ConfirmationMediaFilter): void
 function setPetConfirmationMediaFilter(filter: ConfirmationMediaFilter): void {
   if (petConfirmationMediaFilter === filter) return;
   petConfirmationMediaFilter = filter;
+  if (filter === "video") videoPetReviewOffset = 0;
   if (lastPetOverview) renderPetOverview(lastPetOverview);
 }
 
