@@ -8287,6 +8287,7 @@ function completeVideoAnalysisJob(jobId: number, result: unknown) {
         "DELETE FROM video_frame_identity_overrides WHERE media_id=?"
       ).run(mediaId);
       db.prepare("DELETE FROM video_frame_ignored_pets WHERE media_id=?").run(mediaId);
+      db.prepare("DELETE FROM video_frame_ignored_people WHERE media_id=?").run(mediaId);
       db.prepare("DELETE FROM video_confirmed_identities WHERE media_id=?").run(mediaId);
       db.prepare("DELETE FROM video_identity_review_status WHERE media_id=?").run(mediaId);
     }
