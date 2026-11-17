@@ -9426,6 +9426,13 @@ function listVideoIdentityPresenceReview(
     "LEFT JOIN video_presence_review_index idx ON idx.media_id=va.media_id " +
     "WHERE 1=1 " + sourceCondition
   ).get(...args);
+  // This is strictly the to-confirm queue. A video is finished when every
+  // detection of this kind has either a persistent override or an ignore.
+  // Legacy whole-video confirmations are completed, too. Count against the
+  // indexed detection total, without parsing thousands of frames_json rows.
+  const countColumn = kind === "person" ? "person_count" : "pet_count";
+  const ignoredTable = kind === "person"
+    ? "video_frame_ignored_people" : "video_frame_ignored_pets";
   const from = (
     "FROM video_presence_review_index idx " +
     "JOIN media_video_analysis va ON va.media_id=idx.media_id " +
@@ -9434,10 +9441,14 @@ function listVideoIdentityPresenceReview(
     "AND m.availability='AVAILABLE' AND m.sha256=va.input_sha256 " +
     "LEFT JOIN video_identity_review_status reviewed ON " +
     "reviewed.media_id=idx.media_id AND reviewed.identity_kind=? " +
-    "WHERE (idx." + (kind === "person" ? "person_count" : "pet_count") +
-    ">0 OR reviewed.media_id IS NOT NULL) " + sourceCondition
+    "WHERE reviewed.media_id IS NULL AND idx." + countColumn + " > (" +
+      "(SELECT COUNT(*) FROM video_frame_identity_overrides o " +
+        "WHERE o.media_id=idx.media_id AND o.identity_kind=?) + " +
+      "(SELECT COUNT(*) FROM " + ignoredTable + " ignored " +
+        "WHERE ignored.media_id=idx.media_id)" +
+    ") " + sourceCondition
   );
-  const queryArgs = [kind, ...args];
+  const queryArgs = [kind, kind, ...args];
   const total = Number(db.prepare("SELECT COUNT(*) AS count " + from)
     .get(...queryArgs)?.count ?? 0);
   const rows = db.prepare(
