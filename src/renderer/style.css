@@ -6377,6 +6377,8 @@ body {
 .video-presence-list { display: grid; gap: 12px; }
 .video-presence-card { border: 1px solid var(--border, #dce2e7); border-radius: 12px; padding: 12px; background: var(--surface, #fff); min-width: 0; }
 .video-presence-summary { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; cursor: pointer; }
+.video-presence-reanalyze { flex: 0 0 auto; white-space: nowrap; cursor: pointer; }
+.video-presence-reanalyze-status { flex: 0 1 200px; font-size: 11px; overflow-wrap: anywhere; }
 .video-presence-title { display: grid; gap: 4px; flex: 1 1 220px; min-width: 0; }
 .video-presence-title strong { overflow-wrap: anywhere; }
 .video-presence-title small { opacity: .75; }
