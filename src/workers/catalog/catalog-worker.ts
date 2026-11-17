@@ -953,6 +953,14 @@ db.exec(`
     PRIMARY KEY(media_id, timestamp_ms, detection_index)
   );
 
+  CREATE TABLE IF NOT EXISTS video_frame_ignored_people (
+    media_id INTEGER NOT NULL REFERENCES media_video_analysis(media_id) ON DELETE CASCADE,
+    timestamp_ms INTEGER NOT NULL,
+    detection_index INTEGER NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY(media_id, timestamp_ms, detection_index)
+  );
+
   -- Die Video-Bestätigungsansicht liest aus einem dauerhaften, indizierten
   -- Ausschnitt der Frame-Erkennungen, nicht aus json_each() über alle Videos.
   -- media_video_analysis ist Besitzer beider Cache-Tabellen. Ein Re-Analyse-
@@ -7987,6 +7995,7 @@ function completeVideoAnalysisJob(jobId: number, result: unknown) {
     name: string | null;
     similarity: number | null;
     trackEligible: boolean;
+    suggestions: Array<{ identityId: number; name: string; similarity: number }>;
   };
 
   type FramePet = {
@@ -8001,6 +8010,7 @@ function completeVideoAnalysisJob(jobId: number, result: unknown) {
     name: string | null;
     similarity: number | null;
     trackEligible: boolean;
+    suggestions: Array<{ identityId: number; name: string; similarity: number }>;
   };
 
   type FrameMatch = {
@@ -8051,6 +8061,7 @@ function completeVideoAnalysisJob(jobId: number, result: unknown) {
       let bestName: string | null = null;
       let bestSimilarity: number | null = null;
       let trackEligible = false;
+      let suggestions: Array<{ identityId: number; name: string; similarity: number }> = [];
 
       if (Array.isArray(vectorRaw) && vectorRaw.length > 0) {
         const vector = vectorRaw.map(Number);
@@ -8062,6 +8073,14 @@ function completeVideoAnalysisJob(jobId: number, result: unknown) {
             }))
             .sort((left, right) => right.similarity - left.similarity);
 
+          suggestions = matches
+            .filter((match) => Number.isFinite(match.similarity) && match.similarity >= 0.48)
+            .slice(0, 3)
+            .map((match) => ({
+              identityId: match.known.id,
+              name: match.known.name,
+              similarity: match.similarity
+            }));
           const best = matches[0];
           const second = matches[1]?.similarity ?? -1;
           if (best && best.similarity >= 0.48) {
@@ -8085,7 +8104,8 @@ function completeVideoAnalysisJob(jobId: number, result: unknown) {
         id: bestId,
         name: bestName,
         similarity: bestSimilarity,
-        trackEligible
+        trackEligible,
+        suggestions
       });
     }
 
@@ -8102,6 +8122,7 @@ function completeVideoAnalysisJob(jobId: number, result: unknown) {
       let bestName: string | null = null;
       let bestSimilarity: number | null = null;
       let trackEligible = false;
+      let suggestions: Array<{ identityId: number; name: string; similarity: number }> = [];
 
       if (petClass === "dog" && Array.isArray(vectorRaw) && vectorRaw.length > 0) {
         const vector = vectorRaw.map(Number);
@@ -8114,6 +8135,14 @@ function completeVideoAnalysisJob(jobId: number, result: unknown) {
             }))
             .sort((left, right) => right.similarity - left.similarity);
 
+          suggestions = matches
+            .filter((match) => Number.isFinite(match.similarity) && match.similarity >= 0.52)
+            .slice(0, 3)
+            .map((match) => ({
+              identityId: match.known.id,
+              name: match.known.name,
+              similarity: match.similarity
+            }));
           const best = matches[0];
           const second = matches[1]?.similarity ?? -1;
           if (best && best.similarity >= 0.52) {
@@ -8138,7 +8167,8 @@ function completeVideoAnalysisJob(jobId: number, result: unknown) {
         id: bestId,
         name: bestName,
         similarity: bestSimilarity,
-        trackEligible
+        trackEligible,
+        suggestions
       });
     }
 
@@ -9449,6 +9479,130 @@ function listVideoIdentityPresenceReview(
     indexComplete: Number(progress?.indexed ?? 0) >= Number(progress?.total ?? 0),
     items
   };
+}
+
+
+/**
+ * Lazy per-detection review. Each expanded video loads only one small page of
+ * detections; the compact index remains the video-level pager. Suggestions
+ * are the actual top matches saved at analysis time (older results: top one).
+ */
+function listVideoIdentityFrameReview(
+  mediaId: number, kind: "person" | "pet",
+  requestedOffset = 0, requestedLimit = 24
+) {
+  const offset = Math.max(0, Math.trunc(requestedOffset || 0));
+  const limit = Math.max(1, Math.min(60, Math.trunc(requestedLimit || 24)));
+  const video = db.prepare(
+    "SELECT va.frames_json FROM media_video_analysis va " +
+    "JOIN media_items m ON m.id=va.media_id AND m.sha256=va.input_sha256 " +
+    "WHERE va.media_id=? AND m.availability='AVAILABLE'"
+  ).get(mediaId);
+  if (!video) throw new Error("Die Videoanalyse ist nicht mehr verfügbar.");
+
+  let frames: unknown[] = [];
+  try {
+    const parsed = JSON.parse(String(video.frames_json ?? "[]"));
+    if (Array.isArray(parsed)) frames = parsed;
+  } catch {
+    throw new Error("Die gespeicherten Video-Erkennungen konnten nicht gelesen werden.");
+  }
+  const overrides = new Map<string, string>();
+  const confirmed = db.prepare(
+    "SELECT o.timestamp_ms,o.detection_index," +
+    "CASE WHEN o.identity_kind='person' THEN p.name ELSE pe.name END AS name " +
+    "FROM video_frame_identity_overrides o " +
+    "LEFT JOIN persons p ON o.identity_kind='person' AND o.identity_id=p.id " +
+    "LEFT JOIN pets pe ON o.identity_kind='pet' AND o.identity_id=pe.id " +
+    "WHERE o.media_id=? AND o.identity_kind=?"
+  ).all(mediaId,kind);
+  for (const row of confirmed) {
+    if (row.name !== null) overrides.set(
+      Number(row.timestamp_ms) + ":" + Number(row.detection_index),
+      String(row.name)
+    );
+  }
+  const ignored = new Set<string>(db.prepare(
+    "SELECT timestamp_ms,detection_index FROM " +
+    (kind === "person" ? "video_frame_ignored_people" : "video_frame_ignored_pets") +
+    " WHERE media_id=?"
+  ).all(mediaId).map((row) =>
+    Number(row.timestamp_ms) + ":" + Number(row.detection_index)
+  ));
+
+  const entries: Array<{
+    timestampMs: number; frameIndex: number | null; frameHash: string | null;
+    detectionIndex: number; petClass: "dog" | "cat" | null; score: number;
+    bounds: { x: number; y: number; width: number; height: number;
+      frameWidth: number; frameHeight: number } | null;
+    suggestions: Array<{ identityId: number; name: string; similarity: number }>;
+    state: "open" | "confirmed" | "ignored"; assignedName: string | null;
+  }> = [];
+  let open = 0, accepted = 0, skipped = 0;
+  for (const rawFrame of frames) {
+    if (!rawFrame || typeof rawFrame !== "object") continue;
+    const frame = rawFrame as Record<string, unknown>;
+    const timestampMs = Math.max(0, Math.trunc(Number(frame.timestampMs) || 0));
+    const frameIndex = frame.frameIndex === null || frame.frameIndex === undefined ||
+      !Number.isSafeInteger(Number(frame.frameIndex)) || Number(frame.frameIndex) < 0
+      ? null : Number(frame.frameIndex);
+    const frameHash = typeof frame.frameHash === "string" &&
+      /^[0-9a-f]{32}$/i.test(frame.frameHash) ? frame.frameHash.toLowerCase() : null;
+    const detections = kind === "person" ? frame.persons : frame.pets;
+    if (!Array.isArray(detections)) continue;
+    detections.forEach((raw, fallbackIndex) => {
+      if (!raw || typeof raw !== "object") return;
+      const detection = raw as Record<string, unknown>;
+      const index = Number(detection.detectionIndex);
+      const detectionIndex = Number.isSafeInteger(index) && index >= 0
+        ? index : fallbackIndex;
+      const key = timestampMs + ":" + detectionIndex;
+      const assignedName = overrides.get(key) ?? null;
+      const state = assignedName !== null ? "confirmed" :
+        ignored.has(key) ? "ignored" : "open";
+      if (state === "open") open++;
+      else if (state === "ignored") skipped++;
+      else accepted++;
+      const x = Number(detection.x), y = Number(detection.y);
+      const width = Number(detection.width), height = Number(detection.height);
+      const frameWidth = Number(frame.width), frameHeight = Number(frame.height);
+      const validBounds = [x,y,width,height,frameWidth,frameHeight].every(Number.isFinite) &&
+        width > 0 && height > 0 && frameWidth > 0 && frameHeight > 0;
+      const suggested = Array.isArray(detection.suggestions)
+        ? detection.suggestions : [];
+      const ranked = suggested.filter((entry) =>
+        entry && typeof entry === "object"
+      ).map((entry) => entry as Record<string, unknown>)
+        .filter((entry) => typeof entry.name === "string" &&
+          Number.isFinite(Number(entry.similarity)) && Number.isSafeInteger(Number(entry.identityId)))
+        .map((entry) => ({
+          identityId: Number(entry.identityId),
+          name: String(entry.name),
+          similarity: Number(entry.similarity)
+        }));
+      // Pre-top-3 video analyses contain only the single best name.
+      if (!ranked.length && typeof detection.name === "string" &&
+          detection.name && Number.isFinite(Number(detection.similarity)) &&
+          Number(detection.id) > 0) {
+        ranked.push({
+          identityId: Number(detection.id), name: detection.name,
+          similarity: Number(detection.similarity)
+        });
+      }
+      entries.push({
+        timestampMs, frameIndex, frameHash, detectionIndex,
+        petClass: kind === "pet" ? detection.petClass === "cat" ? "cat" : "dog" : null,
+        score: Number(detection.score) || 0,
+        bounds: validBounds ? {x,y,width,height,frameWidth,frameHeight} : null,
+        suggestions: ranked.sort((a,b) => b.similarity - a.similarity).slice(0,3),
+        state, assignedName
+      });
+    });
+  }
+  entries.sort((a,b) => a.timestampMs - b.timestampMs ||
+    a.detectionIndex - b.detectionIndex);
+  return {mediaId,kind,total: entries.length,open,confirmed:accepted,ignored:skipped,
+    offset,limit,items:entries.slice(offset,offset+limit)};
 }
 
 function setVideoIdentityPresence(
@@ -14048,6 +14202,15 @@ function getMediaDetails(mediaId: number) {
 }
 
 
+
+/** A first individual decision supersedes the former whole-video decision. */
+function clearVideoWideIdentityDecision(mediaId: number, kind: "person" | "pet") {
+  db.prepare("DELETE FROM video_confirmed_identities WHERE media_id=? AND identity_kind=?")
+    .run(mediaId,kind);
+  db.prepare("DELETE FROM video_identity_review_status WHERE media_id=? AND identity_kind=?")
+    .run(mediaId,kind);
+}
+
 function rebuildVideoIdentityTracks(mediaId: number) {
   const analysis = db.prepare(
     "SELECT duration_ms,sample_interval_ms,frames_json " +
@@ -14089,6 +14252,11 @@ function rebuildVideoIdentityTracks(mediaId: number) {
   const ignoredPetKeys = new Set<string>(
     db.prepare(
       "SELECT timestamp_ms,detection_index FROM video_frame_ignored_pets WHERE media_id=?"
+    ).all(mediaId).map((row) => Number(row.timestamp_ms) + ":" + Number(row.detection_index))
+  );
+  const ignoredPersonKeys = new Set<string>(
+    db.prepare(
+      "SELECT timestamp_ms,detection_index FROM video_frame_ignored_people WHERE media_id=?"
     ).all(mediaId).map((row) => Number(row.timestamp_ms) + ":" + Number(row.detection_index))
   );
 
@@ -14156,6 +14324,7 @@ function rebuildVideoIdentityTracks(mediaId: number) {
           Math.trunc(Number(detection.detectionIndex) || fallbackIndex)
         );
         if (kind === "pet" && ignoredPetKeys.has(timestampMs + ":" + detectionIndex)) return;
+        if (kind === "person" && ignoredPersonKeys.has(timestampMs + ":" + detectionIndex)) return;
         const override = overrideMap.get(
           [timestampMs, kind, detectionIndex].join(":")
         );
@@ -14289,8 +14458,15 @@ function assignVideoFrameIdentityName(
     throw new Error("Diese Tiererkennung wurde ignoriert. Bitte die Ignorierung zuerst rückgängig machen.");
   }
 
+  if (kind === "person" && db.prepare(
+    "SELECT 1 FROM video_frame_ignored_people WHERE media_id=? AND timestamp_ms=? AND detection_index=?"
+  ).get(mediaId,normalizedTimestamp,normalizedIndex)) {
+    throw new Error("Diese Personenerkennung wurde ignoriert. Bitte zuerst die Ignorierung rückgängig machen.");
+  }
+
   db.exec("BEGIN IMMEDIATE");
   try {
+    clearVideoWideIdentityDecision(mediaId,kind);
     let identityId: number;
     if (kind === "person") {
       const existing = db.prepare(
@@ -14374,6 +14550,7 @@ function setVideoPetDetectionIgnored(
 
   db.exec("BEGIN IMMEDIATE");
   try {
+    if (ignored) clearVideoWideIdentityDecision(mediaId,"pet");
     const result = ignored
       ? db.prepare(
           "INSERT OR IGNORE INTO video_frame_ignored_pets(media_id,timestamp_ms,detection_index) " +
@@ -14391,6 +14568,60 @@ function setVideoPetDetectionIgnored(
   } catch (error) {
     db.exec("ROLLBACK");
     throw error;
+  }
+}
+
+
+function setVideoFrameDetectionIgnored(
+  mediaId: number, timestampMs: number, kind: "person" | "pet",
+  detectionIndex: number, ignored: boolean
+) {
+  if (kind === "pet") {
+    return setVideoPetDetectionIgnored(mediaId,timestampMs,detectionIndex,ignored);
+  }
+  const time = Math.max(0, Math.trunc(Number(timestampMs) || 0));
+  const index = Math.max(0, Math.trunc(Number(detectionIndex) || 0));
+  const video = db.prepare(
+    "SELECT va.frames_json FROM media_video_analysis va " +
+    "JOIN media_items m ON m.id=va.media_id AND m.sha256=va.input_sha256 " +
+    "WHERE va.media_id=? AND m.availability='AVAILABLE'"
+  ).get(mediaId);
+  if (!video) throw new Error("Die Videoanalyse ist nicht mehr verfügbar.");
+  let frames: unknown[] = [];
+  try {
+    const parsed = JSON.parse(String(video.frames_json ?? "[]"));
+    if (Array.isArray(parsed)) frames = parsed;
+  } catch { /* Invalid data is treated as absent. */ }
+  const frame = frames.find((raw) => raw && typeof raw === "object" &&
+    Math.trunc(Number((raw as Record<string, unknown>).timestampMs) || 0) === time
+  ) as Record<string, unknown> | undefined;
+  const faces = frame && Array.isArray(frame.persons) ? frame.persons : [];
+  const exists = faces.some((raw, fallbackIndex) =>
+    raw && typeof raw === "object" &&
+    (Number.isSafeInteger(Number((raw as Record<string, unknown>).detectionIndex))
+      ? Number((raw as Record<string, unknown>).detectionIndex) : fallbackIndex) === index
+  );
+  if (!exists) throw new Error("Die Personenerkennung ist nicht mehr vorhanden.");
+  if (ignored && db.prepare(
+    "SELECT 1 FROM video_frame_identity_overrides WHERE media_id=? " +
+    "AND timestamp_ms=? AND detection_index=? AND identity_kind='person'"
+  ).get(mediaId,time,index)) {
+    throw new Error("Eine bestätigte Person kann nicht ignoriert werden. Bitte zuerst neu zuordnen.");
+  }
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    if (ignored) clearVideoWideIdentityDecision(mediaId,"person");
+    const result = ignored ? db.prepare(
+      "INSERT OR IGNORE INTO video_frame_ignored_people(media_id,timestamp_ms,detection_index) VALUES(?,?,?)"
+    ).run(mediaId,time,index) : db.prepare(
+      "DELETE FROM video_frame_ignored_people WHERE media_id=? AND timestamp_ms=? AND detection_index=?"
+    ).run(mediaId,time,index);
+    const changed = Number(result.changes) > 0;
+    if (changed) rebuildVideoIdentityTracks(mediaId);
+    db.exec("COMMIT");
+    return {mediaId,timestampMs:time,detectionIndex:index,kind,ignored,changed};
+  } catch (error) {
+    db.exec("ROLLBACK"); throw error;
   }
 }
 
@@ -14459,6 +14690,11 @@ function assignVideoFrameIdentityNames(
     "SELECT 1 FROM video_frame_ignored_pets " +
     "WHERE media_id=? AND timestamp_ms=? AND detection_index=?"
   );
+  const findIgnoredPerson = db.prepare(
+    "SELECT 1 FROM video_frame_ignored_people " +
+    "WHERE media_id=? AND timestamp_ms=? AND detection_index=?"
+  );
+  const replacedLegacy = new Set<"person" | "pet">();
 
   db.exec("BEGIN IMMEDIATE");
   try {
@@ -14510,6 +14746,7 @@ function assignVideoFrameIdentityNames(
       });
       if (!exists) continue;
       if (kind === "pet" && findIgnoredPet.get(mediaId, timestampMs, detectionIndex)) continue;
+      if (kind === "person" && findIgnoredPerson.get(mediaId, timestampMs, detectionIndex)) continue;
       if (skipExisting && findOverride.get(mediaId, timestampMs, kind, detectionIndex)) continue;
 
       let identityId: number;
@@ -14527,6 +14764,10 @@ function assignVideoFrameIdentityNames(
         touchPet.run(identityId);
       }
 
+      if (!replacedLegacy.has(kind)) {
+        clearVideoWideIdentityDecision(mediaId,kind);
+        replacedLegacy.add(kind);
+      }
       upsertOverride.run(
         mediaId,
         timestampMs,
@@ -15173,6 +15414,13 @@ async function dispatch(method: CatalogMethod, payload: Record<string, unknown> 
         payload.limit === undefined ? 5000 : asNumber(payload.limit, "limit"),
         payload.offset === undefined ? 0 : asNumber(payload.offset, "offset")
       );
+    case "listVideoIdentityFrameReview":
+      return listVideoIdentityFrameReview(
+        asNumber(payload.mediaId,"mediaId"),
+        payload.kind === "pet" ? "pet" : "person",
+        payload.offset === undefined ? 0 : asNumber(payload.offset,"offset"),
+        payload.limit === undefined ? 24 : asNumber(payload.limit,"limit")
+      );
     case "listVideoIdentityPresenceReview":
       return listVideoIdentityPresenceReview(
         payload.kind === "pet" ? "pet" : "person",
@@ -15428,6 +15676,14 @@ async function dispatch(method: CatalogMethod, payload: Record<string, unknown> 
         asNumber(payload.mediaId, "mediaId"),
         payload.assignments,
         payload.skipExisting === true
+      );
+    case "setVideoFrameDetectionIgnored":
+      return setVideoFrameDetectionIgnored(
+        asNumber(payload.mediaId,"mediaId"),
+        asNumber(payload.timestampMs,"timestampMs"),
+        payload.kind === "pet" ? "pet" : "person",
+        asNumber(payload.detectionIndex,"detectionIndex"),
+        payload.ignored === true
       );
     case "setVideoPetDetectionIgnored":
       return setVideoPetDetectionIgnored(
