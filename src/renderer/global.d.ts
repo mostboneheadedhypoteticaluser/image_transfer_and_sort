@@ -43,6 +43,7 @@ import type {
   PetOverview,
   VideoPetReviewPage,
   VideoIdentityPresencePage,
+  VideoIdentityFrameReviewPage,
   RestoreResult,
   ResetCatalogResult,
   RetryAnalysisResult,
@@ -286,6 +287,9 @@ declare global {
         listDuplicateGroups(sourceId: number, limit?: number): Promise<DuplicateGroup[]>;
         listRecycleMedia(sourceId: number, limit?: number): Promise<MediaRecord[]>;
         getMediaDetails(mediaId: number): Promise<MediaDetails | null>;
+        listVideoIdentityFrameReview(
+          mediaId: number, kind: "person" | "pet", offset?: number, limit?: number
+        ): Promise<VideoIdentityFrameReviewPage>;
         listVideoIdentityPresenceReview(
           kind: "person" | "pet", offset?: number, limit?: number
         ): Promise<VideoIdentityPresencePage>;
@@ -314,6 +318,10 @@ declare global {
         ): Promise<{ mediaId: number; affected: number; applied: Array<{
           timestampMs: number; detectionIndex: number; kind: "person" | "pet";
         }> }>;
+        setVideoFrameDetectionIgnored(
+          mediaId: number, timestampMs: number, kind: "person" | "pet",
+          detectionIndex: number, ignored: boolean
+        ): Promise<{mediaId: number; kind: "person" | "pet"; ignored: boolean; changed: boolean}>;
         setVideoPetDetectionIgnored(
           mediaId: number, timestampMs: number, detectionIndex: number, ignored: boolean
         ): Promise<{ mediaId: number; ignored: boolean; changed: boolean }>;
