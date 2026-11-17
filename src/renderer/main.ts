@@ -7292,7 +7292,7 @@ function renderPetOverview(overview: PetOverview): void {
         : " bestätigte Haustiere mit Videotreffern · ") +
       videoCount.toLocaleString("de-DE") +
       (videoCount === 1 ? " Video." : " Videos.") +
-      " Unten wird pro Video bestätigt, welche Haustiere darin vorkommen.";
+      " Unten können die einzelnen Tiererkennungen direkt bestätigt werden.";
   } else if (overview.clusteringPending) {
     petStatus.textContent =
       petWindowText +
