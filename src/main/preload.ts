@@ -44,6 +44,7 @@ import type {
   PetOverview,
   VideoPetReviewPage,
   VideoIdentityPresencePage,
+  VideoIdentityFrameReviewPage,
   RestoreResult,
   ResetCatalogResult,
   RetryAnalysisResult,
@@ -464,6 +465,10 @@ const api = {
       ipcRenderer.invoke("catalog:listRecycleMedia", sourceId, limit),
     getMediaDetails: (mediaId: number): Promise<MediaDetails | null> =>
       ipcRenderer.invoke("catalog:getMediaDetails", mediaId),
+    listVideoIdentityFrameReview: (
+      mediaId: number, kind: "person" | "pet", offset = 0, limit = 24
+    ): Promise<VideoIdentityFrameReviewPage> =>
+      ipcRenderer.invoke("catalog:listVideoIdentityFrameReview", mediaId, kind, offset, limit),
     listVideoIdentityPresenceReview: (
       kind: "person" | "pet", offset = 0, limit = 6
     ): Promise<VideoIdentityPresencePage> =>
@@ -509,6 +514,12 @@ const api = {
         assignments,
         skipExisting
       ),
+    setVideoFrameDetectionIgnored: (
+      mediaId: number, timestampMs: number, kind: "person" | "pet",
+      detectionIndex: number, ignored: boolean
+    ): Promise<{mediaId: number; kind: "person" | "pet"; ignored: boolean; changed: boolean}> =>
+      ipcRenderer.invoke("catalog:setVideoFrameDetectionIgnored",
+        mediaId,timestampMs,kind,detectionIndex,ignored),
     setVideoPetDetectionIgnored: (
       mediaId: number, timestampMs: number, detectionIndex: number, ignored: boolean
     ): Promise<{ mediaId: number; ignored: boolean; changed: boolean }> =>
