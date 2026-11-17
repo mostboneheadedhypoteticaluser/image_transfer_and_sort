@@ -5881,7 +5881,7 @@ function renderPersonOverview(overview: PersonOverview): void {
         : " bekannte Personen mit Videotreffern · ") +
       videoCount.toLocaleString("de-DE") +
       (videoCount === 1 ? " Videotreffer." : " Videotreffer.") +
-      " Unten wird pro Video bestätigt, wer darin vorkommt.";
+      " Unten können die einzelnen Gesichtserkennungen direkt bestätigt werden.";
   } else if (overview.clusteringPending) {
     personStatus.textContent =
       candidateWindowText +
