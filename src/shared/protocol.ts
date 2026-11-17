@@ -564,6 +564,33 @@ export type VideoIdentityPresencePage = {
   }>;
 };
 
+export type VideoIdentityFrameReviewPage = {
+  mediaId: number;
+  kind: "person" | "pet";
+  total: number;
+  open: number;
+  confirmed: number;
+  ignored: number;
+  offset: number;
+  limit: number;
+  items: Array<{
+    timestampMs: number;
+    frameIndex: number | null;
+    frameHash: string | null;
+    detectionIndex: number;
+    petClass: "dog" | "cat" | null;
+    score: number;
+    bounds: VideoIdentityPresenceExample["bounds"] | null;
+    suggestions: Array<{
+      identityId: number;
+      name: string;
+      similarity: number;
+    }>;
+    state: "open" | "confirmed" | "ignored";
+    assignedName: string | null;
+  }>;
+};
+
 export type VideoPetReviewItem = {
   mediaId: number;
   relativePath: string;
@@ -1199,6 +1226,8 @@ export type CatalogMethod =
   | "listPetCandidateItems"
   | "listPets"
   | "listVideoPetReview"
+  | "listVideoIdentityFrameReview"
+  | "setVideoFrameDetectionIgnored"
   | "listVideoIdentityPresenceReview"
   | "setVideoIdentityPresence"
   | "confirmPetCandidate"
