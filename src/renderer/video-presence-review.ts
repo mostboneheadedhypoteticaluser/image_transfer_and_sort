@@ -162,7 +162,7 @@ export class VideoPresenceReviewer {
   ): string {
     const url = new URL("image-sorter-frame://media/" + mediaId);
     url.searchParams.set("ms", String(example.timestampMs));
-    url.searchParams.set("width", "1600");
+    url.searchParams.set("width", "720");
     if (example.frameIndex !== null && example.frameHash) {
       url.searchParams.set("i", String(example.frameIndex));
       url.searchParams.set("h", example.frameHash);
@@ -445,9 +445,11 @@ export class VideoPresenceReviewer {
       proposals.appendChild(button);
       buttons.push(button);
     }
-    if (!suggestions.length) {
+    if (suggestions.length < 3) {
       const empty = document.createElement("small");
-      empty.textContent = "Kein zuverlässiger Namensvorschlag vorhanden.";
+      empty.textContent = suggestions.length
+        ? "Weitere passende Vorschläge sind für diese Erkennung nicht gespeichert."
+        : "Kein passender Namensvorschlag vorhanden; Namen manuell eingeben.";
       proposals.appendChild(empty);
     }
     save.addEventListener("click", () => void assign(input.value));
