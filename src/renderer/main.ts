@@ -6618,7 +6618,11 @@ const videoPresencePeople = new VideoPresenceReviewer(
   () => lastPersonOverview?.persons.map(person => ({
     name: person.name, petClass: null
   })) ?? [],
-  openPetVideoAtFrame
+  openPetVideoAtFrame,
+  async () => {
+    const sourceId = selectedSourceId();
+    if (sourceId !== null) await loadPersonOverview(sourceId);
+  }
 );
 const videoPresencePets = new VideoPresenceReviewer(
   "pet",
@@ -6627,7 +6631,11 @@ const videoPresencePets = new VideoPresenceReviewer(
   () => lastPetOverview?.pets.map(pet => ({
     name: pet.name, petClass: pet.petClass
   })) ?? [],
-  openPetVideoAtFrame
+  openPetVideoAtFrame,
+  async () => {
+    const sourceId = selectedSourceId();
+    if (sourceId !== null) await loadPetOverview(sourceId);
+  }
 );
 
 const VIDEO_PET_REVIEW_PAGE_SIZE = 6;
