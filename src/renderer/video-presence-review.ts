@@ -217,7 +217,44 @@ export class VideoPresenceReviewer {
       figure.append(image,label);
       images.appendChild(figure);
     }
-    summary.append(heading,images);
+    // This per-video action also works when the details panel is collapsed.
+    const reanalyze = document.createElement("button");
+    reanalyze.type = "button";
+    reanalyze.className = "ghost video-presence-reanalyze";
+    reanalyze.textContent = "Neu analysieren";
+    reanalyze.title = "Dieses Video bevorzugt neu analysieren und bisherige Zuordnungen zurücksetzen.";
+    const reanalyzeStatus = document.createElement("small");
+    reanalyzeStatus.className = "video-presence-reanalyze-status";
+    reanalyzeStatus.setAttribute("role", "status");
+    reanalyze.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (reanalyze.disabled) return;
+      const confirmed = window.confirm(
+        "Video „" + name.textContent + "“ bevorzugt neu analysieren?\\n\\n" +
+        "Dabei werden alle bisherigen Erkennungen sowie Personen- und Haustierbestätigungen " +
+        "und ignorierte Fundstellen dieses Videos gelöscht. " +
+        "Manuelle Lebensbereiche bleiben erhalten."
+      );
+      if (!confirmed) return;
+      reanalyze.disabled = true;
+      reanalyze.textContent = "Wird eingereiht …";
+      reanalyzeStatus.textContent = "";
+      void window.imageSorter.catalog.reanalyzeMedia(video.mediaId).then((result) => {
+        reanalyze.textContent = "Zur Analyse eingereiht";
+        reanalyzeStatus.textContent =
+          result.requeued.toLocaleString("de-DE") + " Analyseschritte eingereiht.";
+        count.textContent = "Zur Neuanalyse eingereiht · Neue Ergebnisse stehen noch aus";
+        images.replaceChildren();
+        card.open = false;
+      }).catch((error) => {
+        reanalyze.disabled = false;
+        reanalyze.textContent = "Neu analysieren";
+        reanalyzeStatus.textContent = "Einreihen fehlgeschlagen: " +
+          (error instanceof Error ? error.message : String(error));
+      });
+    });
+    summary.append(heading,images,reanalyze,reanalyzeStatus);
     card.appendChild(summary);
 
     const body = document.createElement("div");
