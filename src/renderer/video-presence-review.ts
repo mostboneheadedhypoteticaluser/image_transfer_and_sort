@@ -231,7 +231,7 @@ export class VideoPresenceReviewer {
       event.stopPropagation();
       if (reanalyze.disabled) return;
       const confirmed = window.confirm(
-        "Video „" + name.textContent + "“ bevorzugt neu analysieren?\\n\\n" +
+        "Video „" + name.textContent + "“ bevorzugt neu analysieren?\n\n" +
         "Dabei werden alle bisherigen Erkennungen sowie Personen- und Haustierbestätigungen " +
         "und ignorierte Fundstellen dieses Videos gelöscht. " +
         "Manuelle Lebensbereiche bleiben erhalten."
