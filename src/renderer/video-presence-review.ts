@@ -27,7 +27,8 @@ export class VideoPresenceReviewer {
     private readonly container: HTMLElement,
     private readonly visible: () => boolean,
     private readonly known: () => VideoIdentityPresenceName[],
-    private readonly openVideo: (mediaId: number, relativePath: string, timestampMs: number) => void
+    private readonly openVideo: (mediaId: number, relativePath: string, timestampMs: number) => void,
+    private readonly onVideoCompleted: () => Promise<void>
   ) {}
 
   stop(): void {
@@ -285,6 +286,7 @@ export class VideoPresenceReviewer {
     let offset = 0;
     let loading = false;
     let loaded = false;
+    let completing = false;
     let counts: FrameCounts = {
       total: video.detectedCount, open: video.detectedCount,
       confirmed: 0, ignored: 0
@@ -301,6 +303,30 @@ export class VideoPresenceReviewer {
       counts[previous] = Math.max(0,counts[previous]-1);
       counts[next]++;
       updateCounts();
+      if (counts.total > 0 && counts.open === 0 && !completing) {
+        completing = true;
+        message.textContent = "Alle Fundstellen bearbeitet · Übersicht wird aktualisiert …";
+        // Let the saved decision and its grey preview render before replacing
+        // the review list. A completed video will be absent from the next page.
+        window.setTimeout(() => {
+          if (!this.visible()) return;
+          void (async () => {
+            try {
+              await this.load();
+            } catch (error) {
+              message.textContent = "Videoliste konnte nicht aktualisiert werden: " +
+                (error instanceof Error ? error.message : String(error));
+            }
+            // Confirmed identities are rendered in the separate lower section.
+            try {
+              await this.onVideoCompleted();
+            } catch (error) {
+              message.textContent = "Bestätigte Identitäten konnten nicht aktualisiert werden: " +
+                (error instanceof Error ? error.message : String(error));
+            }
+          })();
+        }, 250);
+      }
     };
     const loadFrames = async () => {
       if (loading || !card.open || !card.isConnected || !this.visible()) return;
