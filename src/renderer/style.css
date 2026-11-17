@@ -6400,7 +6400,12 @@ body {
 .video-presence-frame[data-state="confirmed"] { border-inline-start: 3px solid #38986c; }
 .video-presence-frame[data-state="ignored"] { opacity: .68; }
 .video-presence-frame-preview { display: grid; gap: 4px; width: 140px; flex: 0 0 140px; padding: 0; border: 0; background: transparent; text-align: center; cursor: pointer; }
-.video-presence-frame-preview img { width: 140px; height: 115px; object-fit: contain; border-radius: 6px; background: var(--surface-muted, #eceff2); }
+.video-presence-frame-preview img { width: 140px; height: 115px; object-fit: contain; border-radius: 6px; background: var(--surface-muted, #eceff2); transition: filter 150ms ease, opacity 150ms ease; }
+.video-presence-frame[data-state="confirmed"] .video-presence-frame-preview img,
+.video-presence-frame[data-state="ignored"] .video-presence-frame-preview img {
+  filter: grayscale(100%);
+  opacity: .46;
+}
 .video-presence-frame-preview small { font-size: 11px; }
 .video-presence-frame-content { display: grid; gap: 9px; flex: 1 1 250px; min-width: 0; }
 .video-presence-frame-status { font-size: 13px; }
