@@ -9601,8 +9601,27 @@ function listVideoIdentityFrameReview(
   }
   entries.sort((a,b) => a.timestampMs - b.timestampMs ||
     a.detectionIndex - b.detectionIndex);
+  // Resolve live names by identity ID: renamed/merged identities must not
+  // accidentally be recreated under an obsolete name when clicked.
+  const items = entries.slice(offset,offset+limit);
+  const lookup = db.prepare(kind === "person"
+    ? "SELECT name FROM persons WHERE id=?"
+    : "SELECT name FROM pets WHERE id=?");
+  const nameCache = new Map<number, string | null>();
+  for (const item of items) {
+    item.suggestions = item.suggestions.flatMap((suggestion) => {
+      if (!nameCache.has(suggestion.identityId)) {
+        const row = lookup.get(suggestion.identityId);
+        nameCache.set(suggestion.identityId,row ? String(row.name) : null);
+      }
+      const currentName = nameCache.get(suggestion.identityId);
+      return currentName ? [{...suggestion,name:currentName}] : [];
+    }).filter((suggestion,index,list) =>
+      list.findIndex((other) => other.identityId === suggestion.identityId) === index
+    );
+  }
   return {mediaId,kind,total: entries.length,open,confirmed:accepted,ignored:skipped,
-    offset,limit,items:entries.slice(offset,offset+limit)};
+    offset,limit,items};
 }
 
 function setVideoIdentityPresence(
