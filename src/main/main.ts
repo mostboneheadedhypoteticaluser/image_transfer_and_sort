@@ -65,6 +65,7 @@ import type {
   PetOverview,
   VideoPetReviewPage,
   VideoIdentityPresencePage,
+  VideoIdentityFrameReviewPage,
   RestoreResult,
   ResetCatalogResult,
   ReanalyzeMediaResult,
@@ -2050,6 +2051,15 @@ function registerIpc(): void {
   );
 
   ipcMain.handle(
+    "catalog:setVideoFrameDetectionIgnored",
+    (_event, mediaId: number, timestampMs: number, kind: "person" | "pet",
+      detectionIndex: number, ignored: boolean) =>
+      catalog!.request("setVideoFrameDetectionIgnored", {
+        mediaId, timestampMs, kind, detectionIndex, ignored
+      })
+  );
+
+  ipcMain.handle(
     "catalog:setVideoPetDetectionIgnored",
     (_event, mediaId: number, timestampMs: number, detectionIndex: number, ignored: boolean) =>
       catalog!.request("setVideoPetDetectionIgnored", {
@@ -2764,6 +2774,15 @@ function registerIpc(): void {
         summaryOnly
       );
     }
+  );
+
+  ipcMain.handle(
+    "catalog:listVideoIdentityFrameReview",
+    (_event, mediaId: number, kind: "person" | "pet", offset = 0, limit = 24
+    ): Promise<VideoIdentityFrameReviewPage> =>
+      catalog!.request<VideoIdentityFrameReviewPage>("listVideoIdentityFrameReview", {
+        mediaId, kind, offset, limit
+      })
   );
 
   ipcMain.handle(
