@@ -61,6 +61,8 @@ import type {
   SplitPetCandidateResult,
   AssignPetSelectionResult,
   PersonOverview,
+  PersonRecord,
+  PetRecord,
   PetCropInfo,
   PetOverview,
   VideoPetReviewPage,
@@ -2614,6 +2616,104 @@ function registerIpc(): void {
         true,
         true,
         summaryOnly
+      );
+    }
+  );
+
+  // Read-only identity browser: never load candidate groups, ungrouped
+  // detections, statistics or trigger recognition just to show confirmed names.
+  ipcMain.handle(
+    "people:listConfirmed",
+    async (): Promise<PersonRecord[]> => {
+      const sources = await catalog!.request<SourceRecord[]>("listSources");
+      const byId = new Map<number, PersonRecord>();
+      for (const source of sources) {
+        if (!source.enabled) continue;
+        const records = await catalog!.request<PersonRecord[]>(
+          "listPersons", { sourceId: source.id }
+        );
+        for (const person of records) {
+          const previous = byId.get(person.id);
+          if (!previous) {
+            byId.set(person.id, {
+              ...person, faces: [...person.faces], videoHits: [...person.videoHits]
+            });
+            continue;
+          }
+          previous.faceCount += person.faceCount;
+          if (previous.representativeFaceId === null) {
+            previous.representativeFaceId = person.representativeFaceId;
+          }
+          const faces = new Set(previous.faces.map(face => face.faceDetectionId));
+          for (const face of person.faces) {
+            if (!faces.has(face.faceDetectionId)) {
+              previous.faces.push(face);
+              faces.add(face.faceDetectionId);
+            }
+          }
+          const hits = new Set(previous.videoHits.map(hit =>
+            [hit.mediaId, hit.startMs, hit.endMs].join(":")
+          ));
+          for (const hit of person.videoHits) {
+            const key = [hit.mediaId, hit.startMs, hit.endMs].join(":");
+            if (!hits.has(key)) {
+              previous.videoHits.push(hit);
+              hits.add(key);
+            }
+          }
+        }
+      }
+      return [...byId.values()].sort((a, b) =>
+        a.name.localeCompare(b.name, "de", { sensitivity: "base" })
+      );
+    }
+  );
+
+  ipcMain.handle(
+    "pets:listConfirmed",
+    async (): Promise<PetRecord[]> => {
+      const sources = await catalog!.request<SourceRecord[]>("listSources");
+      const byId = new Map<number, PetRecord>();
+      for (const source of sources) {
+        if (!source.enabled) continue;
+        const records = await catalog!.request<PetRecord[]>(
+          "listPets", { sourceId: source.id }
+        );
+        for (const pet of records) {
+          const previous = byId.get(pet.id);
+          if (!previous) {
+            byId.set(pet.id, {
+              ...pet, pets: [...pet.pets], videoHits: [...pet.videoHits]
+            });
+            continue;
+          }
+          previous.detectionCount += pet.detectionCount;
+          previous.confirmedCount += pet.confirmedCount;
+          previous.automaticCount += pet.automaticCount;
+          if (previous.representativePetId === null) {
+            previous.representativePetId = pet.representativePetId;
+          }
+          const detections = new Set(previous.pets.map(item => item.petDetectionId));
+          for (const item of pet.pets) {
+            if (!detections.has(item.petDetectionId)) {
+              previous.pets.push(item);
+              detections.add(item.petDetectionId);
+            }
+          }
+          const hits = new Set(previous.videoHits.map(hit =>
+            [hit.mediaId, hit.startMs, hit.endMs].join(":")
+          ));
+          for (const hit of pet.videoHits) {
+            const key = [hit.mediaId, hit.startMs, hit.endMs].join(":");
+            if (!hits.has(key)) {
+              previous.videoHits.push(hit);
+              hits.add(key);
+            }
+          }
+        }
+      }
+      return [...byId.values()].sort((a, b) =>
+        a.name.localeCompare(b.name, "de", { sensitivity: "base" })
       );
     }
   );
