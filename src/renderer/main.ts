@@ -345,6 +345,7 @@ function showTableLoading(text = "Medien werden geladen …"): void {
 }
 
 let identityBrowserSelectionToken = 0;
+let identityBrowserLoadToken = 0;
 let scanning = false;
 let restoring = false;
 let resetting = false;
@@ -2099,7 +2100,7 @@ async function selectIdentityBrowserEntry(
 }
 
 async function loadIdentityBrowser(): Promise<void> {
-  const sourceId = selectedSourceId() ?? 0;
+  const request = ++identityBrowserLoadToken;
   identityBrowserPeopleTab.classList.toggle("active", identityBrowserMode === "people");
   identityBrowserPetsTab.classList.toggle("active", identityBrowserMode === "pets");
   renderIdentityMediaFilterState();
@@ -2114,8 +2115,13 @@ async function loadIdentityBrowser(): Promise<void> {
   identityBrowserRefs = [];
   identityBrowserActiveTerm = null;
 
+  try {
   if (identityBrowserMode === "people") {
-    const overview = await window.imageSorter.people.getOverview(sourceId, false, 10, 0, false);
+    // The browser only needs confirmed names and their media, not clustering,
+    // unconfirmed candidate groups or a full pipeline/statistics overview.
+    const overview = { persons: await window.imageSorter.people.listConfirmed() };
+    if (request !== identityBrowserLoadToken) return;
+    identityBrowserList.replaceChildren();
     const entries = overview.persons.map((person) => {
       const refs: IdentityBrowserMediaRef[] = [
         ...person.faces.map((face) => ({
@@ -2191,7 +2197,9 @@ async function loadIdentityBrowser(): Promise<void> {
     return;
   }
 
-  const overview = await window.imageSorter.pets.getOverview(sourceId, false, 10, 0, false);
+  const overview = { pets: await window.imageSorter.pets.listConfirmed() };
+  if (request !== identityBrowserLoadToken) return;
+  identityBrowserList.replaceChildren();
   const entries = overview.pets.map((pet) => {
     const refs: IdentityBrowserMediaRef[] = [
       ...pet.pets.map((item) => ({
@@ -2265,6 +2273,18 @@ async function loadIdentityBrowser(): Promise<void> {
     });
 
     identityBrowserList.appendChild(button);
+  }
+  } catch (error) {
+    if (request !== identityBrowserLoadToken) return;
+    const failure = document.createElement("div");
+    failure.className = "identity-browser-empty";
+    failure.setAttribute("role", "alert");
+    failure.textContent = "Identitäten konnten nicht geladen werden: " +
+      (error instanceof Error ? error.message : String(error)) +
+      ". Bitte die Ansicht erneut öffnen.";
+    identityBrowserList.replaceChildren(failure);
+    identityBrowserCount.textContent = "–";
+    throw error;
   }
 }
 
@@ -9720,6 +9740,7 @@ const workspacePages = Array.from(
 );
 
 async function showAppPage(page: string): Promise<void> {
+  if (page !== "identities") identityBrowserLoadToken++;
   for (const item of appNavItems) {
     item.classList.toggle("active", item.dataset.appPage === page);
   }
