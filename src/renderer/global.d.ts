@@ -40,6 +40,8 @@ import type {
   SplitPetCandidateResult,
   AssignPetSelectionResult,
   PersonOverview,
+  PersonRecord,
+  PetRecord,
   PetOverview,
   VideoPetReviewPage,
   VideoIdentityPresencePage,
@@ -107,6 +109,7 @@ declare global {
         onPipelineStatus(listener: (status: PipelineStatus) => void): () => void;
       };
       people: {
+        listConfirmed(): Promise<PersonRecord[]>;
         listIgnored(offset?: number, limit?: number): Promise<IgnoredPersonReviewPage>;
         restoreIgnored(id: number): Promise<RestoreIgnoredPersonResult>;
         getOverview(
@@ -167,6 +170,7 @@ declare global {
         onUpdated(listener: () => void): () => void;
       };
       pets: {
+        listConfirmed(): Promise<PetRecord[]>;
         getOverview(
           sourceId: number,
           forceRefresh?: boolean,
