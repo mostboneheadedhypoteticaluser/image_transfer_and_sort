@@ -41,6 +41,8 @@ import type {
   SplitPetCandidateResult,
   AssignPetSelectionResult,
   PersonOverview,
+  PersonRecord,
+  PetRecord,
   PetOverview,
   VideoPetReviewPage,
   VideoIdentityPresencePage,
@@ -159,6 +161,8 @@ const api = {
     }
   },
   people: {
+    listConfirmed: (): Promise<PersonRecord[]> =>
+      ipcRenderer.invoke("people:listConfirmed"),
     listIgnored: (offset = 0, limit = 15): Promise<IgnoredPersonReviewPage> =>
       ipcRenderer.invoke("people:listIgnored", offset, limit),
     restoreIgnored: (id: number): Promise<RestoreIgnoredPersonResult> =>
@@ -266,6 +270,8 @@ const api = {
     }
   },
   pets: {
+    listConfirmed: (): Promise<PetRecord[]> =>
+      ipcRenderer.invoke("pets:listConfirmed"),
     getOverview: (
       sourceId: number,
       forceRefresh = false,
