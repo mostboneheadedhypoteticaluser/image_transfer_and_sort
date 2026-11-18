@@ -67,7 +67,8 @@ export class CatalogWatchService {
     private readonly onDiagnostic?: (
       event: string,
       fields?: Record<string, unknown>
-    ) => void
+    ) => void,
+    private readonly shouldDeferSafetyScan?: () => boolean
   ) {}
 
   async start(runInitialSafetyScan = true): Promise<void> {
@@ -472,6 +473,29 @@ export class CatalogWatchService {
     }
   }
 
+  private collapseWatcherAncestorPaths(paths: string[]): string[] {
+    const unique = [...new Set(paths.filter(Boolean))];
+
+    // Windows/fs.watch meldet bei einer Dateiänderung häufig zusätzlich einen
+    // übergeordneten Ordner. Ein rekursiver Abgleich dieses Ordners kann bei
+    // großen Quellen zehntausende Dateien durchlaufen und den Katalog-Worker
+    // minutenlang blockieren. Wenn im selben Batch bereits ein konkreter
+    // Nachfolgerpfad vorhanden ist, reicht dieser spezifische Pfad aus.
+    return unique.filter((candidate, candidateIndex) => {
+      return !unique.some((other, otherIndex) => {
+        if (candidateIndex === otherIndex) return false;
+
+        const relative = path.relative(candidate, other);
+        return (
+          relative !== "" &&
+          relative !== ".." &&
+          !relative.startsWith(".." + path.sep) &&
+          !path.isAbsolute(relative)
+        );
+      });
+    });
+  }
+
   private scheduleSettledChanges(source: SourceWatch, delayMs: number): void {
     source.debounceTimer = setTimeout(() => {
       source.debounceTimer = null;
@@ -498,7 +522,9 @@ export class CatalogWatchService {
 
       if (ready.length > 0) {
         const needsFullScan = ready.includes(".");
-        const concretePaths = ready.filter((item) => item !== ".");
+        const concretePaths = this.collapseWatcherAncestorPaths(
+          ready.filter((item) => item !== ".")
+        );
         this.requestChangedPaths(
           source.sourceId,
           needsFullScan ? [] : concretePaths,
@@ -715,6 +741,17 @@ export class CatalogWatchService {
     return false;
   }
 
+  private safetySweepShouldWait(): boolean {
+    if (this.hasLiveActivity()) return true;
+
+    try {
+      return this.shouldDeferSafetyScan?.() === true;
+    } catch {
+      // Eine optionale Lastprüfung darf den Watcher niemals stoppen.
+      return false;
+    }
+  }
+
   private scheduleInitialSafetySweep(delayMs: number): void {
     if (this.initialSafetyTimer) {
       clearTimeout(this.initialSafetyTimer);
@@ -724,7 +761,11 @@ export class CatalogWatchService {
       this.initialSafetyTimer = null;
       if (this.stopped) return;
 
-      if (this.hasLiveActivity()) {
+      if (this.safetySweepShouldWait()) {
+        this.onDiagnostic?.("WATCH_SAFETY_SCAN_DEFERRED", {
+          trigger: "Programmstart",
+          reason: this.hasLiveActivity() ? "watch-activity" : "analysis-backlog"
+        });
         this.scheduleInitialSafetySweep(SAFETY_IDLE_RETRY_MS);
         return;
       }
@@ -738,9 +779,15 @@ export class CatalogWatchService {
     if (this.stopped) return;
 
     // Periodische Vollscans sind reine Sicherheitsnetze. Während gerade
-    // Live-Events verarbeitet werden, würden sie nur denselben Katalog-Worker
-    // zusätzlich blockieren. Der Live-Watcher hat dann Vorrang.
-    if (this.hasLiveActivity()) return;
+    // Live-Events oder Analysejobs laufen, würden sie denselben Katalog-Worker
+    // zusätzlich blockieren. Live-Watcher und Analyse-Backlog haben Vorrang.
+    if (this.safetySweepShouldWait()) {
+      this.onDiagnostic?.("WATCH_SAFETY_SCAN_DEFERRED", {
+        trigger,
+        reason: this.hasLiveActivity() ? "watch-activity" : "analysis-backlog"
+      });
+      return;
+    }
 
     try {
       await this.syncSources();

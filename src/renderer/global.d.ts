@@ -1,5 +1,9 @@
 import type {
   AnalysisErrorRecord,
+  AnalysisErrorOverview,
+  AnalysisErrorPageFilter,
+  AnalysisErrorPage,
+  DiagnosticLogEntry,
   AnalysisWorkerStatus,
   BackgroundPauseState,
   AssignPersonSelectionResult,
@@ -23,6 +27,8 @@ import type {
   ConfirmPersonResult,
   ConfirmPetResult,
   IgnorePersonResult,
+  IgnoredPersonReviewPage,
+  RestoreIgnoredPersonResult,
   IgnorePetResult,
   DuplicateGroup,
   MediaRecord,
@@ -34,7 +40,12 @@ import type {
   SplitPetCandidateResult,
   AssignPetSelectionResult,
   PersonOverview,
+  PersonRecord,
+  PetRecord,
   PetOverview,
+  VideoPetReviewPage,
+  VideoIdentityPresencePage,
+  VideoIdentityFrameReviewPage,
   RestoreResult,
   ResetCatalogResult,
   RetryAnalysisResult,
@@ -62,6 +73,7 @@ declare global {
       analysis: {
         getStatus(): Promise<AnalysisWorkerStatus>;
         setMaxConcurrentJobs(value: number): Promise<{ maxConcurrentJobs: number }>;
+        setBoostEnabled(enabled: boolean): Promise<AnalysisWorkerStatus>;
         getPipelineStatus(sourceId?: number): Promise<PipelineStatus>;
         openDevLog(): Promise<{ opened: true; path: string }>;
         copyDevLog(): Promise<{
@@ -84,6 +96,10 @@ declare global {
           listener: (stage: QwenBenchmarkStageResult) => void
         ): () => void;
         listErrors(sourceId?: number, limit?: number): Promise<AnalysisErrorRecord[]>;
+        getErrorOverview(sourceId?: number): Promise<AnalysisErrorOverview>;
+        getErrorPage(filter: AnalysisErrorPageFilter): Promise<AnalysisErrorPage>;
+        getRecentLog(limit?: number, onlyProblems?: boolean): Promise<DiagnosticLogEntry[]>;
+        retrySample(filter: AnalysisErrorPageFilter): Promise<RetryAnalysisResult>;
         countErrors(sourceId?: number): Promise<number>;
         retryJob(jobId: number): Promise<RetryAnalysisResult>;
         retryAll(sourceId?: number): Promise<RetryAnalysisResult>;
@@ -93,7 +109,21 @@ declare global {
         onPipelineStatus(listener: (status: PipelineStatus) => void): () => void;
       };
       people: {
-        getOverview(sourceId: number, forceRefresh?: boolean): Promise<PersonOverview>;
+        listConfirmed(): Promise<PersonRecord[]>;
+        listIgnored(offset?: number, limit?: number): Promise<IgnoredPersonReviewPage>;
+        restoreIgnored(id: number): Promise<RestoreIgnoredPersonResult>;
+        getOverview(
+          sourceId: number,
+          forceRefresh?: boolean,
+          candidateLimit?: number,
+          candidateOffset?: number,
+          summaryOnly?: boolean
+        ): Promise<PersonOverview>;
+        getCandidateItems(
+          candidateId: number,
+          limit?: number,
+          offset?: number
+        ): Promise<PersonOverview["candidates"][number]["faces"]>;
         confirmCandidate(
           candidateId: number,
           name: string,
@@ -113,6 +143,10 @@ declare global {
           expectedMemberSignature?: string,
           ignoredIdentityId?: number
         ): Promise<IgnorePersonResult>;
+        rejectDetectionSuggestion(
+          faceDetectionId: number,
+          personId: number
+        ): Promise<PersonCorrectionResult>;
         removeCandidateFace(
           candidateId: number,
           faceDetectionId: number
@@ -136,7 +170,20 @@ declare global {
         onUpdated(listener: () => void): () => void;
       };
       pets: {
-        getOverview(sourceId: number, forceRefresh?: boolean): Promise<PetOverview>;
+        listConfirmed(): Promise<PetRecord[]>;
+        getOverview(
+          sourceId: number,
+          forceRefresh?: boolean,
+          candidateLimit?: number,
+          candidateOffset?: number,
+          summaryOnly?: boolean
+        ): Promise<PetOverview>;
+        listVideoReview(offset?: number, limit?: number): Promise<VideoPetReviewPage>;
+        getCandidateItems(
+          candidateId: number,
+          limit?: number,
+          offset?: number
+        ): Promise<PetOverview["candidates"][number]["pets"]>;
         confirmCandidate(
           candidateId: number,
           name: string,
@@ -152,6 +199,10 @@ declare global {
           expectedMemberSignature?: string,
           ignoredIdentityId?: number
         ): Promise<IgnorePetResult>;
+        rejectDetectionSuggestion(
+          petDetectionId: number,
+          petId: number
+        ): Promise<PetCorrectionResult>;
         removeCandidatePet(
           candidateId: number,
           petDetectionId: number
@@ -240,6 +291,16 @@ declare global {
         listDuplicateGroups(sourceId: number, limit?: number): Promise<DuplicateGroup[]>;
         listRecycleMedia(sourceId: number, limit?: number): Promise<MediaRecord[]>;
         getMediaDetails(mediaId: number): Promise<MediaDetails | null>;
+        listVideoIdentityFrameReview(
+          mediaId: number, kind: "person" | "pet", offset?: number, limit?: number
+        ): Promise<VideoIdentityFrameReviewPage>;
+        listVideoIdentityPresenceReview(
+          kind: "person" | "pet", offset?: number, limit?: number
+        ): Promise<VideoIdentityPresencePage>;
+        setVideoIdentityPresence(
+          mediaId: number, kind: "person" | "pet",
+          names: Array<{name: string; petClass: "dog" | "cat" | null}>
+        ): Promise<{mediaId: number; kind: "person" | "pet"; confirmed: number; reviewed: true}>;
         assignVideoFrameIdentityName(
           mediaId: number,
           timestampMs: number,
@@ -248,6 +309,26 @@ declare global {
           petClass: "dog" | "cat" | null,
           name: string
         ): Promise<{ identityId: number; name: string; affected: number }>;
+        assignVideoFrameIdentityNames(
+          mediaId: number,
+          assignments: Array<{
+            timestampMs: number;
+            kind: "person" | "pet";
+            detectionIndex: number;
+            petClass: "dog" | "cat" | null;
+            name: string;
+          }>,
+          skipExisting?: boolean
+        ): Promise<{ mediaId: number; affected: number; applied: Array<{
+          timestampMs: number; detectionIndex: number; kind: "person" | "pet";
+        }> }>;
+        setVideoFrameDetectionIgnored(
+          mediaId: number, timestampMs: number, kind: "person" | "pet",
+          detectionIndex: number, ignored: boolean
+        ): Promise<{mediaId: number; kind: "person" | "pet"; ignored: boolean; changed: boolean}>;
+        setVideoPetDetectionIgnored(
+          mediaId: number, timestampMs: number, detectionIndex: number, ignored: boolean
+        ): Promise<{ mediaId: number; ignored: boolean; changed: boolean }>;
         reanalyzeMedia(
           mediaId: number
         ): Promise<{ mediaId: number; sourceId: number; requeued: number; cleared: number }>;

@@ -1,6 +1,10 @@
 import { contextBridge, ipcRenderer } from "electron";
 import type {
   AnalysisErrorRecord,
+  AnalysisErrorOverview,
+  AnalysisErrorPageFilter,
+  AnalysisErrorPage,
+  DiagnosticLogEntry,
   AnalysisWorkerStatus,
   BackgroundPauseState,
   AssignPersonSelectionResult,
@@ -24,6 +28,8 @@ import type {
   ConfirmPersonResult,
   ConfirmPetResult,
   IgnorePersonResult,
+  IgnoredPersonReviewPage,
+  RestoreIgnoredPersonResult,
   IgnorePetResult,
   DuplicateGroup,
   MediaRecord,
@@ -35,7 +41,12 @@ import type {
   SplitPetCandidateResult,
   AssignPetSelectionResult,
   PersonOverview,
+  PersonRecord,
+  PetRecord,
   PetOverview,
+  VideoPetReviewPage,
+  VideoIdentityPresencePage,
+  VideoIdentityFrameReviewPage,
   RestoreResult,
   ResetCatalogResult,
   RetryAnalysisResult,
@@ -79,6 +90,8 @@ const api = {
     getStatus: (): Promise<AnalysisWorkerStatus> => ipcRenderer.invoke("analysis:getStatus"),
     setMaxConcurrentJobs: (value: number): Promise<{ maxConcurrentJobs: number }> =>
       ipcRenderer.invoke("analysis:setMaxConcurrentJobs", value),
+    setBoostEnabled: (enabled: boolean): Promise<AnalysisWorkerStatus> =>
+      ipcRenderer.invoke("analysis:setBoostEnabled", enabled),
     getPipelineStatus: (sourceId?: number): Promise<PipelineStatus> =>
       ipcRenderer.invoke("analysis:getPipelineStatus", sourceId),
     openDevLog: (): Promise<{ opened: true; path: string }> =>
@@ -118,6 +131,14 @@ const api = {
     },
     listErrors: (sourceId?: number, limit = 200): Promise<AnalysisErrorRecord[]> =>
       ipcRenderer.invoke("analysis:listErrors", sourceId, limit),
+    getErrorOverview: (sourceId?: number): Promise<AnalysisErrorOverview> =>
+      ipcRenderer.invoke("analysis:errorOverview", sourceId),
+    getErrorPage: (filter: AnalysisErrorPageFilter): Promise<AnalysisErrorPage> =>
+      ipcRenderer.invoke("analysis:errorPage", filter),
+    getRecentLog: (limit = 250, onlyProblems = false): Promise<DiagnosticLogEntry[]> =>
+      ipcRenderer.invoke("analysis:recentLog", limit, onlyProblems),
+    retrySample: (filter: AnalysisErrorPageFilter): Promise<RetryAnalysisResult> =>
+      ipcRenderer.invoke("analysis:retrySample", filter),
     countErrors: (sourceId?: number): Promise<number> =>
       ipcRenderer.invoke("analysis:countErrors", sourceId),
     retryJob: (jobId: number): Promise<RetryAnalysisResult> =>
@@ -140,8 +161,33 @@ const api = {
     }
   },
   people: {
-    getOverview: (sourceId: number, forceRefresh = false): Promise<PersonOverview> =>
-      ipcRenderer.invoke("people:getOverview", sourceId, forceRefresh),
+    listConfirmed: (): Promise<PersonRecord[]> =>
+      ipcRenderer.invoke("people:listConfirmed"),
+    listIgnored: (offset = 0, limit = 15): Promise<IgnoredPersonReviewPage> =>
+      ipcRenderer.invoke("people:listIgnored", offset, limit),
+    restoreIgnored: (id: number): Promise<RestoreIgnoredPersonResult> =>
+      ipcRenderer.invoke("people:restoreIgnored", id),
+    getOverview: (
+      sourceId: number,
+      forceRefresh = false,
+      candidateLimit = 10,
+      candidateOffset = 0,
+      summaryOnly = true
+    ): Promise<PersonOverview> =>
+      ipcRenderer.invoke(
+        "people:getOverview",
+        sourceId,
+        forceRefresh,
+        candidateLimit,
+        candidateOffset,
+        summaryOnly
+      ),
+    getCandidateItems: (
+      candidateId: number,
+      limit = 5000,
+      offset = 0
+    ): Promise<PersonOverview["candidates"][number]["faces"]> =>
+      ipcRenderer.invoke("people:getCandidateItems", candidateId, limit, offset),
     confirmCandidate: (
       candidateId: number,
       name: string,
@@ -183,6 +229,15 @@ const api = {
         expectedMemberSignature,
         ignoredIdentityId
       ),
+    rejectDetectionSuggestion: (
+      faceDetectionId: number,
+      personId: number
+    ): Promise<PersonCorrectionResult> =>
+      ipcRenderer.invoke(
+        "people:rejectDetectionSuggestion",
+        faceDetectionId,
+        personId
+      ),
     removeCandidateFace: (
       candidateId: number,
       faceDetectionId: number
@@ -215,8 +270,31 @@ const api = {
     }
   },
   pets: {
-    getOverview: (sourceId: number, forceRefresh = false): Promise<PetOverview> =>
-      ipcRenderer.invoke("pets:getOverview", sourceId, forceRefresh),
+    listConfirmed: (): Promise<PetRecord[]> =>
+      ipcRenderer.invoke("pets:listConfirmed"),
+    getOverview: (
+      sourceId: number,
+      forceRefresh = false,
+      candidateLimit = 10,
+      candidateOffset = 0,
+      summaryOnly = true
+    ): Promise<PetOverview> =>
+      ipcRenderer.invoke(
+        "pets:getOverview",
+        sourceId,
+        forceRefresh,
+        candidateLimit,
+        candidateOffset,
+        summaryOnly
+      ),
+    listVideoReview: (offset = 0, limit = 24): Promise<VideoPetReviewPage> =>
+      ipcRenderer.invoke("pets:listVideoReview", offset, limit),
+    getCandidateItems: (
+      candidateId: number,
+      limit = 5000,
+      offset = 0
+    ): Promise<PetOverview["candidates"][number]["pets"]> =>
+      ipcRenderer.invoke("pets:getCandidateItems", candidateId, limit, offset),
     confirmCandidate: (
       candidateId: number,
       name: string,
@@ -248,6 +326,15 @@ const api = {
         expectedDetectionCount,
         expectedMemberSignature,
         ignoredIdentityId
+      ),
+    rejectDetectionSuggestion: (
+      petDetectionId: number,
+      petId: number
+    ): Promise<PetCorrectionResult> =>
+      ipcRenderer.invoke(
+        "pets:rejectDetectionSuggestion",
+        petDetectionId,
+        petId
       ),
     removeCandidatePet: (
       candidateId: number,
@@ -384,6 +471,19 @@ const api = {
       ipcRenderer.invoke("catalog:listRecycleMedia", sourceId, limit),
     getMediaDetails: (mediaId: number): Promise<MediaDetails | null> =>
       ipcRenderer.invoke("catalog:getMediaDetails", mediaId),
+    listVideoIdentityFrameReview: (
+      mediaId: number, kind: "person" | "pet", offset = 0, limit = 24
+    ): Promise<VideoIdentityFrameReviewPage> =>
+      ipcRenderer.invoke("catalog:listVideoIdentityFrameReview", mediaId, kind, offset, limit),
+    listVideoIdentityPresenceReview: (
+      kind: "person" | "pet", offset = 0, limit = 6
+    ): Promise<VideoIdentityPresencePage> =>
+      ipcRenderer.invoke("catalog:listVideoIdentityPresenceReview", kind, offset, limit),
+    setVideoIdentityPresence: (
+      mediaId: number, kind: "person" | "pet",
+      names: Array<{name: string; petClass: "dog" | "cat" | null}>
+    ): Promise<{mediaId: number; kind: "person" | "pet"; confirmed: number; reviewed: true}> =>
+      ipcRenderer.invoke("catalog:setVideoIdentityPresence", mediaId, kind, names),
     assignVideoFrameIdentityName: (
       mediaId: number,
       timestampMs: number,
@@ -400,6 +500,38 @@ const api = {
         detectionIndex,
         petClass,
         name
+      ),
+    assignVideoFrameIdentityNames: (
+      mediaId: number,
+      assignments: Array<{
+        timestampMs: number;
+        kind: "person" | "pet";
+        detectionIndex: number;
+        petClass: "dog" | "cat" | null;
+        name: string;
+      }>,
+      skipExisting = false
+    ): Promise<{ mediaId: number; affected: number; applied: Array<{
+      timestampMs: number; detectionIndex: number; kind: "person" | "pet";
+    }> }> =>
+      ipcRenderer.invoke(
+        "catalog:assignVideoFrameIdentityNames",
+        mediaId,
+        assignments,
+        skipExisting
+      ),
+    setVideoFrameDetectionIgnored: (
+      mediaId: number, timestampMs: number, kind: "person" | "pet",
+      detectionIndex: number, ignored: boolean
+    ): Promise<{mediaId: number; kind: "person" | "pet"; ignored: boolean; changed: boolean}> =>
+      ipcRenderer.invoke("catalog:setVideoFrameDetectionIgnored",
+        mediaId,timestampMs,kind,detectionIndex,ignored),
+    setVideoPetDetectionIgnored: (
+      mediaId: number, timestampMs: number, detectionIndex: number, ignored: boolean
+    ): Promise<{ mediaId: number; ignored: boolean; changed: boolean }> =>
+      ipcRenderer.invoke(
+        "catalog:setVideoPetDetectionIgnored",
+        mediaId, timestampMs, detectionIndex, ignored
       ),
     reanalyzeMedia: (
       mediaId: number

@@ -16,6 +16,7 @@ export class ThumbnailCoordinator {
   private shutdownRequested = false;
   private userPaused = false;
   private activeJobs = 0;
+  private readonly activeMediaJobs = new Map<number, number>();
 
   constructor(
     private readonly catalog: CatalogService,
@@ -83,6 +84,27 @@ export class ThumbnailCoordinator {
     });
   }
 
+  async waitUntilClaimsSettled(timeoutMs = 10000): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    while (this.pumping && Date.now() < deadline) {
+      await new Promise<void>((resolve) => setTimeout(resolve, 50));
+    }
+    if (this.pumping) throw new Error("Thumbnail-Queue konnte nicht pausiert werden.");
+  }
+
+  async waitForMediaIdle(mediaId: number, timeoutMs = 15000): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    while (
+      (this.pumping || (this.activeMediaJobs.get(mediaId) ?? 0) > 0) &&
+      Date.now() < deadline
+    ) {
+      await new Promise<void>((resolve) => setTimeout(resolve, 50));
+    }
+    if (this.pumping || (this.activeMediaJobs.get(mediaId) ?? 0) > 0) {
+      throw new Error("Thumbnail-Erzeugung für dieses Medium ist noch aktiv.");
+    }
+  }
+
   async waitUntilIdle(timeoutMs = 15000): Promise<void> {
     const deadline = Date.now() + timeoutMs;
     while (
@@ -126,9 +148,13 @@ export class ThumbnailCoordinator {
 
   private launchJob(job: AnalysisJob): void {
     this.activeJobs += 1;
+    this.activeMediaJobs.set(job.mediaId, (this.activeMediaJobs.get(job.mediaId) ?? 0) + 1);
 
     void this.runJob(job).finally(() => {
       this.activeJobs = Math.max(0, this.activeJobs - 1);
+      const remaining = (this.activeMediaJobs.get(job.mediaId) ?? 1) - 1;
+      if (remaining > 0) this.activeMediaJobs.set(job.mediaId, remaining);
+      else this.activeMediaJobs.delete(job.mediaId);
 
       if (!this.stopped && !this.userPaused) {
         void this.pump();

@@ -6,6 +6,64 @@ import sharp from "sharp";
 
 export const VIDEO_FRAME_CACHE_LIMIT_BYTES = 500 * 1024 * 1024;
 
+export type VideoDetectionCrop = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  frameWidth: number;
+  frameHeight: number;
+};
+
+/** Coordinates are from the analyzed frame, not the resized JPEG. */
+export function parseVideoDetectionCrop(value: string | null): VideoDetectionCrop | null {
+  if (value === null) return null;
+  const parts = value.split(",");
+  if (parts.length !== 6) throw new Error("Ungültiger Tier-Ausschnitt.");
+  const [x, y, width, height, frameWidth, frameHeight] = parts.map(Number);
+  if ([x, y, width, height, frameWidth, frameHeight].some(
+    (part) => !Number.isFinite(part) || Math.abs(part) > 100000
+  ) || width <= 0 || height <= 0 || frameWidth <= 0 || frameHeight <= 0 ||
+      x >= frameWidth || y >= frameHeight || x + width <= 0 || y + height <= 0) {
+    throw new Error("Erkennungsrechteck liegt außerhalb des Video-Frames.");
+  }
+  return { x, y, width, height, frameWidth, frameHeight };
+}
+
+/** No cropped JPEG is persisted: derive it on demand from the verified frame. */
+export async function cropVideoDetectionJpeg(
+  jpeg: Buffer,
+  crop: VideoDetectionCrop
+): Promise<Buffer> {
+  const metadata = await sharp(jpeg).metadata();
+  const imageWidth = metadata.width;
+  const imageHeight = metadata.height;
+  if (!imageWidth || !imageHeight) throw new Error("Szenenbild hat keine gültigen Abmessungen.");
+
+  const padX = Math.max(6, crop.width * 0.10);
+  const padY = Math.max(6, crop.height * 0.10);
+  const x0 = Math.max(0, Math.min(crop.frameWidth, crop.x - padX));
+  const y0 = Math.max(0, Math.min(crop.frameHeight, crop.y - padY));
+  const x1 = Math.max(0, Math.min(crop.frameWidth, crop.x + crop.width + padX));
+  const y1 = Math.max(0, Math.min(crop.frameHeight, crop.y + crop.height + padY));
+  if (x1 <= x0 || y1 <= y0) throw new Error("Erkennungsrechteck ist leer.");
+
+  const left = Math.max(0, Math.min(imageWidth - 1,
+    Math.floor(x0 * imageWidth / crop.frameWidth)));
+  const top = Math.max(0, Math.min(imageHeight - 1,
+    Math.floor(y0 * imageHeight / crop.frameHeight)));
+  const right = Math.max(left + 1, Math.min(imageWidth,
+    Math.ceil(x1 * imageWidth / crop.frameWidth)));
+  const bottom = Math.max(top + 1, Math.min(imageHeight,
+    Math.ceil(y1 * imageHeight / crop.frameHeight)));
+
+  return sharp(jpeg)
+    .extract({ left, top, width: right - left, height: bottom - top })
+    .resize({ width: 360, height: 260, fit: "inside", withoutEnlargement: true })
+    .jpeg({ quality: 85 })
+    .toBuffer();
+}
+
 type CacheFile = { filePath: string; bytes: number; usedAt: number };
 const inFlight = new Map<string, Promise<Buffer>>();
 const protectedFiles = new Set<string>();

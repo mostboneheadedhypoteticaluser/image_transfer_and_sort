@@ -45,7 +45,11 @@ export class PersonService {
     sourceId: number,
     forceRefresh = false,
     allowWhilePending = false,
-    rebuildIfNeeded = true
+    rebuildIfNeeded = true,
+    candidateLimit = 500,
+    includeSupporting = true,
+    readOnly = false,
+    summaryOnly = false
   ): Promise<PersonOverview> {
     const queue = await this.catalog.request<AnalysisQueueStats>(
       "getAnalysisQueueStats",
@@ -58,6 +62,7 @@ export class PersonService {
     const clusteringPending = queue.pending > 0 || queue.running > 0;
 
     if (
+      !readOnly &&
       (!clusteringPending || allowWhilePending) &&
       this.analysis.getStatus().state === "READY"
     ) {
@@ -85,7 +90,7 @@ export class PersonService {
             verificationThreshold: VERIFICATION_THRESHOLD,
             minClusterSize: 2
           },
-          120000
+          600000
         );
 
         const replaced =
@@ -128,23 +133,66 @@ export class PersonService {
     // Kandidaten zuerst laden: listPersonCandidates darf dabei eindeutige
     // Treffer gegen die dauerhafte Ignore-Liste automatisch ausblenden.
     // Die danach gelesenen Summen entsprechen dadurch exakt der sichtbaren Ansicht.
+    const normalizedCandidateLimit = Math.max(
+      1,
+      Math.min(2000, Math.trunc(candidateLimit || 500))
+    );
     const candidates = await this.catalog.request<PersonCandidate[]>(
       "listPersonCandidates",
       {
         sourceId,
-        limit: 500,
+        limit: normalizedCandidateLimit,
         ignoreDefiniteThreshold: CLUSTER_THRESHOLD,
-        ignoreDoubtThreshold: VERIFICATION_THRESHOLD
+        ignoreDoubtThreshold: VERIFICATION_THRESHOLD,
+        summaryOnly
       }
     );
-    const [persons, stats] = await Promise.all([
-      this.catalog.request<PersonRecord[]>("listPersons", { sourceId }),
-      this.catalog.request<CatalogStats>("getStats", { sourceId })
+    if (summaryOnly) {
+      // Nur Namen, Zähler und repräsentative Vorschau laden. Damit bleiben
+      // Autovervollständigung und vorhandene Identitäten verfügbar, ohne die
+      // vollständigen Personen-Medienlisten wieder aufzubauen.
+      const [stats, persons] = await Promise.all([
+        this.catalog.request<{
+          personCandidates: number;
+          personCandidateFaces: number;
+        }>("getIdentityCandidateSummaryStats", { sourceId }),
+        includeSupporting
+          ? this.catalog.request<PersonRecord[]>("listPersons", {
+              sourceId,
+              summaryOnly: true
+            })
+          : Promise.resolve([] as PersonRecord[])
+      ]);
+
+      return {
+        summaryOnly: true,
+        candidates,
+        persons,
+        ungroupedFaces: [],
+        clusteringPending,
+        candidateTotal: stats.personCandidates,
+        candidateFaceTotal: stats.personCandidateFaces,
+        ungroupedFaceTotal: 0
+      };
+    }
+
+    const [persons, stats, ungroupedFaces] = await Promise.all([
+      includeSupporting
+        ? this.catalog.request<PersonRecord[]>("listPersons", { sourceId })
+        : Promise.resolve([] as PersonRecord[]),
+      this.catalog.request<CatalogStats>("getStats", { sourceId }),
+      includeSupporting
+        ? this.catalog.request<PersonOverview["ungroupedFaces"]>(
+            "listUngroupedPersonDetections",
+            { sourceId, limit: 1000 }
+          )
+        : Promise.resolve([] as PersonOverview["ungroupedFaces"])
     ]);
 
     return {
       candidates,
       persons,
+      ungroupedFaces,
       clusteringPending,
       candidateTotal: stats.personCandidates,
       candidateFaceTotal: stats.personCandidateFaces,
@@ -155,7 +203,14 @@ export class PersonService {
     };
   }
 
-  async getCombinedOverview(forceRefresh = false): Promise<PersonOverview> {
+  async getCombinedOverview(
+    forceRefresh = false,
+    candidateLimit = 500,
+    candidateOffset = 0,
+    includeSupporting = true,
+    readOnly = false,
+    summaryOnly = false
+  ): Promise<PersonOverview> {
     const sources = await this.catalog.request<Array<{
       id: number;
       path: string;
@@ -163,13 +218,32 @@ export class PersonService {
     }>>("listSources");
     const enabledSources = sources.filter((source) => source.enabled);
 
+    const normalizedLimit = Math.max(
+      1,
+      Math.min(100, Math.trunc(candidateLimit || 10))
+    );
+    const normalizedOffset = Math.max(0, Math.trunc(candidateOffset || 0));
+    // Für eine global korrekt sortierte Seite brauchen wir aus jeder Quelle
+    // höchstens die ersten offset+limit Gruppen. So lädt Seite 1 bei 10er-
+    // Pagination nur 10 statt bisher 500 vollständige Gruppen pro Quelle.
+    const sourceWindow = Math.min(2000, normalizedOffset + normalizedLimit);
+
     const overviews: PersonOverview[] = [];
     for (const source of enabledSources) {
       // Normales Öffnen der Bestätigungsansicht ist read-only und darf nicht
       // spontan ein minutenlanges Re-Clustering auslösen. Ein explizites
       // Aktualisieren darf dagegen neu gruppieren.
       overviews.push(
-        await this.getOverview(source.id, forceRefresh, false, forceRefresh)
+        await this.getOverview(
+          source.id,
+          forceRefresh,
+          false,
+          forceRefresh,
+          sourceWindow,
+          includeSupporting,
+          readOnly,
+          summaryOnly
+        )
       );
     }
 
@@ -224,13 +298,18 @@ export class PersonService {
           b.averageSimilarity - a.averageSimilarity ||
           b.newestFaceId - a.newestFaceId
       )
-      .slice(0, 500);
+      .slice(normalizedOffset, normalizedOffset + normalizedLimit);
 
     return {
+      summaryOnly,
       candidates,
       persons: [...personMap.values()].sort(
         (a, b) => a.name.localeCompare(b.name, "de", { sensitivity: "base" })
       ),
+      ungroupedFaces: overviews
+        .flatMap((overview) => overview.ungroupedFaces)
+        .sort((a, b) => b.faceDetectionId - a.faceDetectionId)
+        .slice(0, 4000),
       clusteringPending: overviews.some((overview) => overview.clusteringPending),
       candidateTotal: overviews.reduce(
         (sum, overview) => sum + overview.candidateTotal,
@@ -258,6 +337,17 @@ export class PersonService {
       if (!source.enabled) continue;
       await this.getOverview(source.id, incremental, incremental);
     }
+  }
+
+  async listCandidateItems(
+    candidateId: number,
+    limit = 5000,
+    offset = 0
+  ): Promise<PersonCandidate["faces"]> {
+    return this.catalog.request<PersonCandidate["faces"]>(
+      "listPersonCandidateItems",
+      { candidateId, limit, offset }
+    );
   }
 
   async confirmCandidate(
@@ -306,6 +396,16 @@ export class PersonService {
         expectedMemberSignature,
         ignoredIdentityId
       }
+    );
+  }
+
+  async rejectDetectionSuggestion(
+    faceDetectionId: number,
+    personId: number
+  ): Promise<PersonCorrectionResult> {
+    return this.catalog.request<PersonCorrectionResult>(
+      "rejectPersonDetectionSuggestion",
+      { faceDetectionId, personId }
     );
   }
 

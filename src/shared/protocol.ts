@@ -10,7 +10,9 @@ export type AnalysisWorkerStatus = {
   state: "STARTING" | "READY" | "STOPPED" | "ERROR";
   pid: number | null;
   python: string | null;
-  processPriority: "below-normal";
+  processPriority: "below-normal" | "high";
+  boostEnabled: boolean;
+  identityGrouping: "none" | "people" | "pets" | "both";
   cpuBudgetPercent: number;
   maxConcurrentJobs: number;
   queuedJobs: number;
@@ -155,6 +157,45 @@ export type AnalysisErrorRecord = {
   finishedAt: string | null;
 };
 
+export type AnalysisErrorCause =
+  | "UNAVAILABLE" | "DEPENDENCY" | "HEIC" | "LARGE_IMAGE"
+  | "TIMEOUT" | "FORMAT" | "DECODE" | "OTHER";
+
+export type AnalysisErrorOverview = {
+  totalJobs: number;
+  mediaCount: number;
+  dependentJobs: number;
+  unavailableJobs: number;
+  groups: Array<{
+    module: string;
+    cause: AnalysisErrorCause;
+    count: number;
+    mediaCount: number;
+    example: string;
+  }>;
+};
+
+export type AnalysisErrorPageFilter = {
+  sourceId?: number;
+  module?: string;
+  cause?: AnalysisErrorCause | "";
+  search?: string;
+  limit?: number;
+  offset?: number;
+};
+
+export type AnalysisErrorPage = {
+  total: number;
+  items: Array<AnalysisErrorRecord & { cause: AnalysisErrorCause }>;
+};
+
+export type DiagnosticLogEntry = {
+  ts: string;
+  source: string;
+  event: string;
+  detail: string;
+};
+
 export type RetryAnalysisResult = {
   retried: number;
 };
@@ -251,6 +292,8 @@ export type GeoMediaPoint = {
   mediaId: number;
   sourceId: number;
   relativePath: string;
+  extension: string;
+  sizeBytes: number;
   latitude: number;
   longitude: number;
   capturedAt: string | null;
@@ -423,6 +466,18 @@ export type PetCandidateItem = {
   suggestedPets: PetMatchSuggestion[];
 };
 
+export type PetUngroupedItem = {
+  petDetectionId: number;
+  mediaId: number;
+  relativePath: string;
+  petClass: "dog" | "cat";
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  suggestedPets: PetMatchSuggestion[];
+};
+
 export type PetMatchSuggestion = {
   petId: number;
   petName: string;
@@ -473,9 +528,109 @@ export type PetRecord = {
   }>;
 };
 
+export type VideoIdentityPresenceName = {
+  name: string;
+  petClass: "dog" | "cat" | null;
+};
+
+export type VideoIdentityPresenceExample = {
+  timestampMs: number;
+  frameIndex: number | null;
+  frameHash: string | null;
+  score: number;
+  similarity: number | null;
+  name: string | null;
+  identityId: number | null;
+  petClass: "dog" | "cat" | null;
+  bounds: {
+    x: number; y: number; width: number; height: number;
+    frameWidth: number; frameHeight: number;
+  };
+};
+
+export type VideoIdentityPresencePage = {
+  total: number;
+  totalVideos: number;
+  indexedVideos: number;
+  indexComplete: boolean;
+  items: Array<{
+    mediaId: number;
+    relativePath: string;
+    durationMs: number;
+    detectedCount: number;
+    reviewed: boolean;
+    confirmed: VideoIdentityPresenceName[];
+    examples: VideoIdentityPresenceExample[];
+  }>;
+};
+
+export type VideoIdentityFrameReviewPage = {
+  mediaId: number;
+  kind: "person" | "pet";
+  total: number;
+  open: number;
+  confirmed: number;
+  ignored: number;
+  offset: number;
+  limit: number;
+  items: Array<{
+    timestampMs: number;
+    frameIndex: number | null;
+    frameHash: string | null;
+    detectionIndex: number;
+    petClass: "dog" | "cat" | null;
+    score: number;
+    bounds: VideoIdentityPresenceExample["bounds"] | null;
+    suggestions: Array<{
+      identityId: number;
+      name: string;
+      similarity: number;
+    }>;
+    state: "open" | "confirmed" | "ignored";
+    assignedName: string | null;
+  }>;
+};
+
+export type VideoPetReviewItem = {
+  mediaId: number;
+  relativePath: string;
+  timestampMs: number;
+  frameIndex: number | null;
+  frameHash: string | null;
+  detectionIndex: number;
+  petClass: "dog" | "cat";
+  score: number;
+  suggestedPetId: number | null;
+  suggestedPetName: string | null;
+  similarity: number | null;
+  /** Bounding box in pixel coordinates of the analyzed video frame. */
+  bounds: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    frameWidth: number;
+    frameHeight: number;
+  } | null;
+};
+
+export type VideoPetReviewPage = {
+  /** Anzahl Videos mit unbestätigten Haustierfundstellen; eine Gruppe je Video. */
+  total: number;
+  /** Anzahl sämtlicher unbestätigter Fundstellen in diesen Videos. */
+  totalFindings: number;
+  /** Nur Videos mit abgeschlossener Analyse und gültigem Quelldatei-Hash. */
+  indexedVideos: number;
+  totalVideos: number;
+  indexComplete: boolean;
+  items: VideoPetReviewItem[];
+};
+
 export type PetOverview = {
+  summaryOnly?: boolean;
   candidates: PetCandidate[];
   pets: PetRecord[];
+  ungroupedPets: PetUngroupedItem[];
   clusteringPending: boolean;
   candidateTotal: number;
   candidateDetectionTotal: number;
@@ -578,6 +733,17 @@ export type PersonCandidateFace = {
   suggestedPersons: PersonMatchSuggestion[];
 };
 
+export type PersonUngroupedFace = {
+  faceDetectionId: number;
+  mediaId: number;
+  relativePath: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  suggestedPersons: PersonMatchSuggestion[];
+};
+
 export type PersonMatchSuggestion = {
   personId: number;
   personName: string;
@@ -623,8 +789,10 @@ export type PersonRecord = {
 };
 
 export type PersonOverview = {
+  summaryOnly?: boolean;
   candidates: PersonCandidate[];
   persons: PersonRecord[];
+  ungroupedFaces: PersonUngroupedFace[];
   clusteringPending: boolean;
   candidateTotal: number;
   candidateFaceTotal: number;
@@ -641,6 +809,24 @@ export type IgnorePersonResult = {
   ignoredIdentityId: number;
   faceCount: number;
   extendedExisting: boolean;
+};
+
+/** Ignored face identities can be visually reviewed before selective restoration. */
+export type IgnoredPersonReviewPage = {
+  total: number;
+  items: Array<{
+    id: number;
+    createdAt: string;
+    referenceCount: number;
+    matchCount: number;
+    originalMatchCount: number;
+    examples: Array<{ faceDetectionId: number; relativePath: string }>;
+  }>;
+};
+
+export type RestoreIgnoredPersonResult = {
+  restored: true;
+  affectedMatches: number;
 };
 
 export type PersonCorrectionResult = {
@@ -761,6 +947,8 @@ export type MediaRecord = {
   thumbnailReady: boolean;
   thumbnailVersion: string | null;
   capturedAt: string | null;
+  /** Neuester erfolgreicher Analysejob für den aktuellen Datei-SHA. */
+  lastAnalyzedAt: string | null;
   faceCount: number;
   faceEmbeddingCount: number;
   petCount: number;
@@ -980,6 +1168,8 @@ export type CatalogMethod =
   | "addSource"
   | "disableSource"
   | "getStats"
+  | "getIdentityCandidateSummaryStats"
+  | "getRemoteSummary"
   | "listMedia"
   | "listGeoMedia"
   | "listLifeAreas"
@@ -999,10 +1189,14 @@ export type CatalogMethod =
   | "enqueueAnalysisJobs"
   | "getAnalysisQueueStats"
   | "getPipelineQueueStats"
+  | "getAnalysisHistory"
   | "getPetDetectionQueueStats"
   | "getIdentityEmbeddingCounts"
   | "listAnalysisErrors"
   | "countAnalysisErrors"
+  | "getAnalysisErrorOverview"
+  | "listAnalysisErrorPage"
+  | "retryErrorSample"
   | "retryAnalysisJob"
   | "retryFailedAnalysisJobs"
   | "claimAnalysisJob"
@@ -1026,8 +1220,16 @@ export type CatalogMethod =
   | "getPetEmbeddingsForClustering"
   | "replacePetCandidates"
   | "autoAssignKnownPetCandidates"
+  | "listUngroupedPetDetections"
+  | "rejectPetDetectionSuggestion"
   | "listPetCandidates"
+  | "listPetCandidateItems"
   | "listPets"
+  | "listVideoPetReview"
+  | "listVideoIdentityFrameReview"
+  | "setVideoFrameDetectionIgnored"
+  | "listVideoIdentityPresenceReview"
+  | "setVideoIdentityPresence"
   | "confirmPetCandidate"
   | "ignorePetCandidate"
   | "removePetFromCandidate"
@@ -1041,7 +1243,12 @@ export type CatalogMethod =
   | "getPetCropInfo"
   | "getFaceEmbeddingsForClustering"
   | "replacePersonCandidates"
+  | "listUngroupedPersonDetections"
+  | "rejectPersonDetectionSuggestion"
   | "listPersonCandidates"
+  | "listIgnoredPersonIdentities"
+  | "restoreIgnoredPersonIdentity"
+  | "listPersonCandidateItems"
   | "listPersons"
   | "confirmPersonCandidate"
   | "assignPersonCandidateSelection"
@@ -1056,6 +1263,8 @@ export type CatalogMethod =
   | "getMediaPreviewInfo"
   | "getMediaDetails"
   | "assignVideoFrameIdentityName"
+  | "assignVideoFrameIdentityNames"
+  | "setVideoPetDetectionIgnored"
   | "reanalyzeMedia"
   | "getMediaPath"
   | "scanSource"
